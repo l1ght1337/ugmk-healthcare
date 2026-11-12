@@ -1,0 +1,21 @@
+# secrets
+.env
+
+# local copies of the clinic's original documents
+kb/source_pdf/
+
+# runtime data
+data/*.db
+data/*.db-journal
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/
