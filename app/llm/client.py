@@ -1,0 +1,154 @@
+"""DeepSeek chat client (OpenAI-compatible API) returning validated JSON.
+
+* JSON mode and low temperature for every call;
+* one hard time budget per call (10 s by default) that also covers the single retry,
+  so a slow or broken API never blocks the patient — the caller shows buttons instead;
+* the retry after an invalid answer appends to the same messages, keeping the cached
+  prompt prefix (system prompt first, then the request) unchanged;
+* token usage, including DeepSeek cache hits, is recorded for every attempt.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from collections.abc import Callable, Sequence
+from typing import Any, TypeVar
+
+import httpx2
+import openai
+from openai import AsyncOpenAI
+
+from app.llm.usage import Usage, UsageRecorder, log_usage
+
+T = TypeVar("T")
+
+RETRY_NOTE = (
+    "Ответ не прошёл проверку: {error}. Верни только JSON-объект в формате, описанном для этой "
+    "задачи."
+)
+MAX_ERROR_CHARS = 300
+
+
+class LLMUnavailable(RuntimeError):
+    """No usable answer: timeout, API error or invalid JSON twice."""
+
+
+class DeepSeekClient:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        timeout: float = 10.0,
+        recorders: Sequence[UsageRecorder] = (log_usage,),
+        http_client: httpx2.AsyncClient | None = None,
+    ) -> None:
+        self.model = model
+        self.timeout = timeout
+        self.recorders = tuple(recorders)
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=0,  # the time budget is ours; a retry happens only on invalid JSON
+            http_client=http_client,
+        )
+
+    async def complete_json(
+        self,
+        *,
+        task: str,
+        system: str,
+        user: str,
+        parse: Callable[[dict[str, Any]], T],
+        temperature: float = 0.0,
+        max_tokens: int = 400,
+    ) -> T:
+        """Ask for a JSON object and turn it into ``T`` with ``parse`` (may raise ValueError)."""
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        attempt = 0
+        try:
+            async with asyncio.timeout(self.timeout):
+                while True:
+                    attempt += 1
+                    content = await self._call(task, messages, attempt, temperature, max_tokens)
+                    try:
+                        data = json.loads(content)
+                        if not isinstance(data, dict):
+                            raise ValueError("expected a JSON object")
+                        return parse(data)
+                    except ValueError as exc:  # JSONDecodeError and ValidationError included
+                        if attempt >= 2:
+                            raise LLMUnavailable(f"{task}: invalid answer twice: {exc}") from exc
+                        error = str(exc)[:MAX_ERROR_CHARS]
+                        messages += [
+                            {"role": "assistant", "content": content},
+                            {"role": "user", "content": RETRY_NOTE.format(error=error)},
+                        ]
+        except TimeoutError as exc:
+            self._record(Usage(task, self.model, attempt, ok=False, error="timeout"))
+            raise LLMUnavailable(f"{task}: no answer within {self.timeout:g} s") from exc
+
+    async def _call(
+        self,
+        task: str,
+        messages: list[dict[str, str]],
+        attempt: int,
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        started = time.monotonic()
+        try:
+            response = await self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,  # type: ignore[arg-type]
+                response_format={"type": "json_object"},
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except openai.APIError as exc:
+            self._record(
+                Usage(task, self.model, attempt, ok=False, error=type(exc).__name__,
+                      latency_ms=_ms(started))
+            )  # fmt: skip
+            raise LLMUnavailable(f"{task}: {type(exc).__name__}") from exc
+        self._record(_usage(task, self.model, attempt, response, _ms(started)))
+        if not response.choices:
+            return ""
+        return response.choices[0].message.content or ""
+
+    def _record(self, usage: Usage) -> None:
+        for recorder in self.recorders:
+            recorder(usage)
+
+
+def _ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def _usage(task: str, model: str, attempt: int, response: Any, latency_ms: int) -> Usage:
+    u = response.usage
+    if u is None:
+        return Usage(task, model, attempt, ok=True, latency_ms=latency_ms)
+    extra = u.model_extra or {}
+    details = getattr(u, "prompt_tokens_details", None)
+    cached = getattr(details, "cached_tokens", None) or 0
+    hit = int(extra.get("prompt_cache_hit_tokens", cached) or 0)
+    miss = int(extra.get("prompt_cache_miss_tokens", u.prompt_tokens - hit) or 0)
+    return Usage(
+        task,
+        model,
+        attempt,
+        ok=True,
+        prompt_tokens=u.prompt_tokens,
+        completion_tokens=u.completion_tokens,
+        cache_hit_tokens=hit,
+        cache_miss_tokens=miss,
+        latency_ms=latency_ms,
+    )

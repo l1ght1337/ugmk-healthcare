@@ -19,6 +19,7 @@ def scenario(**overrides: object) -> dict:
         "script": "00-00_demo",
         "number": "0",
         "title": "Demo",
+        "menu_label": "Демо",
         "kind": "booking",
         "router_hint": "demo",
         "entry": [{"next": "q1"}],

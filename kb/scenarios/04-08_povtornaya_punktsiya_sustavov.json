@@ -3,6 +3,7 @@
   "script": "04-08_povtornaya_punktsiya_sustavov",
   "number": "4.8",
   "title": "Повторная пункция суставов",
+  "menu_label": "Повторная пункция сустава",
   "kind": "booking",
   "router_hint": "Повторная пункция суставов (пункт меню общего блока)",
   "entry": [{"next": "puncture_before"}],
@@ -12,7 +13,7 @@
       "ask": "В нашем травмпункте ранее уже выполняли пункцию?",
       "source": "04-08, этап 1, вопрос 1",
       "fields": [
-        {"name": "puncture_before_here", "type": "bool", "description": "true — пункцию ранее уже выполняли в нашем травмпункте «УГМК-Здоровье»; false — идут на пункцию первично"}
+        {"name": "puncture_before_here", "type": "bool", "yes_label": "Да, у вас уже делали", "no_label": "Нет, впервые", "description": "true — пункцию ранее уже выполняли в нашем травмпункте «УГМК-Здоровье»; false — идут на пункцию первично"}
       ],
       "branches": [
         {"when": {"puncture_before_here": true}, "outcome": "book_puncture"},

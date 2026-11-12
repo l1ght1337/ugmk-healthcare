@@ -3,6 +3,7 @@
   "script": "05-05_travma_golovy",
   "number": "5.5",
   "title": "Травма головы, сотрясение",
+  "menu_label": "Травма головы, сотрясение",
   "kind": "routing",
   "router_hint": "Травма головы, сотрясение, контузия",
   "entry": [

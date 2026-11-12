@@ -3,6 +3,7 @@
   "script": "05-02_travma_polovykh_organov",
   "number": "5.2",
   "title": "Травма половых органов",
+  "menu_label": "Травма половых органов",
   "kind": "routing",
   "router_hint": "Травма половых органов",
   "entry": [

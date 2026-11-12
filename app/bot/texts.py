@@ -4,9 +4,14 @@ Script phrases (questions, routes, booking summary, documents) live in kb/scenar
 All texts address the patient with «Вы» (CLAUDE.md, rule 7).
 """
 
-ASK_AUDIENCE = "Подскажите, пожалуйста, запись для Вас или для ребёнка (до 18 лет)?"
+ASK_AUDIENCE = "Подскажите, пожалуйста, для кого запись?"
+AUDIENCE_SELF = "Для себя"
+AUDIENCE_CHILD = "Для ребёнка (до 18 лет)"
 ASK_CHILD_AGE = "Сколько лет ребёнку? Если меньше года — сколько месяцев?"
+ASK_CHILD_AGE_AGAIN = "Напишите, пожалуйста, возраст ребёнка цифрами, например: 7 лет или 4 месяца."
 CLARIFY = "Уточните, пожалуйста: {ask}"
+PICK_BUTTON = "Не получилось разобрать ответ. Выберите, пожалуйста, вариант:"
+PICK_TOPIC = "Выберите, пожалуйста, что случилось:"
 
 PRICE_UNKNOWN = "уточнит администратор"
 DEMO_BOOKING = (
@@ -22,7 +27,7 @@ HANDOFF = "Передаю Ваше обращение администратор
 HANDOFF_LATER = " в рабочее время — с {start} до {end}"
 OFFER_ADMIN = "Если удобнее, я могу передать Ваше обращение администратору — с Вами свяжутся."
 EMERGENCY_ALSO = "Также можно обратиться:"
-ROUTE_LEAD = "Вам нужно обратиться:"  # route outcomes whose script branch has no phrase
+ROUTE_LEAD = "С такой травмой Вам нужно обратиться:"  # script branch has no phrase
 
 BOOKED = {"male": "записан", "female": "записана", None: "записан(а)"}
 

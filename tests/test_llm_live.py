@@ -1,0 +1,117 @@
+"""Live DeepSeek checks — run by hand: ``uv run pytest -m live -s``.
+
+Needs DEEPSEEK_API_KEY in .env. Prints token usage at the end (cache hits included).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+from app.config import get_settings
+from app.flow.loader import KnowledgeBase
+from app.llm.assistant import Assistant
+from app.llm.client import DeepSeekClient
+from app.llm.usage import Usage, log_usage
+
+pytestmark = pytest.mark.live
+
+CASES = yaml.safe_load((Path(__file__).parent / "data" / "extraction_cases.yaml").read_text())
+USAGE: list[Usage] = []
+
+
+@pytest.fixture
+def assistant(kb: KnowledgeBase) -> Assistant:
+    settings = get_settings()
+    if settings.deepseek_api_key is None:
+        pytest.skip("DEEPSEEK_API_KEY is not set")
+    client = DeepSeekClient(
+        api_key=settings.deepseek_api_key.get_secret_value(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_model,
+        timeout=settings.llm_timeout_seconds,
+        recorders=[log_usage, USAGE.append],
+    )
+    return Assistant(client, kb)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda c: c["text"])
+async def test_extraction_cases(assistant: Assistant, kb: KnowledgeBase, case: dict) -> None:
+    sc = kb.scenario(case["scenario"])
+    result = await assistant.extract(sc, sc.question(case["question"]), case["text"])
+    for name, value in case["expect"].items():
+        assert result.facts.get(name) == value, (case["text"], result)
+
+
+ROUTES = [
+    ("Вчера упал дома на руку, похоже вывих плеча. К врачу не обращался", "dislocation",
+     {"assault": False, "injury_age": "within_7_days", "seen_doctor": "no"}),
+    ("Подрался на улице, хочу снять побои", "criminal_trauma", {}),
+    ("Наступил на иглу от шприца во дворе", "needle_injury", {}),
+    ("Нужно удалить спицы после перелома", "pin_removal", {}),
+    ("Сын обжёг руку кипятком час назад", "burns",
+     {"burn_location": "body", "burn_cause": "thermal"}),
+    ("Ударился головой, тошнит", "head_trauma", {}),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("text", "scenario", "facts"), ROUTES, ids=[r[0] for r in ROUTES])
+async def test_route(assistant: Assistant, text: str, scenario: str, facts: dict) -> None:
+    result = await assistant.route(text)
+    assert (result.intent, result.scenario) == ("complaint", scenario), result
+    for name, value in facts.items():
+        assert result.facts.get(name) == value, result
+
+
+@pytest.mark.parametrize(
+    ("text", "intent"),
+    [
+        ("Сколько стоит приём травматолога?", "question"),
+        ("Нужно снять гипс", "unscripted"),
+        ("Соедините, пожалуйста, с администратором", "admin"),
+    ],
+)
+async def test_route_other_intents(assistant: Assistant, text: str, intent: str) -> None:
+    assert (await assistant.route(text)).intent == intent
+
+
+@pytest.mark.parametrize(
+    ("question", "must_contain"),
+    [
+        ("Где парковаться, если приеду в 22:00?", "ворот"),  # 03-3, after 20:00 (case 13)
+        ("Во сколько вы работаете?", "круглосуточно"),  # 03-1 (case 16)
+    ],
+)
+async def test_answer_from_kb_info(assistant: Assistant, question: str, must_contain: str) -> None:
+    result = await assistant.answer(question)
+    assert result.answer and must_contain in result.answer.lower(), result
+
+
+async def test_price_is_not_invented(assistant: Assistant) -> None:
+    """Case 14: the price is unknown, so «уточнит администратор» and an offer to pass it on."""
+    result = await assistant.answer("Сколько стоит приём?")
+    assert result.offer_admin
+    assert result.answer is None or "администратор" in result.answer.lower()
+
+
+async def test_unknown_question_is_not_answered(assistant: Assistant) -> None:
+    """Case 15: no data on knee MRI — nothing made up."""
+    result = await assistant.answer("Делаете МРТ колена?")
+    assert result.answer is None and result.offer_admin
+
+
+def test_usage_and_cache_summary() -> None:
+    if not USAGE:
+        pytest.skip("no live calls were made")
+    prompt = sum(u.prompt_tokens for u in USAGE)
+    hit = sum(u.cache_hit_tokens for u in USAGE)
+    out = sum(u.completion_tokens for u in USAGE)
+    slow = max(u.latency_ms for u in USAGE)
+    print(
+        f"\nDeepSeek: {len(USAGE)} calls, prompt {prompt} tokens (cache hit {hit}, "
+        f"{hit / prompt:.0%}), completion {out}, slowest {slow} ms"
+    )
+    assert all(u.ok for u in USAGE)
+    assert hit > 0, "stable system prompts should be served from the DeepSeek cache"

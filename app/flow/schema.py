@@ -36,9 +36,20 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+BUTTON_MAX = 40
+
+
 class Option(_Model):
     value: str = Field(pattern=SNAKE)
     meaning: str = Field(min_length=1, description="Script wording, shown to the LLM extractor")
+    label: str = Field(min_length=1, max_length=BUTTON_MAX, description="Button text")
+
+
+class Choice(_Model):
+    """A button: pressing it sets these facts, no LLM involved."""
+
+    label: str = Field(min_length=1, max_length=BUTTON_MAX)
+    facts: dict[str, FactValue] = Field(min_length=1)
 
 
 class FieldSpec(_Model):
@@ -51,6 +62,8 @@ class FieldSpec(_Model):
         description="Value taken when the patient's answer does not mention the field "
         "(the script says «если пациент сам говорит…»)",
     )
+    yes_label: str | None = Field(default=None, max_length=BUTTON_MAX)
+    no_label: str | None = Field(default=None, max_length=BUTTON_MAX)
 
     @model_validator(mode="after")
     def _check_options(self) -> FieldSpec:
@@ -62,7 +75,18 @@ class FieldSpec(_Model):
                 raise ValueError(f"enum field {self.name!r} needs 2+ unique options")
         if self.default is not None and not self.accepts(self.default):
             raise ValueError(f"bad default for {self.name!r}: {self.default!r}")
+        if self.type == "enum" and (self.yes_label or self.no_label):
+            raise ValueError(f"yes/no labels are for bool fields only ({self.name!r})")
         return self
+
+    def choices(self) -> tuple[Choice, ...]:
+        """One button per allowed value."""
+        if self.type == "bool":
+            return (
+                Choice(label=self.yes_label or "Да", facts={self.name: True}),
+                Choice(label=self.no_label or "Нет", facts={self.name: False}),
+            )
+        return tuple(Choice(label=o.label, facts={self.name: o.value}) for o in self.options)
 
     def values(self) -> tuple[FactValue, ...]:
         if self.type == "bool":
@@ -111,7 +135,32 @@ class Question(_Model):
     ask: str = Field(min_length=1, description="Operator phrase from the script")
     source: str
     fields: tuple[FieldSpec, ...] = Field(min_length=1)
+    choices: tuple[Choice, ...] = Field(
+        default=(), description="Buttons; derived from the field when the question has one"
+    )
     branches: tuple[Branch, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_choices(self) -> Question:
+        if not self.choices:
+            if len(self.fields) > 1:
+                raise ValueError(f"question {self.id!r} with several fields needs explicit choices")
+            return self
+        own = {f.name: f for f in self.fields}
+        required = {f.name for f in self.fields if f.default is None}
+        labels = [c.label for c in self.choices]
+        if len(labels) < 2 or len(set(labels)) != len(labels):
+            raise ValueError(f"question {self.id!r} needs 2+ distinct choices")
+        for choice in self.choices:
+            for key, value in choice.facts.items():
+                if key not in own or not own[key].accepts(value):
+                    raise ValueError(f"choice {choice.label!r}: bad fact {key}={value!r}")
+            if missing := required - set(choice.facts):
+                raise ValueError(f"choice {choice.label!r} leaves {sorted(missing)} unanswered")
+        return self
+
+    def buttons(self) -> tuple[Choice, ...]:
+        return self.choices or self.fields[0].choices()
 
 
 class Destination(_Model):
@@ -182,6 +231,7 @@ class Scenario(_Model):
     script: str = Field(description="Source file stem in kb/text/")
     number: str
     title: str
+    menu_label: str = Field(min_length=1, max_length=BUTTON_MAX, description="Menu button")
     kind: Literal["booking", "routing"]
     router_hint: str = Field(description="When the scenario applies, in the script's words")
     entry: tuple[Branch, ...] = Field(min_length=1)

@@ -3,6 +3,7 @@
   "script": "04-03_porez_shvy",
   "number": "4.3",
   "title": "Порез, рассечение, наложение швов",
+  "menu_label": "Порез, рассечение, швы",
   "kind": "booking",
   "router_hint": "Порез, рассечение, наложение швов (пункт меню общего блока)",
   "entry": [{"next": "wound_location"}],
@@ -17,8 +18,8 @@
           "type": "enum",
           "description": "Где рана",
           "options": [
-            {"value": "face_neck_head", "meaning": "на лице, шейно-воротниковой зоне, голове"},
-            {"value": "body", "meaning": "на теле (руки, ноги и т. д.)"}
+            {"value": "face_neck_head", "meaning": "на лице, шейно-воротниковой зоне, голове", "label": "Лицо, шея, голова"},
+            {"value": "body", "meaning": "на теле (руки, ноги и т. д.)", "label": "Руки, ноги, тело"}
           ]
         }
       ],
@@ -33,7 +34,7 @@
       "ask": "Есть двигательные функции той конечности, на которой повреждение?",
       "source": "04-03, этап 1, вопрос 2",
       "fields": [
-        {"name": "motor_function", "type": "bool", "description": "true — повреждённой конечностью можно двигать; false — нет двигательной функции"}
+        {"name": "motor_function", "type": "bool", "yes_label": "Да, двигается", "no_label": "Нет, не двигается", "description": "true — повреждённой конечностью можно двигать; false — нет двигательной функции"}
       ],
       "branches": [
         {"when": {"motor_function": false, "audience": "child"}, "outcome": "child_surgeon_or_dgkb9"},
@@ -51,8 +52,8 @@
           "type": "enum",
           "description": "Давность травмы",
           "options": [
-            {"value": "within_24h", "meaning": "прошло менее суток"},
-            {"value": "over_24h", "meaning": "прошло более суток"}
+            {"value": "within_24h", "meaning": "прошло менее суток", "label": "Менее суток назад"},
+            {"value": "over_24h", "meaning": "прошло более суток", "label": "Более суток назад"}
           ]
         }
       ],
@@ -72,8 +73,8 @@
           "type": "enum",
           "description": "На какой шов согласен пациент",
           "options": [
-            {"value": "surgical", "meaning": "согласен на хирургический шов в травмпункте"},
-            {"value": "cosmetic", "meaning": "нужен косметический шов"}
+            {"value": "surgical", "meaning": "согласен на хирургический шов в травмпункте", "label": "Да, на хирургический шов"},
+            {"value": "cosmetic", "meaning": "нужен косметический шов", "label": "Нужен косметический шов"}
           ]
         }
       ],

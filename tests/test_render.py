@@ -120,4 +120,21 @@ def test_route_without_script_phrase_gets_a_lead(run, clinic: ClinicData) -> Non
     w = run("cut_sutures", {"wound_location": "face_neck_head"}, audience="child", age_months=108)
     assert not w.step.outcome.say
     text = render.outcome_message(w.step, clinic, NOW)
-    assert text.startswith("Вам нужно обратиться:\n• ДГКБ № 9, приёмный покой, ул. Решетская, 51")
+    assert text.startswith(
+        "С такой травмой Вам нужно обратиться:\n• ДГКБ № 9, приёмный покой, ул. Решетская, 51"
+    )
+
+
+@pytest.mark.parametrize("audience", ["adult", "child"])
+def test_open_fracture_mentions_ambulance(run, clinic: ClinicData, audience: str) -> None:
+    w = run(
+        "fracture",
+        {"assault": False, "open_or_displaced": True},
+        audience=audience,
+        age_months=10 * 12,
+    )
+    text = render.outcome_message(w.step, clinic, NOW)
+    assert text.startswith(
+        "Если кость видна в ране или кровотечение не останавливается, вызывайте скорую: "
+        "103 или 112. С такой травмой Вам нужно обратиться:\n• "
+    )

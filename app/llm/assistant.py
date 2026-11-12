@@ -1,0 +1,164 @@
+"""The LLM roles (docs/spec.md, section 3): route, extract, answer; «phrase» is the
+guarded rephrasing of a scenario question inside route/extract (``clarify``).
+
+Every patient text is masked before it leaves (app/llm/masking.py). Prompts are built
+once per process: system prompt = static rules + knowledge-base blocks; everything that
+changes per call goes last, in the user message.
+"""
+
+from __future__ import annotations
+
+import json
+from functools import cached_property
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict
+
+from app.flow.loader import KnowledgeBase
+from app.flow.schema import FactValue, Question, Scenario
+from app.llm.catalogue import render_catalogue, render_info
+from app.llm.client import DeepSeekClient
+from app.llm.guards import grounded, safe_clarify
+from app.llm.masking import KnownPerson, mask
+
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+ROUTE_CLARIFY = "С чем обращаетесь? Что произошло?"  # script 03-1, step 2
+
+
+def load_prompt(name: str) -> str:
+    return (PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
+
+
+class _Out(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class RouteOut(_Out):
+    intent: Literal["complaint", "question", "admin", "unscripted", "other"]
+    scenario: str | None = None
+    facts: dict[str, Any] = {}
+    clarify: str | None = None
+
+
+class ExtractOut(_Out):
+    facts: dict[str, Any] = {}
+    unclear: bool = False
+    clarify: str | None = None
+
+
+class AnswerOut(_Out):
+    found: bool
+    answer: str | None = None
+    offer_admin: bool = False
+
+
+class RouteResult(BaseModel):
+    intent: Literal["complaint", "question", "admin", "unscripted", "other"]
+    scenario: str | None = None
+    facts: dict[str, FactValue] = {}
+    clarify: str | None = None
+
+
+class ExtractResult(BaseModel):
+    facts: dict[str, FactValue] = {}
+    clarify: str | None = None  # set when the answer did not settle the question
+
+
+class AnswerResult(BaseModel):
+    answer: str | None = None  # None: nothing in kb/info — offer an administrator
+    offer_admin: bool = False
+
+
+def _valid_facts(scenario: Scenario, facts: dict[str, Any]) -> dict[str, FactValue]:
+    fields = scenario.fields()
+    return {k: v for k, v in facts.items() if k in fields and fields[k].accepts(v)}
+
+
+class Assistant:
+    def __init__(self, client: DeepSeekClient, kb: KnowledgeBase, info: str | None = None):
+        self.client = client
+        self.kb = kb
+        self._info = info if info is not None else render_info()
+
+    @cached_property
+    def dialog_system(self) -> str:
+        return load_prompt("dialog.md") + "\n\n" + render_catalogue(self.kb)
+
+    @cached_property
+    def answer_system(self) -> str:
+        return load_prompt("answer.md") + "\n\n" + self._info
+
+    async def route(self, text: str, known: KnownPerson | None = None) -> RouteResult:
+        """Which scenario fits the complaint, plus answers already given in it."""
+        user = _json({"task": "route", "text": mask(text, known)})
+
+        def parse(data: dict[str, Any]) -> RouteResult:
+            out = RouteOut.model_validate(data)
+            if out.intent != "complaint":
+                return RouteResult(intent=out.intent)
+            if out.scenario is None:
+                return RouteResult(
+                    intent="complaint", clarify=safe_clarify(out.clarify, ROUTE_CLARIFY)
+                )
+            if out.scenario not in self.kb.scenarios:
+                raise ValueError(f"unknown scenario {out.scenario!r}; use an id from the catalogue")
+            scenario = self.kb.scenario(out.scenario)
+            return RouteResult(
+                intent="complaint", scenario=scenario.id, facts=_valid_facts(scenario, out.facts)
+            )
+
+        return await self.client.complete_json(
+            task="route", system=self.dialog_system, user=user, parse=parse, max_tokens=300
+        )
+
+    async def extract(
+        self, scenario: Scenario, question: Question, text: str, known: KnownPerson | None = None
+    ) -> ExtractResult:
+        """The patient's answer to ``question`` as facts; ``clarify`` if it was unclear."""
+        user = _json(
+            {
+                "task": "extract",
+                "scenario": scenario.id,
+                "question": question.id,
+                "ask": question.ask,
+                "fields": [f.name for f in question.fields],
+                "text": mask(text, known),
+            }
+        )
+        own = {f.name for f in question.fields}
+
+        def parse(data: dict[str, Any]) -> ExtractResult:
+            out = ExtractOut.model_validate(data)
+            facts = _valid_facts(scenario, out.facts)
+            if out.unclear or not own & set(facts):
+                return ExtractResult(facts=facts, clarify=safe_clarify(out.clarify, question.ask))
+            return ExtractResult(facts=facts)
+
+        return await self.client.complete_json(
+            task="extract", system=self.dialog_system, user=user, parse=parse, max_tokens=300
+        )
+
+    async def answer(self, text: str, known: KnownPerson | None = None) -> AnswerResult:
+        """Answer a question about the trauma centre from kb/info only."""
+        user = _json({"task": "answer", "question": mask(text, known)})
+
+        def parse(data: dict[str, Any]) -> AnswerResult:
+            out = AnswerOut.model_validate(data)
+            answer = (out.answer or "").strip()
+            if not out.found or not answer or not grounded(answer, self._info):
+                return AnswerResult(offer_admin=True)
+            return AnswerResult(answer=answer, offer_admin=out.offer_admin)
+
+        return await self.client.complete_json(
+            task="answer",
+            system=self.answer_system,
+            user=user,
+            parse=parse,
+            temperature=0.2,
+            max_tokens=500,
+        )
+
+
+def _json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False)

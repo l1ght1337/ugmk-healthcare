@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    # Hard limit for one LLM call; after it the bot shows buttons instead of waiting.
+    llm_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    # Token usage per call (no texts), for the clinic's cost estimate. Empty — log only.
+    llm_usage_log: Path | None = PROJECT_ROOT / "data" / "llm_usage.jsonl"
 
     # Schedule
     schedule_provider: Literal["mock", "medialog"] = "mock"

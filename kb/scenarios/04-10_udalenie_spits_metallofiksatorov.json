@@ -3,6 +3,7 @@
   "script": "04-10_udalenie_spits_metallofiksatorov",
   "number": "4.10",
   "title": "Удаление спиц, металлофиксаторов",
+  "menu_label": "Удаление спиц, металлофиксаторов",
   "kind": "routing",
   "router_hint": "Удаление металлофиксаторов, спиц (пункт меню общего блока)",
   "entry": [

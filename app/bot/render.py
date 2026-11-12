@@ -7,13 +7,14 @@ becomes «уточнит администратор».
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time
 
 from app.bot import texts
 from app.config import ClinicData
 from app.flow.engine import AskPatient, AskQuestion, Done, Place
 from app.flow.loader import KnowledgeBase
-from app.flow.schema import Audience, Scenario
+from app.flow.schema import Audience, Choice, Scenario
 from app.schedule.base import Slot
 
 MALE_PATRONYMIC = ("вич", "ич", "оглы", "улы", "уулу")
@@ -47,15 +48,51 @@ def price_text(clinic: ClinicData, key: str) -> str:
     return clinic.price_text(key) or texts.PRICE_UNKNOWN
 
 
-def ask_patient(step: AskPatient) -> str:
-    return texts.ASK_AUDIENCE if step.need == "audience" else texts.ASK_CHILD_AGE
+@dataclass(frozen=True)
+class Prompt:
+    """A message with buttons; a pressed button sets ``choice.facts`` without the LLM."""
+
+    text: str
+    choices: tuple[Choice, ...] = ()
 
 
-def ask_question(step: AskQuestion) -> str:
-    """Script phrase; on a repeat ask the LLM rephrases it (stage 3), until then «Уточните»."""
-    if step.attempt > 1:
-        return texts.CLARIFY.format(ask=step.question.ask)
-    return step.question.ask
+AUDIENCE_CHOICES = (
+    Choice(label=texts.AUDIENCE_SELF, facts={"audience": "adult"}),
+    Choice(label=texts.AUDIENCE_CHILD, facts={"audience": "child"}),
+)
+
+
+def ask_patient(step: AskPatient) -> Prompt:
+    """«Для кого запись?» is asked with buttons; the age is typed (see app/flow/age.py)."""
+    if step.need == "audience":
+        return Prompt(texts.ASK_AUDIENCE, AUDIENCE_CHOICES)
+    return Prompt(texts.ASK_CHILD_AGE)
+
+
+def ask_question(step: AskQuestion, clarify: str | None = None, *, pick: bool = False) -> Prompt:
+    """Script phrase with its buttons.
+
+    ``clarify`` is the LLM's rephrasing after an unclear answer; ``pick`` means the LLM
+    was unavailable, so the patient is asked to press a button.
+    """
+    if pick:
+        text = f"{texts.PICK_BUTTON}\n{step.question.ask}"
+    elif clarify:
+        text = clarify
+    elif step.attempt > 1:
+        text = texts.CLARIFY.format(ask=step.question.ask)
+    else:
+        text = step.question.ask
+    return Prompt(text, step.question.buttons())
+
+
+def topic_menu(kb: KnowledgeBase) -> Prompt:
+    """Scenario buttons when the complaint could not be understood."""
+    ordered = sorted(kb.scenarios.values(), key=lambda s: tuple(map(int, s.number.split("."))))
+    return Prompt(
+        texts.PICK_TOPIC,
+        tuple(Choice(label=s.menu_label, facts={"scenario": s.id}) for s in ordered),
+    )
 
 
 def place_line(place: Place) -> str:
