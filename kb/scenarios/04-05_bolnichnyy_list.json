@@ -30,17 +30,17 @@
           "type": "enum",
           "description": "Оказывалась ли уже медицинская помощь по этой травме",
           "options": [
-            {"value": "no", "meaning": "нет, помощь ещё не оказывали"},
-            {"value": "our_trauma_center", "meaning": "да, по этой травме уже были в нашем травмпункте «УГМК-Здоровье»"},
-            {"value": "other_doctor", "meaning": "да, помощь оказали в другом месте или другой врач"}
+            {"value": "no", "meaning": "нет, помощь по этой травме ещё не оказывали"},
+            {"value": "yes", "meaning": "да, помощь по этой травме уже оказана — где угодно, в том числе в нашем травмпункте"},
+            {"value": "sick_leave_open_here", "meaning": "больничный лист по этой травме уже открыт в нашем травмпункте «УГМК-Здоровье», и его нужно продлить или закрыть"}
           ]
         }
       ],
       "branches": [
         {"when": {"help_provided": "no"}, "next": "when"},
-        {"when": {"help_provided": "our_trauma_center"}, "scenario": "repeat_visit", "carry": {"first_visit_here": true}},
-        {"when": {"help_provided": "other_doctor", "audience": "child"}, "outcome": "child_planned_explained"},
-        {"when": {"help_provided": "other_doctor", "audience": "adult"}, "outcome": "adult_call_center_explained"}
+        {"when": {"help_provided": "yes", "audience": "child"}, "outcome": "child_planned_explained"},
+        {"when": {"help_provided": "yes", "audience": "adult"}, "outcome": "adult_call_center_explained"},
+        {"when": {"help_provided": "sick_leave_open_here"}, "scenario": "repeat_visit", "carry": {"first_visit_here": true, "sick_leave_open": true}}
       ]
     },
     {
@@ -96,6 +96,6 @@
   },
   "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога-ортопеда в травмпункт на {date} в {time}. Стоимость консультации {price}, все дополнительные манипуляции, если потребуются (рентген, повязка, наложение швов и т. д.), оплачиваются дополнительно. Оплачивать услуги планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение.",
   "todo": [
-    "Ветка «помощь уже оказана в нашем травмпункте → повторный приём (04-09)» — расширение правила заказчика про «обращались к нашему врачу» на вопрос 2 этого скрипта; подтвердить"
+    "Исключение «больничный уже открыт в нашем травмпункте, нужно продлить или закрыть → повторный приём (04-09)» — решение заказчика 12.11.2026, в скрипте его нет; подтвердить у клиники"
   ]
 }

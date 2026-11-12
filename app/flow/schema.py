@@ -27,6 +27,7 @@ AUDIENCES: tuple[Audience, ...] = ("child", "adult")
 CONTEXT_FACTS = frozenset({"audience"})
 
 FactValue = bool | str
+SlotPolicy = Literal["nearest", "repeat_window", "near_repeat_window"]
 SNAKE = r"^[a-z][a-z0-9_]*$"
 SUMMARY_PLACEHOLDERS = frozenset({"patient", "booked", "date", "time", "price", "address"})
 
@@ -45,6 +46,11 @@ class FieldSpec(_Model):
     type: Literal["bool", "enum"]
     description: str = Field(min_length=1)
     options: tuple[Option, ...] = ()
+    default: FactValue | None = Field(
+        default=None,
+        description="Value taken when the patient's answer does not mention the field "
+        "(the script says «если пациент сам говорит…»)",
+    )
 
     @model_validator(mode="after")
     def _check_options(self) -> FieldSpec:
@@ -54,6 +60,8 @@ class FieldSpec(_Model):
             values = [o.value for o in self.options]
             if len(values) < 2 or len(set(values)) != len(values):
                 raise ValueError(f"enum field {self.name!r} needs 2+ unique options")
+        if self.default is not None and not self.accepts(self.default):
+            raise ValueError(f"bad default for {self.name!r}: {self.default!r}")
         return self
 
     def values(self) -> tuple[FactValue, ...]:
@@ -115,7 +123,7 @@ class Destination(_Model):
 class Booking(_Model):
     visit: Literal["primary", "repeat"]
     service: str
-    slot_policy: Literal["nearest", "repeat_window", "near_repeat_window"]
+    slot_policy: SlotPolicy
     price_key: str = Field(pattern=SNAKE)
 
 
@@ -284,6 +292,13 @@ class Facility(_Model):
     verify: str | None = None
 
 
+class SharedField(_Model):
+    """A field asked in several scripts that must mean the same everywhere."""
+
+    field: FieldSpec
+    source: str
+
+
 class GreetingSlot(_Model):
     start: time
     end: time
@@ -310,7 +325,17 @@ class CommonPhrases(_Model):
     unscripted_requests: tuple[str, ...] = Field(
         description="Menu items of script 02 that have no script in the export"
     )
+    shared_fields: dict[str, SharedField] = Field(
+        default={}, description="Scenario fields with this name must equal the shared spec"
+    )
     todo: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _shared_names(self) -> CommonPhrases:
+        for key, shared in self.shared_fields.items():
+            if key != shared.field.name:
+                raise ValueError(f"shared field key {key!r} != name {shared.field.name!r}")
+        return self
 
     @model_validator(mode="after")
     def _greeting_covers_day(self) -> CommonPhrases:

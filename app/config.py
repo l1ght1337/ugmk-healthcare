@@ -109,12 +109,6 @@ class _Data(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class TraumaCenter(_Data):
-    address: str
-    entrance: str
-    hours: str
-
-
 class WorkingHours(_Data):
     start: time
     end: time
@@ -123,6 +117,13 @@ class WorkingHours(_Data):
         if self.start <= self.end:
             return self.start <= moment < self.end
         return moment >= self.start or moment < self.end
+
+
+class TraumaCenter(_Data):
+    address: str
+    entrance: str
+    hours: str
+    underground_parking_hours: WorkingHours
 
 
 class Contacts(_Data):
@@ -150,10 +151,36 @@ class ClinicFlags(_Data):
     emergency: Emergency
 
 
+class DemoSchedule(_Data):
+    """Assumptions of the mock schedule; none of these are in the scripts (TODO)."""
+
+    slot_minutes: int = Field(gt=0, le=240)
+    main_cabinet: str
+    repeat_cabinet: str
+    repeat_cabinet_hours: WorkingHours
+    busy_share: float = Field(ge=0, lt=1)
+    days_ahead: int = Field(gt=0, le=60)
+    min_lead_minutes: int = Field(ge=0)
+
+
+class ScheduleConfig(_Data):
+    doctors: tuple[str, ...] = Field(min_length=3)
+    repeat_windows: tuple[WorkingHours, ...] = Field(min_length=1)
+    demo: DemoSchedule
+
+    @field_validator("repeat_windows")
+    @classmethod
+    def _same_day_windows(cls, value: tuple[WorkingHours, ...]) -> tuple[WorkingHours, ...]:
+        if any(w.start >= w.end for w in value):
+            raise ValueError("repeat windows must not cross midnight")
+        return value
+
+
 class ClinicData(_Data):
     prices: dict[str, int | None]
     contacts: Contacts
     clinic: ClinicFlags
+    schedule: ScheduleConfig
 
     def price_text(self, key: str) -> str | None:
         """Price in roubles for patient texts, or None if the clinic has not given it yet."""
@@ -171,6 +198,7 @@ def load_clinic_data(config_dir: Path = CONFIG_DIR) -> ClinicData:
         prices=_read_yaml(config_dir / "prices.yaml"),
         contacts=_read_yaml(config_dir / "contacts.yaml"),
         clinic=_read_yaml(config_dir / "clinic.yaml"),
+        schedule=_read_yaml(config_dir / "schedule.yaml"),
     )
 
 

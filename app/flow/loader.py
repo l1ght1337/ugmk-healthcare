@@ -63,6 +63,7 @@ def load_kb(kb_dir: Path = KB_DIR) -> KnowledgeBase:
     )
 
     errors += _cross_check(scenarios, facilities)
+    errors += _check_shared_fields(scenarios, common)
     if errors:
         raise KnowledgeBaseError("\n".join(errors))
     return KnowledgeBase(scenarios=scenarios, facilities=facilities, common=common)
@@ -92,6 +93,16 @@ def _cross_check(scenarios: dict[str, Scenario], facilities: dict[str, Facility]
             for dest in outcome.destinations:
                 if dest.facility not in facilities:
                     errors.append(f"{sc.id}.{name}: unknown facility {dest.facility!r}")
+    return errors
+
+
+def _check_shared_fields(scenarios: dict[str, Scenario], common: CommonPhrases) -> list[str]:
+    errors: list[str] = []
+    for sc in scenarios.values():
+        for name, spec in sc.fields().items():
+            shared = common.shared_fields.get(name)
+            if shared is not None and spec != shared.field:
+                errors.append(f"{sc.id}: field {name!r} differs from _common.json shared_fields")
     return errors
 
 

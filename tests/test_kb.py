@@ -165,3 +165,37 @@ def test_greeting_hours(kb: KnowledgeBase, moment: time, expected: str) -> None:
 def test_info_files_present(name: str) -> None:
     text = (Path(KB_DIR) / "info" / name).read_text(encoding="utf-8")
     assert text.startswith("# ") and "Источник" in text
+
+
+def test_sick_leave_jumps_to_repeat_visit_only_for_open_sick_leave(kb: KnowledgeBase) -> None:
+    """Stage 1 review: «помощь уже оказана» → planned visit; the one exception → 04-09."""
+    jumps = [b for b in kb.scenario("sick_leave").all_branches() if b.scenario]
+    assert [(b.scenario, b.when, b.carry) for b in jumps] == [
+        (
+            "repeat_visit",
+            {"help_provided": "sick_leave_open_here"},
+            {"first_visit_here": True, "sick_leave_open": True},
+        )
+    ]
+
+
+def test_ligament_phrase_has_no_suspicion(kb: KnowledgeBase) -> None:
+    sc = kb.scenario("ligament_rupture")
+    for name in ("insists_child", "insists_adult"):
+        outcome = sc.outcomes[name]
+        assert "подозрением" not in " ".join(outcome.say)
+        assert outcome.verify and "согласовать" in outcome.verify
+
+
+def test_shared_field_must_match(tmp_path: Path) -> None:
+    import shutil
+
+    from app.flow.loader import KnowledgeBaseError
+
+    shutil.copytree(KB_DIR / "scenarios", tmp_path / "scenarios")
+    path = tmp_path / "scenarios" / "04-01_vyvikhi.json"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("на тренировке", "в спортзале"), encoding="utf-8"
+    )
+    with pytest.raises(KnowledgeBaseError, match=r"differs from _common\.json"):
+        load_kb(tmp_path)

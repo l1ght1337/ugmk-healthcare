@@ -1,0 +1,44 @@
+# Patient phrases and the fields the LLM extractor must return for them.
+# Stage 2 checks that every case fits the knowledge base (scenario, question, field, value);
+# stage 3 runs them through DeepSeek in the live test (uv run pytest -m live).
+
+- scenario: dislocation
+  question: how
+  text: подвернул ногу на тренировке
+  expect: {assault: false}      # «бытовая» — любая некриминальная (решение заказчика)
+- scenario: dislocation
+  question: how
+  text: упала на работе с лестницы
+  expect: {assault: false}
+- scenario: fracture
+  question: how
+  text: поскользнулся на улице, упал на руку
+  expect: {assault: false}
+- scenario: fracture
+  question: how
+  text: меня сбила машина
+  expect: {assault: true}       # как в меню 02: «избиение, сбила машина, нападение и пр.»
+- scenario: ligament_rupture
+  question: how
+  text: подрался на улице, хочу снять побои
+  expect: {assault: true}
+- scenario: ligament_rupture
+  question: certainty
+  text: МРТ показало разрыв связки
+  expect: {rupture_certainty: insists}
+- scenario: ligament_rupture
+  question: certainty
+  text: точно порвал, я знаю это ощущение
+  expect: {rupture_certainty: insists}
+- scenario: ligament_rupture
+  question: certainty
+  text: наверное, порвал связки, болит и отекло
+  expect: {rupture_certainty: suspects}
+- scenario: sick_leave
+  question: help_provided
+  text: больничный открыли у вас в травмпункте, нужно продлить
+  expect: {help_provided: sick_leave_open_here}
+- scenario: sick_leave
+  question: help_provided
+  text: да, уже были у вас в травмпункте, но больничный не открывали
+  expect: {help_provided: "yes"}
