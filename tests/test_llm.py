@@ -161,3 +161,24 @@ def test_prompts_carry_the_catalogue_but_no_operator_notes(kb: KnowledgeBase) ->
                     assert value in assistant.dialog_system
     assert "json" in assistant.dialog_system and "json" in assistant.answer_system
     assert "Шейнкмана, 113/2" in assistant.answer_system
+
+
+async def test_warm_up_touches_both_system_prompts(kb: KnowledgeBase) -> None:
+    fake = FakeDeepSeek({"intent": "other"}, {"found": False})
+    assistant = fake.assistant(kb)
+    assert await assistant.warm_up()
+    systems = {r["messages"][0]["content"] for r in fake.requests}
+    assert systems == {assistant.dialog_system, assistant.answer_system}
+    assert {u.task for u in fake.usage} == {"warmup"}
+    assert not await FakeDeepSeek(500, 500).assistant(kb).warm_up()  # no exception
+
+
+async def test_event_dates_reach_deepseek_as_relative_time(kb: KnowledgeBase) -> None:
+    from datetime import date
+
+    fake = FakeDeepSeek({"facts": {"injury_age": "within_7_days"}})
+    assistant = fake.assistant(kb)
+    assistant.today = lambda: date(2026, 11, 12)
+    sc = kb.scenario("dislocation")
+    await assistant.extract(sc, sc.question("when"), "упал 10 ноября")
+    assert "упал 2 дня назад" in fake.requests[0]["messages"][-1]["content"]

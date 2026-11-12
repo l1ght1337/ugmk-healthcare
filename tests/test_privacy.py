@@ -16,7 +16,7 @@ PATIENT = KnownPerson(
     names=("Петров", "Иван", "Сергеевич", "Петрова", "Мария", "Олеговна"),
     phone="+7 912 345-67-89",
     username="ivan_petrov85",
-    birth_date=date(1985, 3, 12),
+    birth_dates=(date(1985, 3, 12),),
     chat_id=482913577,
 )
 SECRETS = (
@@ -60,9 +60,14 @@ async def test_requests_to_deepseek_contain_no_personal_data(
     assert "вывих плеча" in sent and "к врачу не обращался" in sent
 
 
+TODAY = date(2026, 11, 12)
+
+
 def test_unknown_names_and_numbers_are_masked_too() -> None:
-    text = mask("Дочь Маша Козлова упала 10 ноября, звоните 89221234567, СНИЛС 123-456-789 01")
-    assert text == "Дочь [ИМЯ] упала [ДАТА], звоните [ТЕЛЕФОН], СНИЛС [НОМЕР]"
+    text = mask(
+        "Дочь Маша Козлова упала 10 ноября, звоните 89221234567, СНИЛС 123-456-789 01", today=TODAY
+    )
+    assert text == "Дочь [ИМЯ] упала 2 дня назад, звоните [ТЕЛЕФОН], СНИЛС [НОМЕР]"
 
 
 @pytest.mark.parametrize(
@@ -73,13 +78,31 @@ def test_unknown_names_and_numbers_are_masked_too() -> None:
         ("пишите на test.user@ya.ru", "пишите на [EMAIL]"),
         ("мой t.me/somebody", "мой [ЛОГИН]"),
         ("родился 1990 г.р.", "родился [ДАТА]"),
-        ("упал 2026-11-10", "упал [ДАТА]"),
-        ("приём 15.11", "приём [ДАТА]"),
         ("паспорт 6512 345678", "паспорт [НОМЕР]"),
+        # birth dates and dates next to a name are masked
+        ("Петров Иван, 12.03.1985", "[ИМЯ], [ДАТА]"),
+        ("дата рождения 05.06.2018, упал вчера", "дата рождения [ДАТА], упал вчера"),
+        ("дочка 12 марта 1990 года рождения", "дочка [ДАТА] рождения"),
+        # dates of events become relative time
+        ("упал 10 ноября", "упал 2 дня назад"),
+        ("упал 10.11.2026 на работе", "упал 2 дня назад на работе"),
+        ("упал 2026-11-11", "упал вчера"),
+        ("ожог 1 октября", "ожог 42 дня назад"),
+        ("20 декабря упал", "10 месяцев назад упал"),
+        ("запишите на 15.11", "запишите на через 3 дня"),
+        # not dates
+        ("можно в 14.30?", "можно в 14.30?"),
+        ("ребёнку 1.5 года", "ребёнку 1.5 года"),
+        ("1-2 дня назад", "1-2 дня назад"),
     ],
 )
 def test_mask_patterns(text: str, masked: str) -> None:
-    assert mask(text) == masked
+    assert mask(text, today=TODAY) == masked
+
+
+def test_known_birth_date_is_masked_anywhere() -> None:
+    known = KnownPerson(birth_dates=(date(1985, 3, 12),))
+    assert mask("мне 12.03.1985 исполнилось", known, TODAY) == "мне [ДАТА] исполнилось"
 
 
 @pytest.mark.parametrize(
@@ -94,4 +117,4 @@ def test_mask_patterns(text: str, masked: str) -> None:
     ],
 )
 def test_complaints_without_personal_data_stay_intact(text: str) -> None:
-    assert mask(text) == text
+    assert mask(text, today=TODAY) == text

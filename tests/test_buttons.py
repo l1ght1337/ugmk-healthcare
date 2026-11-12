@@ -108,3 +108,11 @@ def test_question_choice_rules() -> None:
 )  # fmt: skip
 def test_parse_age(text: str, months: int | None) -> None:
     assert parse_age_months(text) == months
+
+
+def test_button_labels_doc_is_up_to_date(kb: KnowledgeBase) -> None:
+    from app.bot.labels import DOC, render_labels
+
+    assert DOC.read_text(encoding="utf-8") == render_labels(kb), (
+        "run: uv run python -m app.bot.labels --write"
+    )

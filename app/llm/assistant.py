@@ -8,17 +8,21 @@ changes per call goes last, in the user message.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Callable
+from datetime import date, datetime
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.config import get_settings
 from app.flow.loader import KnowledgeBase
 from app.flow.schema import FactValue, Question, Scenario
 from app.llm.catalogue import render_catalogue, render_info
-from app.llm.client import DeepSeekClient
+from app.llm.client import DeepSeekClient, LLMUnavailable
 from app.llm.guards import grounded, safe_clarify
 from app.llm.masking import KnownPerson, mask
 
@@ -76,10 +80,38 @@ def _valid_facts(scenario: Scenario, facts: dict[str, Any]) -> dict[str, FactVal
 
 
 class Assistant:
-    def __init__(self, client: DeepSeekClient, kb: KnowledgeBase, info: str | None = None):
+    def __init__(
+        self,
+        client: DeepSeekClient,
+        kb: KnowledgeBase,
+        info: str | None = None,
+        today: Callable[[], date] | None = None,
+    ):
         self.client = client
         self.kb = kb
         self._info = info if info is not None else render_info()
+        self.today = today or (lambda: datetime.now(get_settings().tz).date())
+
+    def _mask(self, text: str, known: KnownPerson | None) -> str:
+        return mask(text, known, self.today())
+
+    async def warm_up(self) -> bool:
+        """One call per system prompt at startup, so the first patients hit the DeepSeek cache."""
+
+        async def one(system: str, user: dict[str, str]) -> bool:
+            try:
+                await self.client.complete_json(
+                    task="warmup", system=system, user=_json(user), parse=dict, max_tokens=80
+                )
+            except LLMUnavailable:
+                return False
+            return True
+
+        results = await asyncio.gather(
+            one(self.dialog_system, {"task": "route", "text": "Здравствуйте"}),
+            one(self.answer_system, {"task": "answer", "question": "Здравствуйте"}),
+        )
+        return all(results)
 
     @cached_property
     def dialog_system(self) -> str:
@@ -91,7 +123,7 @@ class Assistant:
 
     async def route(self, text: str, known: KnownPerson | None = None) -> RouteResult:
         """Which scenario fits the complaint, plus answers already given in it."""
-        user = _json({"task": "route", "text": mask(text, known)})
+        user = _json({"task": "route", "text": self._mask(text, known)})
 
         def parse(data: dict[str, Any]) -> RouteResult:
             out = RouteOut.model_validate(data)
@@ -123,7 +155,7 @@ class Assistant:
                 "question": question.id,
                 "ask": question.ask,
                 "fields": [f.name for f in question.fields],
-                "text": mask(text, known),
+                "text": self._mask(text, known),
             }
         )
         own = {f.name for f in question.fields}
@@ -141,7 +173,7 @@ class Assistant:
 
     async def answer(self, text: str, known: KnownPerson | None = None) -> AnswerResult:
         """Answer a question about the trauma centre from kb/info only."""
-        user = _json({"task": "answer", "question": mask(text, known)})
+        user = _json({"task": "answer", "question": self._mask(text, known)})
 
         def parse(data: dict[str, Any]) -> AnswerResult:
             out = AnswerOut.model_validate(data)

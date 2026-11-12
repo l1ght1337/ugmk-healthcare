@@ -50,3 +50,32 @@ def parse_age_months(text: str) -> int | None:
     if re.search(r"\bгод(ик)?\b", t):  # «ребёнку год»
         return 12
     return None
+
+
+_CHILD = (
+    r"(?:сын\w*|доч\w*|ребен\w*|детк\w*|малыш\w*|мальчик\w*|девочк\w*|внук\w*|внучк\w*|"
+    r"младен\w*|грудничк\w*)"
+)
+_AGE = rf"(?:\d+(?:\.\d+)? ?(?:{_YEARS}|{_MONTHS})(?: \d+ ?{_MONTHS})?|полгода|полтора года)"
+_AGE_ADJ = r"\d+ ?(?:летн|месячн)\w*"
+_CHILD_THEN_AGE = re.compile(rf"\b{_CHILD}(?: \S+){{0,3}}? (?P<age>{_AGE})\b")
+_AGE_THEN_CHILD = re.compile(rf"\b(?P<age>{_AGE_ADJ}|{_AGE})(?: \S+){{0,2}}? {_CHILD}")
+
+
+def find_child_age(text: str) -> int | None:
+    """A child's age stated in a complaint («у сына 8 лет вывих»), in months, or None.
+
+    Only for a suggestion the patient confirms with a button; adults (18+) are ignored.
+    """
+    t = text.lower().replace("ё", "е").replace(",", ".")
+    t = _words_to_digits(" ".join(re.sub(r"[^\w.]+", " ", t).split()))
+    for pattern in (_CHILD_THEN_AGE, _AGE_THEN_CHILD):
+        m = pattern.search(t)
+        if m is None:
+            continue
+        snippet = re.sub(r"(\d+) ?летн\w*", r"\1 лет", m.group("age"))
+        snippet = re.sub(r"(\d+) ?месячн\w*", r"\1 месяцев", snippet)
+        months = parse_age_months(snippet)
+        if months is not None and months < 18 * 12:
+            return months
+    return None

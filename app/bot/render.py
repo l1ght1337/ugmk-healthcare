@@ -115,8 +115,14 @@ def handoff_message(clinic: ClinicData, now: datetime) -> str:
     return texts.HANDOFF.format(when=when)
 
 
-def outcome_message(done: Done, clinic: ClinicData, now: datetime) -> str:
-    """What the patient reads when the scenario ends (before slots, for a booking)."""
+def outcome_message(
+    done: Done, clinic: ClinicData, now: datetime, *, include_handoff: bool = True
+) -> str:
+    """What the patient reads when the scenario ends (before slots, for a booking).
+
+    ``include_handoff=False`` leaves out «Передаю Ваше обращение…»: the bot says it only
+    once the request has really gone to the administrators (after consent and contact).
+    """
     parts: list[str] = []
     if done.kind == "emergency":
         parts.append(clinic.clinic.emergency.reply)
@@ -131,7 +137,7 @@ def outcome_message(done: Done, clinic: ClinicData, now: datetime) -> str:
             parts[-1] = "\n".join([parts[-1], *lines])
         else:
             parts.append("\n".join(lines))
-    if done.kind == "handoff":
+    if done.kind == "handoff" and include_handoff:
         parts.append(handoff_message(clinic, now))
     if done.offer_admin:
         parts.append(texts.OFFER_ADMIN)

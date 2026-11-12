@@ -115,3 +115,18 @@ def test_usage_and_cache_summary() -> None:
     )
     assert all(u.ok for u in USAGE)
     assert hit > 0, "stable system prompts should be served from the DeepSeek cache"
+
+
+async def test_event_date_is_understood_as_relative(
+    assistant: Assistant, kb: KnowledgeBase
+) -> None:
+    """«упал 9 ноября» reaches DeepSeek as «упал 3 дня назад» → within 7 days."""
+    from datetime import timedelta
+
+    from app.bot.texts import MONTHS_GENITIVE
+
+    day = assistant.today() - timedelta(days=3)
+    sc = kb.scenario("dislocation")
+    text = f"упал {day.day} {MONTHS_GENITIVE[day.month - 1]}"
+    result = await assistant.extract(sc, sc.question("when"), text)
+    assert result.facts.get("injury_age") == "within_7_days", (text, result)

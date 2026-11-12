@@ -372,6 +372,8 @@ class CommonPhrases(_Model):
     goodbye: Phrase
     no_walk_in_objection: Phrase
     parking_after_20: Phrase
+    parking_day: Phrase
+    parking_night: Phrase
     unscripted_requests: tuple[str, ...] = Field(
         description="Menu items of script 02 that have no script in the export"
     )
