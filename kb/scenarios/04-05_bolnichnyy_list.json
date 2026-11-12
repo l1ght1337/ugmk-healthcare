@@ -1,0 +1,101 @@
+{
+  "id": "sick_leave",
+  "script": "04-05_bolnichnyy_list",
+  "number": "4.5",
+  "title": "Больничный лист в травмпункте",
+  "kind": "booking",
+  "router_hint": "Открыть больничный лист в травмпункте (пункт меню общего блока)",
+  "entry": [{"next": "had_injury"}],
+  "questions": [
+    {
+      "id": "had_injury",
+      "ask": "Была травма?",
+      "source": "04-05, этап 1, вопрос 1",
+      "fields": [
+        {"name": "had_injury", "type": "bool", "description": "true — больничный нужен в связи с травмой"}
+      ],
+      "branches": [
+        {"when": {"had_injury": true}, "next": "help_provided"},
+        {"when": {"had_injury": false, "audience": "child"}, "outcome": "child_planned_explained"},
+        {"when": {"had_injury": false, "audience": "adult"}, "outcome": "adult_call_center_explained"}
+      ]
+    },
+    {
+      "id": "help_provided",
+      "ask": "Помощь по данному случаю уже оказана?",
+      "source": "04-05, этап 1, вопрос 2",
+      "fields": [
+        {
+          "name": "help_provided",
+          "type": "enum",
+          "description": "Оказывалась ли уже медицинская помощь по этой травме",
+          "options": [
+            {"value": "no", "meaning": "нет, помощь ещё не оказывали"},
+            {"value": "our_trauma_center", "meaning": "да, по этой травме уже были в нашем травмпункте «УГМК-Здоровье»"},
+            {"value": "other_doctor", "meaning": "да, помощь оказали в другом месте или другой врач"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"help_provided": "no"}, "next": "when"},
+        {"when": {"help_provided": "our_trauma_center"}, "scenario": "repeat_visit", "carry": {"first_visit_here": true}},
+        {"when": {"help_provided": "other_doctor", "audience": "child"}, "outcome": "child_planned_explained"},
+        {"when": {"help_provided": "other_doctor", "audience": "adult"}, "outcome": "adult_call_center_explained"}
+      ]
+    },
+    {
+      "id": "when",
+      "ask": "Когда была получена травма?",
+      "source": "04-05, этап 1, вопрос 2 (в скрипте нумерация повторяется)",
+      "fields": [
+        {
+          "name": "injury_age",
+          "type": "enum",
+          "description": "Давность травмы",
+          "options": [
+            {"value": "within_7_days", "meaning": "в течение последних 7 дней"},
+            {"value": "over_7_days", "meaning": "более 7 дней назад"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"injury_age": "within_7_days"}, "outcome": "book_primary"},
+        {"when": {"injury_age": "over_7_days", "audience": "child"}, "outcome": "child_planned"},
+        {"when": {"injury_age": "over_7_days", "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "book_primary": {
+      "type": "book",
+      "booking": {"visit": "primary", "service": "Первичный приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "source": "04-05, вопрос «Когда была получена травма?» — в течение 7 дней"
+    },
+    "child_planned_explained": {
+      "type": "handoff",
+      "say": ["Открыть больничный лист можно только на «плановой» консультации врача, например педиатра, хирурга или травматолога-ортопеда (смотря что случилось)."],
+      "handoff_reason": "Ребёнок: записать на ближайший плановый приём к травматологу-ортопеду, педиатру или хирургу (не в травмпункт) — больничный лист",
+      "source": "04-05, вопрос 1 «Нет» / вопрос 2 «Да», ребёнок"
+    },
+    "adult_call_center_explained": {
+      "type": "handoff",
+      "say": ["Открыть больничный лист можно только на «плановой» консультации врача, например педиатра, хирурга или травматолога-ортопеда (смотря что случилось)."],
+      "handoff_reason": "Взрослый: по скрипту — перевод на оператора взрослого КЦ (т. 1102) — больничный лист",
+      "source": "04-05, вопрос 1 «Нет» / вопрос 2 «Да», взрослый"
+    },
+    "child_planned": {
+      "type": "handoff",
+      "handoff_reason": "Ребёнок: записать на ближайший плановый приём к травматологу-ортопеду, педиатру или хирургу (не в травмпункт) — больничный лист, травма более 7 дней назад",
+      "source": "04-05, вопрос «Когда была получена травма?» — более 7 дней, ребёнок"
+    },
+    "adult_call_center": {
+      "type": "handoff",
+      "handoff_reason": "Взрослый: по скрипту — перевод на оператора взрослого КЦ (т. 1102) — больничный лист, травма более 7 дней назад",
+      "source": "04-05, вопрос «Когда была получена травма?» — более 7 дней, взрослый"
+    }
+  },
+  "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога-ортопеда в травмпункт на {date} в {time}. Стоимость консультации {price}, все дополнительные манипуляции, если потребуются (рентген, повязка, наложение швов и т. д.), оплачиваются дополнительно. Оплачивать услуги планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение.",
+  "todo": [
+    "Ветка «помощь уже оказана в нашем травмпункте → повторный приём (04-09)» — расширение правила заказчика про «обращались к нашему врачу» на вопрос 2 этого скрипта; подтвердить"
+  ]
+}

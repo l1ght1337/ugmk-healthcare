@@ -1,0 +1,129 @@
+{
+  "id": "animal_bite",
+  "script": "04-11_ukus_zhivotnogo",
+  "number": "4.11",
+  "title": "Укус животного",
+  "kind": "booking",
+  "router_hint": "Укус животного: укусило или поцарапало животное (пункт меню общего блока)",
+  "entry": [{"next": "danger_signs"}],
+  "notices": [
+    {
+      "text": "Антирабической вакцины нет — доктор может обработать место укуса и сделать перевязку.",
+      "source": "04-11, шапка скрипта «Антирабической вакцины в наличии нет»",
+      "when_config": {"rabies_vaccine_available": false}
+    }
+  ],
+  "questions": [
+    {
+      "id": "danger_signs",
+      "ask": "На данный момент у Вас (у ребёнка) присутствуют какие-либо из признаков: падение артериального давления, нарушение дыхания, потеря сознания?",
+      "source": "04-11, этап 1, вопрос 1",
+      "fields": [
+        {"name": "danger_signs", "type": "bool", "description": "true — есть хотя бы один из признаков: падение артериального давления, нарушение дыхания, потеря сознания"}
+      ],
+      "branches": [
+        {"when": {"danger_signs": true}, "outcome": "emergency"},
+        {"when": {"danger_signs": false}, "next": "animal"}
+      ]
+    },
+    {
+      "id": "animal",
+      "ask": "Какое животное укусило или поцарапало?",
+      "source": "04-11, этап 1, вопрос 2 (если не озвучил пациент)",
+      "fields": [
+        {
+          "name": "animal",
+          "type": "enum",
+          "description": "Кто укусил или поцарапал",
+          "options": [
+            {"value": "venomous", "meaning": "змеи и другие ядовитые животные, ящерицы"},
+            {"value": "insect", "meaning": "насекомые (мошки, пчёлы, шмель, осы, комары)"},
+            {"value": "domestic", "meaning": "домашнее животное: кошка, собака, грызун (хомячки, крысы, мыши и т. д.), птица, белка"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"animal": "venomous"}, "outcome": "toxicology"},
+        {"when": {"animal": "insect", "audience": "child"}, "outcome": "child_planned_pediatrician"},
+        {"when": {"animal": "insect", "audience": "adult"}, "outcome": "adult_call_center"},
+        {"when": {"animal": "domestic"}, "next": "when"}
+      ]
+    },
+    {
+      "id": "when",
+      "ask": "Когда был укус?",
+      "source": "04-11, этап 1, вопрос 2 (в скрипте нумерация повторяется)",
+      "fields": [
+        {
+          "name": "injury_age",
+          "type": "enum",
+          "description": "Давность укуса",
+          "options": [
+            {"value": "within_7_days", "meaning": "в течение последних 7 дней"},
+            {"value": "over_7_days", "meaning": "более 7 дней назад"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"injury_age": "within_7_days"}, "next": "seen_doctor"},
+        {"when": {"injury_age": "over_7_days", "audience": "child"}, "outcome": "child_planned_pediatrician"},
+        {"when": {"injury_age": "over_7_days", "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    },
+    {
+      "id": "seen_doctor",
+      "ask": "Обращались к врачу по данному случаю?",
+      "source": "04-11, этап 1, вопрос 3",
+      "fields": [
+        {
+          "name": "seen_doctor",
+          "type": "enum",
+          "description": "Обращался ли пациент к врачу по этому укусу",
+          "options": [
+            {"value": "no", "meaning": "нет, к врачу по этому случаю не обращались"},
+            {"value": "our_trauma_center", "meaning": "да, по этому укусу уже были в нашем травмпункте «УГМК-Здоровье»"},
+            {"value": "other_doctor", "meaning": "да, обращались к другому врачу или в другую клинику"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"seen_doctor": "no"}, "outcome": "book_primary"},
+        {"when": {"seen_doctor": "our_trauma_center"}, "scenario": "repeat_visit", "carry": {"first_visit_here": true}},
+        {"when": {"seen_doctor": "other_doctor", "audience": "child"}, "outcome": "child_planned_pediatrician"},
+        {"when": {"seen_doctor": "other_doctor", "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "emergency": {
+      "type": "emergency",
+      "destinations": [{"facility": "gkb14_toxicology"}],
+      "source": "04-11, вопрос 1 «Да»: ориентируй на вызов городской СМП либо отправляй в токсикологическое отделение ГКБ № 14"
+    },
+    "toxicology": {
+      "type": "route",
+      "destinations": [{"facility": "gkb14_toxicology"}],
+      "source": "04-11, вопрос 2 «Змеи и другие ядовитые животные, ящерицы»"
+    },
+    "book_primary": {
+      "type": "book",
+      "booking": {"visit": "primary", "service": "Приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "source": "04-11, вопрос 3 «Нет»"
+    },
+    "child_planned_pediatrician": {
+      "type": "handoff",
+      "handoff_reason": "Ребёнок: записать на ближайший плановый приём к педиатру (не в травмпункт)",
+      "source": "04-11, вопросы 2–3, ребёнок"
+    },
+    "adult_call_center": {
+      "type": "handoff",
+      "handoff_reason": "Взрослый: по скрипту — перевод на оператора взрослого КЦ (т. 1102)",
+      "source": "04-11, вопросы 2–3, взрослый"
+    }
+  },
+  "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога-ортопеда в травмпункт на {date} в {time}. Стоимость консультации {price}, все дополнительные манипуляции (рентген, повязки, наложение швов и т. д.) оплачиваются дополнительно. Оплачивать планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение.",
+  "todo": [
+    "Наличие антирабической вакцины оператор проверяет по ссылке «здесь» в реальном времени — в боте флаг rabies_vaccine_available в config/clinic.yaml",
+    "Куда обращаться за антирабической вакциной, если её нет, — в скрипте не указано"
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "id": "fracture",
+  "script": "04-07_perelom",
+  "number": "4.7",
+  "title": "Перелом, в т. ч. открытый перелом, перелом со смещением",
+  "kind": "booking",
+  "router_hint": "Перелом, перелом со смещением, открытый перелом (пункт меню общего блока)",
+  "entry": [{"next": "how"}],
+  "questions": [
+    {
+      "id": "how",
+      "ask": "Как получена травма? Что произошло?",
+      "source": "04-07, этап 1, вопрос 1",
+      "fields": [
+        {
+          "name": "assault",
+          "type": "bool",
+          "description": "true — травма получена в результате нападения, нанесения побоев, пациент намерен снять «побои» и обратиться в суд и т. д."
+        },
+        {
+          "name": "open_or_displaced",
+          "type": "bool",
+          "description": "true — открытый перелом или перелом со смещением (пациент сам говорит об этом); false — пациент об этом не говорит, бытовая травма (например, упал на неровном или скользком полу, с табуретов, в непогоду во дворе, с лестницы и т. д.)"
+        }
+      ],
+      "branches": [
+        {"when": {"assault": true}, "scenario": "criminal_trauma"},
+        {"when": {"assault": false, "open_or_displaced": true, "audience": "child"}, "outcome": "open_child"},
+        {"when": {"assault": false, "open_or_displaced": true, "audience": "adult"}, "outcome": "open_adult"},
+        {"when": {"assault": false, "open_or_displaced": false}, "next": "when"}
+      ]
+    },
+    {
+      "id": "when",
+      "ask": "Когда была получена травма?",
+      "source": "04-07, этап 1, вопрос 2",
+      "fields": [
+        {
+          "name": "injury_age",
+          "type": "enum",
+          "description": "Давность травмы",
+          "options": [
+            {"value": "within_7_days", "meaning": "в течение последних 7 дней"},
+            {"value": "over_7_days", "meaning": "более 7 дней назад"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"injury_age": "within_7_days"}, "next": "seen_doctor"},
+        {"when": {"injury_age": "over_7_days", "audience": "child"}, "outcome": "child_planned_orthopedist"},
+        {"when": {"injury_age": "over_7_days", "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    },
+    {
+      "id": "seen_doctor",
+      "ask": "Обращались ли к врачу по данному случаю?",
+      "source": "04-07, этап 1, вопрос 3 «Обращались ли к врачу по данному случаю? Нашему врачу?»",
+      "fields": [
+        {
+          "name": "seen_doctor",
+          "type": "enum",
+          "description": "Обращался ли пациент к врачу по этой травме",
+          "options": [
+            {"value": "no", "meaning": "нет, к врачу по этому случаю не обращались"},
+            {"value": "our_trauma_center", "meaning": "да, по этой травме уже были в нашем травмпункте «УГМК-Здоровье»"},
+            {"value": "other_doctor", "meaning": "да, обращались к другому врачу или в другую клинику"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"seen_doctor": "no"}, "outcome": "book_primary"},
+        {"when": {"seen_doctor": "our_trauma_center"}, "scenario": "repeat_visit", "carry": {"first_visit_here": true}},
+        {"when": {"seen_doctor": "other_doctor", "audience": "child"}, "outcome": "child_planned_orthopedist"},
+        {"when": {"seen_doctor": "other_doctor", "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "book_primary": {
+      "type": "book",
+      "booking": {"visit": "primary", "service": "Первичный приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "source": "04-07, вопрос 3 «Нет»"
+    },
+    "open_child": {
+      "type": "route",
+      "destinations": [{"facility": "dgkb9"}],
+      "handoff_reason": "Ребёнок, открытый перелом / перелом со смещением: записать на ближайший плановый приём нашего детского травматолога-ортопеда (в травмпункт не пишем)",
+      "source": "04-07, вопрос 1 «открытый перелом, перелом со смещением», ребёнок"
+    },
+    "open_adult": {
+      "type": "route",
+      "destinations": [
+        {"facility": "gtb36"},
+        {"facility": "gkb14", "note": "все травмы, кроме черепно-мозговых"},
+        {"facility": "cgb23"}
+      ],
+      "handoff_reason": "Взрослый, открытый перелом / перелом со смещением: по скрипту — перевод на оператора взрослого КЦ (т. 1102) (в травмпункт не пишем)",
+      "source": "04-07, вопрос 1 «открытый перелом, перелом со смещением», взрослый"
+    },
+    "child_planned_orthopedist": {
+      "type": "handoff",
+      "handoff_reason": "Ребёнок: записать на ближайший плановый приём к травматологу-ортопеду (не в травмпункт)",
+      "source": "04-07, вопрос 2 «более 7 дней» / вопрос 3 «Да», ребёнок"
+    },
+    "adult_call_center": {
+      "type": "handoff",
+      "handoff_reason": "Взрослый: по скрипту — перевод на оператора взрослого КЦ (т. 1102)",
+      "source": "04-07, вопрос 2 «более 7 дней» / вопрос 3 «Да», взрослый"
+    }
+  },
+  "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога-ортопеда в травмпункт на {date} в {time}. Стоимость консультации {price}, все дополнительные манипуляции (рентген, повязки, наложение швов и т. д.) оплачиваются дополнительно. Оплачивать планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение."
+}

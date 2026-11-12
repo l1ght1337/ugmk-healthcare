@@ -1,0 +1,101 @@
+{
+  "id": "dislocation",
+  "script": "04-01_vyvikhi",
+  "number": "4.1",
+  "title": "Вывихи",
+  "kind": "booking",
+  "router_hint": "Вывих (пункт меню общего блока «Вывих»)",
+  "entry": [{"next": "how"}],
+  "questions": [
+    {
+      "id": "how",
+      "ask": "Как получена травма? Что произошло?",
+      "source": "04-01, этап 1, вопрос 1",
+      "fields": [
+        {
+          "name": "assault",
+          "type": "bool",
+          "description": "true — травма получена в результате нападения, нанесения побоев, пациент намерен снять «побои» и обратиться в суд и т. д.; false — бытовая травма (например, упал на неровном или скользком полу, с табуретов, в непогоду во дворе, с лестницы и т. д.)"
+        }
+      ],
+      "branches": [
+        {"when": {"assault": true}, "scenario": "criminal_trauma"},
+        {"when": {"assault": false}, "next": "when"}
+      ]
+    },
+    {
+      "id": "when",
+      "ask": "Когда была получена травма?",
+      "source": "04-01, этап 1, вопрос 2",
+      "fields": [
+        {
+          "name": "injury_age",
+          "type": "enum",
+          "description": "Давность травмы",
+          "options": [
+            {"value": "within_7_days", "meaning": "в течение последних 7 дней"},
+            {"value": "over_7_days", "meaning": "более 7 дней назад"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"injury_age": "within_7_days"}, "next": "seen_doctor"},
+        {"when": {"injury_age": "over_7_days", "audience": "child"}, "outcome": "child_planned_orthopedist"},
+        {"when": {"injury_age": "over_7_days", "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    },
+    {
+      "id": "seen_doctor",
+      "ask": "Обращались ли к врачу по данному случаю?",
+      "source": "04-01, этап 1, вопрос 3",
+      "fields": [
+        {
+          "name": "seen_doctor",
+          "type": "enum",
+          "description": "Обращался ли пациент к врачу по этой травме",
+          "options": [
+            {"value": "no", "meaning": "нет, к врачу по этому случаю не обращались"},
+            {"value": "our_trauma_center", "meaning": "да, по этой травме уже были в нашем травмпункте «УГМК-Здоровье»"},
+            {"value": "other_doctor", "meaning": "да, обращались к другому врачу или в другую клинику"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"seen_doctor": "no"}, "outcome": "book_primary"},
+        {"when": {"seen_doctor": "our_trauma_center"}, "scenario": "repeat_visit", "carry": {"first_visit_here": true}},
+        {"when": {"seen_doctor": "other_doctor", "audience": "child"}, "outcome": "child_planned_orthopedist"},
+        {"when": {"seen_doctor": "other_doctor", "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "book_primary": {
+      "type": "book",
+      "say": [
+        "Можно записаться на приём к травматологу-ортопеду в травмпункт. Если будет диагностирован вывих, врач попробует его вправить, однако, если вправление будет безрезультатным, Вас могут (на усмотрение врача) перенаправить в другое медицинское учреждение."
+      ],
+      "booking": {"visit": "primary", "service": "Первичный приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "source": "04-01, вопрос 3 «Нет»"
+    },
+    "child_planned_orthopedist": {
+      "type": "handoff",
+      "handoff_reason": "Ребёнок: записать на ближайший плановый приём к травматологу-ортопеду (не в травмпункт)",
+      "source": "04-01, вопрос 2 «более 7 дней» / вопрос 3 «Да», ребёнок"
+    },
+    "adult_call_center": {
+      "type": "handoff",
+      "handoff_reason": "Взрослый: по скрипту — перевод на оператора взрослого КЦ (т. 1102)",
+      "source": "04-01, вопрос 2 «более 7 дней» / вопрос 3 «Да», взрослый"
+    }
+  },
+  "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога-ортопеда в травмпункт на {date} в {time}. Стоимость консультации {price}, все дополнительные манипуляции, если потребуются (рентген, повязки, наложение швов и т. д.), оплачиваются дополнительно. Оплачивать планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение.",
+  "operator_phrases": {
+    "why_reduction_may_fail": {
+      "text": "Если вывих не вправить вовремя (обычно 1–2 дня), развившаяся отёчность может сильно затруднить вправление, и для лечения вывиха может потребоваться даже хирургическая операция. В рамках нашего травмпункта такие манипуляции не выполняем.",
+      "source": "Врезка-картинка в PDF 04-01 «Почему может не получиться вправить вывих?» (расшифровано с картинки — сверить)"
+    }
+  },
+  "operator_notes": [
+    "Симптомы вывиха: в области повреждённого сустава развивается отёк, пациент может ощущать покалывание, онемение, жар (пострадавший сустав «горит»)."
+  ]
+}

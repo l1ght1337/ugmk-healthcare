@@ -1,0 +1,153 @@
+{
+  "id": "burns",
+  "script": "04-06_ozhogi",
+  "number": "4.6",
+  "title": "Ожоги",
+  "kind": "booking",
+  "router_hint": "Ожоги (пункт меню общего блока)",
+  "entry": [{"next": "burn_location"}],
+  "questions": [
+    {
+      "id": "burn_location",
+      "ask": "Что обожгли?",
+      "source": "04-06, этап 1, вопрос 1 «Ребёнок или взрослый получил ожог и что обожгли?» (ребёнок/взрослый уже известно)",
+      "fields": [
+        {
+          "name": "burn_location",
+          "type": "enum",
+          "description": "Где ожог",
+          "options": [
+            {"value": "face", "meaning": "ожог лица"},
+            {"value": "body", "meaning": "ожог на теле"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"burn_location": "face", "audience": "child"}, "outcome": "face_child"},
+        {"when": {"burn_location": "face", "audience": "adult"}, "outcome": "face_adult"},
+        {"when": {"burn_location": "body"}, "next": "burn_cause"}
+      ]
+    },
+    {
+      "id": "burn_cause",
+      "ask": "Как получили ожог?",
+      "source": "04-06, этап 1, вопрос 2",
+      "fields": [
+        {
+          "name": "burn_cause",
+          "type": "enum",
+          "description": "Причина ожога",
+          "options": [
+            {"value": "chemical", "meaning": "воздействие агрессивных химических веществ, например: сильные кислоты (соляная, серная, азотная); щёлочи (едкий натр, аммиак); окислители (перекись водорода высокой концентрации, перманганат калия); растворители, фенолы, формальдегид и другие реактивы"},
+            {"value": "thermal", "meaning": "воздействие высокой температуры, горячего пара, солнечный ожог, пламя или другие источники тепла"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"burn_cause": "chemical", "audience": "adult"}, "outcome": "chemical_adult"},
+        {"when": {"burn_cause": "chemical", "audience": "child"}, "outcome": "chemical_child"},
+        {"when": {"burn_cause": "thermal"}, "next": "when"}
+      ]
+    },
+    {
+      "id": "when",
+      "ask": "Когда была получена травма?",
+      "source": "04-06, этап 1, вопрос 3",
+      "fields": [
+        {
+          "name": "injury_age",
+          "type": "enum",
+          "description": "Давность ожога",
+          "options": [
+            {"value": "within_24h", "meaning": "в течение суток"},
+            {"value": "over_24h", "meaning": "более суток назад"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"injury_age": "within_24h"}, "next": "seen_doctor"},
+        {"when": {"injury_age": "over_24h", "audience": "adult"}, "outcome": "late_adult"},
+        {"when": {"injury_age": "over_24h", "audience": "child"}, "outcome": "late_child"}
+      ]
+    },
+    {
+      "id": "seen_doctor",
+      "ask": "Обращались ли к врачу по данному случаю?",
+      "source": "04-06, этап 1, вопрос 3 «Обращались ли к врачу по данному случаю к нашему врачу?» (в скрипте нумерация повторяется)",
+      "fields": [
+        {
+          "name": "seen_doctor",
+          "type": "enum",
+          "description": "Обращался ли пациент к врачу по этому ожогу",
+          "options": [
+            {"value": "no", "meaning": "нет, к врачу по этому случаю не обращались"},
+            {"value": "our_trauma_center", "meaning": "да, по этому ожогу уже были в нашем травмпункте «УГМК-Здоровье»"},
+            {"value": "other_doctor", "meaning": "да, обращались к другому врачу или в другую клинику"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"seen_doctor": "no"}, "outcome": "book_primary"},
+        {"when": {"seen_doctor": "our_trauma_center"}, "scenario": "repeat_visit", "carry": {"first_visit_here": true}},
+        {"when": {"seen_doctor": "other_doctor", "audience": "adult"}, "outcome": "seen_other_adult"},
+        {"when": {"seen_doctor": "other_doctor", "audience": "child"}, "outcome": "seen_other_child"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "book_primary": {
+      "type": "book",
+      "say": ["Доктор может перенаправить Вас к хирургу после того, как оценит степень ожога."],
+      "booking": {"visit": "primary", "service": "Первичный приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "source": "04-06, вопрос «Обращались ли к врачу» — «Нет»: запиши, предупреди, что доктор может перенаправить к хирургу"
+    },
+    "face_child": {
+      "type": "route",
+      "say": ["С ожогами лица нужно обратиться в приёмный покой:"],
+      "destinations": [{"facility": "dgkb9"}],
+      "source": "04-06, вопрос 1, ребёнок: «С ожогами лица направляй в приёмный покой ДГКБ № 9»"
+    },
+    "face_adult": {
+      "type": "route",
+      "say": ["С ожогом лица нужно обратиться в ожоговый центр:"],
+      "destinations": [{"facility": "gkb40_burn_center"}],
+      "source": "04-06, вопрос 1, взрослый: «Если ожог на лице (любой) — направляем в ожоговый центр 40 больницы»"
+    },
+    "chemical_adult": {
+      "type": "route",
+      "say": ["С химическими ожогами в травмпункт не записываем. Нужно обратиться:"],
+      "destinations": [{"facility": "gkb40"}],
+      "source": "04-06, вопрос 2 «химические вещества», взрослый"
+    },
+    "chemical_child": {
+      "type": "handoff",
+      "handoff_reason": "Ребёнок, химический ожог: в травмпункт не пишем, маршрут для ребёнка в скрипте не указан",
+      "source": "04-06, вопрос 2 «химические вещества» — в скрипте указан только маршрут для взрослого",
+      "todo": ["Куда направлять ребёнка с химическим ожогом"]
+    },
+    "late_adult": {
+      "type": "route",
+      "destinations": [{"facility": "gkb40"}],
+      "handoff_reason": "Взрослый, ожог более суток назад: по скрипту — ГКБ № 40 или перевод на оператора взрослого КЦ (т. 1102)",
+      "source": "04-06, вопрос 3 «более суток»"
+    },
+    "late_child": {
+      "type": "handoff",
+      "handoff_reason": "Ребёнок, ожог более суток назад: маршрут для ребёнка в скрипте не указан",
+      "source": "04-06, вопрос 3 «более суток» — в скрипте только ГКБ № 40 или взрослый КЦ",
+      "todo": ["Куда направлять ребёнка, если ожог получен более суток назад"]
+    },
+    "seen_other_adult": {
+      "type": "handoff",
+      "handoff_reason": "Взрослый, уже обращался к врачу по ожогу: по скрипту — запись на плановый приём к хирургу, перевод на оператора взрослого КЦ (т. 1102)",
+      "source": "04-06, вопрос «Обращались ли к врачу» — «Да»"
+    },
+    "seen_other_child": {
+      "type": "handoff",
+      "handoff_reason": "Ребёнок, уже обращался к врачу по ожогу: по скрипту — плановый приём к хирургу; порядок для ребёнка в скрипте не описан",
+      "source": "04-06, вопрос «Обращались ли к врачу» — «Да» (дальше в скрипте — взрослый КЦ)",
+      "todo": ["Порядок для ребёнка, который уже обращался к врачу по ожогу"]
+    }
+  },
+  "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога-ортопеда в травмпункт на {date} в {time}. Стоимость консультации {price}, все дополнительные манипуляции, если потребуются (рентген, повязка, наложение швов и т. д.), оплачиваются дополнительно. Оплачивать услуги планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение."
+}

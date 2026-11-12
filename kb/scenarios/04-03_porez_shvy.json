@@ -1,0 +1,130 @@
+{
+  "id": "cut_sutures",
+  "script": "04-03_porez_shvy",
+  "number": "4.3",
+  "title": "Порез, рассечение, наложение швов",
+  "kind": "booking",
+  "router_hint": "Порез, рассечение, наложение швов (пункт меню общего блока)",
+  "entry": [{"next": "wound_location"}],
+  "questions": [
+    {
+      "id": "wound_location",
+      "ask": "Где рассечение? Где нужно наложить шов?",
+      "source": "04-03, этап 1, вопрос 1",
+      "fields": [
+        {
+          "name": "wound_location",
+          "type": "enum",
+          "description": "Где рана",
+          "options": [
+            {"value": "face_neck_head", "meaning": "на лице, шейно-воротниковой зоне, голове"},
+            {"value": "body", "meaning": "на теле (руки, ноги и т. д.)"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"wound_location": "face_neck_head", "audience": "child"}, "outcome": "child_surgeon_maxillofacial_or_dgkb9"},
+        {"when": {"wound_location": "face_neck_head", "audience": "adult"}, "outcome": "adult_hospitals"},
+        {"when": {"wound_location": "body"}, "next": "motor_function"}
+      ]
+    },
+    {
+      "id": "motor_function",
+      "ask": "Есть двигательные функции той конечности, на которой повреждение?",
+      "source": "04-03, этап 1, вопрос 2",
+      "fields": [
+        {"name": "motor_function", "type": "bool", "description": "true — повреждённой конечностью можно двигать; false — нет двигательной функции"}
+      ],
+      "branches": [
+        {"when": {"motor_function": false, "audience": "child"}, "outcome": "child_surgeon_or_dgkb9"},
+        {"when": {"motor_function": false, "audience": "adult"}, "outcome": "adult_hospitals"},
+        {"when": {"motor_function": true}, "next": "when"}
+      ]
+    },
+    {
+      "id": "when",
+      "ask": "Когда была получена травма?",
+      "source": "04-03, этап 1, вопрос 3",
+      "fields": [
+        {
+          "name": "injury_age",
+          "type": "enum",
+          "description": "Давность травмы",
+          "options": [
+            {"value": "within_24h", "meaning": "прошло менее суток"},
+            {"value": "over_24h", "meaning": "прошло более суток"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"injury_age": "over_24h", "audience": "child"}, "outcome": "child_surgeon_or_dgkb9"},
+        {"when": {"injury_age": "over_24h", "audience": "adult"}, "outcome": "adult_hospitals"},
+        {"when": {"injury_age": "within_24h"}, "next": "suture_type"}
+      ]
+    },
+    {
+      "id": "suture_type",
+      "ask": "Доктор в травмпункте может сделать только хирургический шов — для соединения тканей. Если нужен косметический шов — для эстетического эффекта, который максимально скроет признаки оперативного вмешательства, — нужно обратиться в другое учреждение. Записать Вас на хирургический шов?",
+      "source": "04-03, вопрос 3 «Прошло менее суток»: «Предупреди пациента…», «Если согласны на хирургический шов — запиши»",
+      "fields": [
+        {
+          "name": "suture_type",
+          "type": "enum",
+          "description": "На какой шов согласен пациент",
+          "options": [
+            {"value": "surgical", "meaning": "согласен на хирургический шов в травмпункте"},
+            {"value": "cosmetic", "meaning": "нужен косметический шов"}
+          ]
+        }
+      ],
+      "branches": [
+        {"when": {"suture_type": "surgical"}, "outcome": "book_primary"},
+        {"when": {"suture_type": "cosmetic", "audience": "child"}, "outcome": "cosmetic_child"},
+        {"when": {"suture_type": "cosmetic", "audience": "adult"}, "outcome": "cosmetic_adult"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "book_primary": {
+      "type": "book",
+      "booking": {"visit": "primary", "service": "Полноценный приём травматолога", "slot_policy": "nearest", "price_key": "dressing_or_consultation"},
+      "source": "04-03, вопрос 3: согласны на хирургический шов"
+    },
+    "cosmetic_child": {
+      "type": "route",
+      "say": ["Для косметического шва ребёнка направляем:"],
+      "destinations": [{"facility": "dgkb9"}],
+      "source": "04-03, вопрос 3 «Прошло менее суток», косметический шов, ребёнок"
+    },
+    "cosmetic_adult": {
+      "type": "route",
+      "say": ["Для косметического шва направляем:"],
+      "destinations": [{"facility": "cgb23"}],
+      "source": "04-03, вопрос 3 «Прошло менее суток», косметический шов, взрослый"
+    },
+    "child_surgeon_maxillofacial_or_dgkb9": {
+      "type": "route",
+      "destinations": [{"facility": "dgkb9"}],
+      "handoff_reason": "Ребёнок: записать на ближайший плановый приём нашего детского хирурга / челюстно-лицевого хирурга (в травмпункт не пишем)",
+      "source": "04-03, вопрос 1 «На лице, шее, голове», ребёнок"
+    },
+    "child_surgeon_or_dgkb9": {
+      "type": "route",
+      "destinations": [{"facility": "dgkb9"}],
+      "handoff_reason": "Ребёнок: записать на ближайший плановый приём нашего детского хирурга (в травмпункт не пишем)",
+      "source": "04-03, вопрос 2 «Нет двигательной функции» / вопрос 3 «Прошло более суток», ребёнок"
+    },
+    "adult_hospitals": {
+      "type": "route",
+      "destinations": [
+        {"facility": "gkb40"},
+        {"facility": "gkb14", "note": "все травмы, кроме черепно-мозговых"},
+        {"facility": "cgb23"},
+        {"facility": "cgkb1"}
+      ],
+      "handoff_reason": "Взрослый: по скрипту — перевод на оператора взрослого КЦ (т. 1102) (в травмпункт не пишем)",
+      "source": "04-03, вопросы 1–3, взрослый"
+    }
+  },
+  "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога в травмпункт на {date} в {time}. Стоимость перевязки/консультации {price}, все дополнительные манипуляции, если потребуются, оплачиваются дополнительно. Оплачивать планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение."
+}

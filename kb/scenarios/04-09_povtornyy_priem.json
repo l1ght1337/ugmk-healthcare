@@ -1,0 +1,65 @@
+{
+  "id": "repeat_visit",
+  "script": "04-09_povtornyy_priem",
+  "number": "4.9",
+  "title": "Повторный приём в травмпункте",
+  "kind": "booking",
+  "router_hint": "Повторный (контрольный) приём в травмпункте по травме, с которой уже обращались. Если травма новая (просто повторно хотят обратиться за помощью) — это не повторный приём, выбирается сценарий по виду травмы.",
+  "entry": [{"next": "first_visit"}],
+  "questions": [
+    {
+      "id": "first_visit",
+      "ask": "Первично помощь получали в нашем травмпункте?",
+      "source": "04-09, этап 1, вопрос 1",
+      "fields": [
+        {
+          "name": "first_visit_here",
+          "type": "bool",
+          "description": "true — первично с этой травмой обращались в наш травмпункт «УГМК-Здоровье»; false — первично помощь получали в другом месте"
+        }
+      ],
+      "branches": [
+        {"when": {"first_visit_here": true}, "next": "sick_leave"},
+        {"when": {"first_visit_here": false, "audience": "child"}, "outcome": "child_planned_orthopedist"},
+        {"when": {"first_visit_here": false, "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    },
+    {
+      "id": "sick_leave",
+      "ask": "Открывали больничный лист?",
+      "source": "04-09, этап 1, вопрос 2",
+      "fields": [
+        {"name": "sick_leave_open", "type": "bool", "description": "true — больничный лист по этой травме открывали"}
+      ],
+      "branches": [
+        {"when": {"sick_leave_open": true}, "outcome": "book_near_repeat_window"},
+        {"when": {"sick_leave_open": false}, "outcome": "book_repeat_window"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "book_near_repeat_window": {
+      "type": "book",
+      "booking": {"visit": "repeat", "service": "Повторный приём травматолога-ортопеда", "slot_policy": "near_repeat_window", "price_key": "consultation"},
+      "source": "04-09, вопрос 2 «Да»: любое свободное время, близкое к исключительному событию «Повторный приём»"
+    },
+    "book_repeat_window": {
+      "type": "book",
+      "booking": {"visit": "repeat", "service": "Повторный приём травматолога-ортопеда", "slot_policy": "repeat_window", "price_key": "consultation"},
+      "source": "04-09, вопрос 2 «Нет»: строго в отведённое время «Повторный приём» (8:00–10:00, 16:00–18:00) или во второй кабинет для повторных приёмов (приём Травматолога 2)"
+    },
+    "child_planned_orthopedist": {
+      "type": "handoff",
+      "say": ["Запись в травмпункт на повторный приём ведётся при условии, что пациент первично с травмой обращался тоже в наш травмпункт."],
+      "handoff_reason": "Ребёнок: записать на ближайший плановый приём к травматологу-ортопеду (не в травмпункт)",
+      "source": "04-09, вопрос 1 «Нет», ребёнок"
+    },
+    "adult_call_center": {
+      "type": "handoff",
+      "say": ["Запись в травмпункт на повторный приём ведётся при условии, что пациент первично с травмой обращался тоже в наш травмпункт."],
+      "handoff_reason": "Взрослый: по скрипту — перевод на оператора взрослого КЦ (т. 1102)",
+      "source": "04-09, вопрос 1 «Нет», взрослый"
+    }
+  },
+  "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога-ортопеда в травмпункт на {date} в {time}. Стоимость консультации {price}, все дополнительные манипуляции (рентген, повязки, наложение швов и т. д.) оплачиваются дополнительно. Оплачивать планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение."
+}

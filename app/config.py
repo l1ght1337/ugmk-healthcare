@@ -8,12 +8,14 @@ secret call `Settings.require(...)` and get a clear error naming the missing var
 from __future__ import annotations
 
 import re
+from datetime import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import SecretStr, field_validator
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -96,3 +98,82 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+# --- clinic data from config/*.yaml (values missing from the scripts are TODO/null) -------
+
+CONFIG_DIR = PROJECT_ROOT / "config"
+
+
+class _Data(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class TraumaCenter(_Data):
+    address: str
+    entrance: str
+    hours: str
+
+
+class WorkingHours(_Data):
+    start: time
+    end: time
+
+    def contains(self, moment: time) -> bool:
+        if self.start <= self.end:
+            return self.start <= moment < self.end
+        return moment >= self.start or moment < self.end
+
+
+class Contacts(_Data):
+    trauma_center: TraumaCenter
+    call_center_phone: str | None
+    admin_working_hours: WorkingHours
+    privacy_policy_url: str | None
+
+
+class Emergency(_Data):
+    reply: str
+    phrases: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("phrases")
+    @classmethod
+    def _phrases_not_words(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        single = [p for p in value if len(p.split()) < 2]
+        if single:
+            raise ValueError(f"emergency triggers must be phrases, not single words: {single}")
+        return value
+
+
+class ClinicFlags(_Data):
+    rabies_vaccine_available: bool
+    emergency: Emergency
+
+
+class ClinicData(_Data):
+    prices: dict[str, int | None]
+    contacts: Contacts
+    clinic: ClinicFlags
+
+    def price_text(self, key: str) -> str | None:
+        """Price in roubles for patient texts, or None if the clinic has not given it yet."""
+        value = self.prices.get(key)
+        return f"{value} рублей" if value is not None else None
+
+
+def _read_yaml(path: Path) -> object:
+    with path.open(encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
+def load_clinic_data(config_dir: Path = CONFIG_DIR) -> ClinicData:
+    return ClinicData(
+        prices=_read_yaml(config_dir / "prices.yaml"),
+        contacts=_read_yaml(config_dir / "contacts.yaml"),
+        clinic=_read_yaml(config_dir / "clinic.yaml"),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_clinic_data() -> ClinicData:
+    return load_clinic_data()

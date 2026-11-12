@@ -1,0 +1,45 @@
+{
+  "id": "joint_puncture",
+  "script": "04-08_povtornaya_punktsiya_sustavov",
+  "number": "4.8",
+  "title": "Повторная пункция суставов",
+  "kind": "booking",
+  "router_hint": "Повторная пункция суставов (пункт меню общего блока)",
+  "entry": [{"next": "puncture_before"}],
+  "questions": [
+    {
+      "id": "puncture_before",
+      "ask": "В нашем травмпункте ранее уже выполняли пункцию?",
+      "source": "04-08, этап 1, вопрос 1",
+      "fields": [
+        {"name": "puncture_before_here", "type": "bool", "description": "true — пункцию ранее уже выполняли в нашем травмпункте «УГМК-Здоровье»; false — идут на пункцию первично"}
+      ],
+      "branches": [
+        {"when": {"puncture_before_here": true}, "outcome": "book_puncture"},
+        {"when": {"puncture_before_here": false, "audience": "child"}, "outcome": "child_surgeon_or_dgkb9"},
+        {"when": {"puncture_before_here": false, "audience": "adult"}, "outcome": "adult_call_center"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "book_puncture": {
+      "type": "book",
+      "booking": {"visit": "repeat", "service": "Пункция суставов диагностическая или пункция гематомы подкожной", "slot_policy": "nearest", "price_key": "dressing_or_consultation"},
+      "source": "04-08, вопрос 1 «Да»: запиши на услугу «Пункция суставов диагностическая» или «Пункция гематомы подкожной»",
+      "todo": ["Стоимость пункции: в итоге записи скрипт называет «стоимость перевязки/консультации (…..) рублей»"]
+    },
+    "child_surgeon_or_dgkb9": {
+      "type": "route",
+      "destinations": [{"facility": "dgkb9"}],
+      "handoff_reason": "Ребёнок, первичная пункция: записать на ближайший плановый приём нашего детского хирурга",
+      "source": "04-08, вопрос 1 «Нет, идут первично», ребёнок"
+    },
+    "adult_call_center": {
+      "type": "handoff",
+      "handoff_reason": "Взрослый, первичная пункция: по скрипту — перевод на оператора взрослого КЦ (т. 1102)",
+      "source": "04-08, вопрос 1 «Нет, идут первично», взрослый",
+      "todo": ["В скрипте «…или отправь в:» для взрослого без адресов (так и в PDF)"]
+    }
+  },
+  "summary": "Благодарю Вас за ожидание! {patient} {booked} на приём травматолога-ортопеда в травмпункт на {date} в {time}. Стоимость перевязки/консультации {price}, все дополнительные манипуляции, если потребуются, оплачиваются дополнительно. Оплачивать планируете самостоятельно или по страховке? Адрес травмпункта: {address}, вход через детское отделение."
+}
