@@ -77,6 +77,8 @@ def render_labels(kb: KnowledgeBase) -> str:
         ),
         _row("Оценка сервиса", ["1", "2", "3", "4", "5"]),
         _row("Ответ администратора", [texts.ADMIN_ANSWER_REPLY]),
+        _row("/forget — удалить данные и отозвать согласие", [texts.FORGET_YES, texts.FORGET_NO]),
+        _row("Чат администраторов: запрос доступа нового пользователя", [texts.ACCESS_ALLOW]),
         "",
     ]
     return "\n".join(lines)

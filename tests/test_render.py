@@ -138,3 +138,15 @@ def test_open_fracture_mentions_ambulance(run, clinic: ClinicData, audience: str
         "Если кость видна в ране или кровотечение не останавливается, вызывайте скорую: "
         "103 или 112. С такой травмой Вам нужно обратиться:\n• "
     )
+
+
+@pytest.mark.parametrize(
+    ("day", "text"),
+    [
+        (13, "в пятницу, 13 ноября, в 10:30"),
+        (17, "во вторник, 17 ноября, в 10:30"),
+        (18, "в среду, 18 ноября, в 10:30"),
+    ],
+)
+def test_format_when(day: int, text: str) -> None:
+    assert render.format_when(datetime(2026, 11, day, 10, 30, tzinfo=TZ)) == text

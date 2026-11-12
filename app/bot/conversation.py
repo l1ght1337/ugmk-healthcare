@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import render, texts
@@ -81,8 +81,9 @@ class Reply:
 @dataclass(frozen=True)
 class AdminPost:
     text: str
-    handoff_id: int
+    handoff_id: int | None = None  # set: an administrator's reply goes back to the patient
     reply_to: int | None = None  # admin chat message to reply to (a thread)
+    buttons: tuple[tuple[Button, ...], ...] = ()
 
 
 @dataclass
@@ -132,6 +133,7 @@ class Session(BaseModel):
     booking_id: int | None = None
     visit_booking: int | None = None
     reply_handoff: int | None = None
+    consent_child: bool = False  # the consent shown includes «законный представитель»
 
 
 @dataclass
@@ -141,6 +143,7 @@ class Ctx:
     s: Session
     turn: Turn
     now: datetime  # UTC
+    deleted: bool = False  # /forget removed the user row
 
     def say(self, text: str, buttons: list[list[Button]] | None = None, **kw: object) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
@@ -209,6 +212,10 @@ class Conversation:
     async def demo_next(self, user: UserRef) -> Turn:
         return await self._run(user, self._demo_next)
 
+    async def forget(self, user: UserRef) -> Turn:
+        """/forget: withdraw consent and delete the user's data, after a confirmation."""
+        return await self._run(user, self._forget_ask)
+
     async def admin_reply(self, message_id: int, text: str) -> Turn | None:
         """An administrator replied to a bot message in the admin chat."""
         async with self.db() as db:
@@ -265,7 +272,8 @@ class Conversation:
             row.display_name = user.display_name
             ctx = Ctx(db, row, Session.model_validate(row.session or {}), Turn(), self.clock())
             await handler(ctx)
-            row.session = ctx.s.model_dump(mode="json")
+            if not ctx.deleted:
+                row.session = ctx.s.model_dump(mode="json")
             await db.commit()
             return ctx.turn
 
@@ -478,6 +486,7 @@ class Conversation:
             "k": self._on_control,
             "rate": self._on_rate,
             "ar": self._on_admin_reply_button,
+            "fg": self._on_forget,
         }.get(head)
         if handler is None:
             c.say(texts.STALE)
@@ -572,6 +581,8 @@ class Conversation:
             c.say(texts.CONSENT_DECLINED, _menu())
             return
         c.user.consent_at = c.now
+        if c.s.consent_child:
+            c.user.guardian_at = c.now
         resume, c.s.resume = c.s.resume, None
         if resume == "handoff":
             await self._handoff(
@@ -752,12 +763,23 @@ class Conversation:
         day = f"{texts.WEEKDAYS_SHORT[start.weekday()]} {start:%d.%m}"
         return f"{day}, {start:%H:%M} · {doctor}"
 
+    def _needs_consent(self, c: Ctx) -> bool:
+        """Consent once per user; for a child also «я законный представитель ребёнка»."""
+        child = c.s.dialog.audience == "child"
+        return c.user.consent_at is None or (child and c.user.guardian_at is None)
+
     def _consent_prompt(self, c: Ctx, purpose: str) -> None:
         c.s.step = "consent"
-        text = texts.CONSENT_HANDOFF if purpose == "handoff" else texts.CONSENT
+        c.s.consent_child = c.s.dialog.audience == "child"
+        items = [texts.CONSENT_ITEM_PD]
+        if c.s.consent_child:
+            items.append(texts.CONSENT_ITEM_GUARDIAN)
+        lead = texts.CONSENT_HANDOFF if purpose == "handoff" else texts.CONSENT
+        text = f"{lead}\n\n{texts.CONSENT_CONFIRM}\n" + ";\n".join(items) + "."
         url = self.clinic.contacts.privacy_policy_url
         if url:
             text += "\n" + texts.CONSENT_POLICY.format(url=url)
+        text += "\n\n" + texts.CONSENT_WITHDRAW
         c.say(text, [[Button(texts.CONSENT_YES, "c:yes")], [Button(texts.CONSENT_NO, "c:no")]])
 
     def _ask_name(self, c: Ctx) -> None:
@@ -766,7 +788,7 @@ class Conversation:
 
     async def _identify(self, c: Ctx) -> None:
         """Script step 4: consent → patient (name, birth date) → phone → booking."""
-        if c.user.consent_at is None:
+        if self._needs_consent(c):
             c.s.resume = "identify"
             self._consent_prompt(c, "identify")
             return
@@ -976,17 +998,14 @@ class Conversation:
         common = self.kb.common
         if kind == DAY_BEFORE:
             text = texts.REMINDER_DAY.format(
-                date=render.format_date(start.date()),
-                time=f"{start:%H:%M}",
-                patient=patient.full_name,
-                doctor=b.doctor,
+                when=render.format_when(start), patient=patient.full_name, doctor=b.doctor
             )
             docs = render.documents(self.kb, patient.audience)  # type: ignore[arg-type]
             return Reply(f"{text}\n\n{docs}", actions, chat_id=chat_id)
         if kind == TWO_HOURS:
             center = self.clinic.contacts.trauma_center
             text = texts.REMINDER_TWO_HOURS.format(
-                time=f"{start:%H:%M}", address=center.address, entrance=center.entrance
+                when=render.format_when(start), address=center.address, entrance=center.entrance
             )
             day = center.underground_parking_hours.contains(start.time())
             parking = common.parking_day.text if day else common.parking_night.text
@@ -1131,7 +1150,7 @@ class Conversation:
             c.s.step = "idle"
             c.say(texts.ADMIN_UNAVAILABLE, _menu())
             return
-        if c.user.consent_at is None:
+        if self._needs_consent(c):
             c.s.resume = "handoff"
             self._consent_prompt(c, "handoff")
             return
@@ -1203,3 +1222,43 @@ class Conversation:
             AdminPost(f"Пациент (обращение № {handoff_id}): {text}", handoff_id, reply_to=last)
         )
         c.say(texts.ADMIN_REPLY_SENT, _menu())
+
+    # --- /forget: withdraw consent ---------------------------------------------------------
+
+    async def _forget_ask(self, c: Ctx) -> None:
+        self._reset(c)
+        c.say(
+            texts.FORGET_ASK,
+            [[Button(texts.FORGET_YES, "fg:yes")], [Button(texts.FORGET_NO, "fg:no")]],
+        )
+
+    async def _on_forget(self, c: Ctx, value: str) -> None:
+        if value != "yes":
+            c.say(texts.FORGET_KEPT, _menu())
+            return
+        user_id = c.user.id
+        bookings = (await c.db.scalars(select(Booking).where(Booking.user_id == user_id))).all()
+        for b in bookings:
+            if b.status == "active":
+                await self.schedule.release(b.slot_id)
+        handoffs = (await c.db.scalars(select(Handoff).where(Handoff.user_id == user_id))).all()
+        handoff_ids = [h.id for h in handoffs]
+        for model, column, values in (
+            (Reminder, Reminder.user_id, [user_id]),
+            (AdminMessage, AdminMessage.handoff_id, handoff_ids),
+            (Handoff, Handoff.user_id, [user_id]),
+        ):
+            if values:
+                await c.db.execute(delete(model).where(column.in_(values)))
+        for b in sorted(bookings, key=lambda b: b.cycle, reverse=True):  # control visits first
+            await c.db.delete(b)
+        await c.db.flush()
+        await c.db.execute(delete(Patient).where(Patient.user_id == user_id))
+        await c.db.delete(c.user)
+        c.deleted = True
+        if self.settings.admin_chat_id and handoff_ids:
+            numbers = ", ".join(f"№ {n}" for n in handoff_ids)
+            c.turn.admin.append(
+                AdminPost(texts.FORGET_ADMIN.format(user=user_id, handoffs=numbers))
+            )
+        c.say(texts.FORGOTTEN, _menu())

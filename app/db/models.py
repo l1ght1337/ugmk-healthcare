@@ -49,6 +49,7 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String(128))
     phone: Mapped[str | None] = mapped_column(String(32))
     consent_at: Mapped[datetime | None]
+    guardian_at: Mapped[datetime | None]  # «я законный представитель ребёнка»
     session: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -134,3 +135,17 @@ class AdminMessage(Base):
 
     message_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     handoff_id: Mapped[int] = mapped_column(ForeignKey("handoffs.id"))
+
+
+class AccessRequest(Base):
+    """A user outside ALLOWED_USER_IDS; an administrator may let them in with «Разрешить»."""
+
+    __tablename__ = "access_requests"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    username: Mapped[str | None] = mapped_column(String(64))
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    requested_at: Mapped[datetime] = mapped_column(default=utcnow)
+    approved_at: Mapped[datetime | None]
+    approved_by: Mapped[str | None] = mapped_column(String(128))

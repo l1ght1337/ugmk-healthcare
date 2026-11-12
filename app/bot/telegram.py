@@ -26,12 +26,20 @@ from aiogram.types import (
 )
 
 from app.bot import texts
-from app.bot.conversation import Conversation, Reply, Turn, UserRef
+from app.bot.access import ALLOW_PREFIX, APPROVED_NOTE, Access
+from app.bot.conversation import Button, Conversation, Reply, Turn, UserRef
 from app.config import Settings
 
 log = logging.getLogger(__name__)
 
 Markup = InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | None
+
+
+def inline(buttons: tuple[tuple[Button, ...], ...]) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=b.label, callback_data=b.data) for b in row] for row in buttons
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def markup(reply: Reply) -> Markup:
@@ -41,11 +49,7 @@ def markup(reply: Reply) -> Markup:
             keyboard=[[button]], resize_keyboard=True, one_time_keyboard=True
         )
     if reply.buttons:
-        rows = [
-            [InlineKeyboardButton(text=b.label, callback_data=b.data) for b in row]
-            for row in reply.buttons
-        ]
-        return InlineKeyboardMarkup(inline_keyboard=rows)
+        return inline(reply.buttons)
     if reply.remove_keyboard:
         return ReplyKeyboardRemove()
     return None
@@ -79,16 +83,21 @@ class Delivery:
                 log.error("ADMIN_CHAT_ID is not set; handoff %s not delivered", post.handoff_id)
                 continue
             sent = await self.bot.send_message(
-                self.admin_chat_id, post.text, reply_to_message_id=post.reply_to
+                self.admin_chat_id,
+                post.text,
+                reply_to_message_id=post.reply_to,
+                reply_markup=inline(post.buttons) if post.buttons else None,
             )
-            await self.conversation.register_admin_message(sent.message_id, post.handoff_id)
+            if post.handoff_id is not None:
+                await self.conversation.register_admin_message(sent.message_id, post.handoff_id)
 
 
 class AllowedUsers(BaseMiddleware):
-    """While the test is closed, only ALLOWED_USER_IDS may talk to the bot."""
+    """Closed test: ALLOWED_USER_IDS and users approved with «Разрешить» in the admin chat."""
 
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
+    def __init__(self, access: Access, delivery: Callable[..., Awaitable[None]]) -> None:
+        self.access = access
+        self.delivery = delivery
 
     async def __call__(
         self,
@@ -97,12 +106,12 @@ class AllowedUsers(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         user = getattr(event, "from_user", None)
-        if user is None or self.settings.user_allowed(user.id):
+        if user is None or await self.access.allowed(user.id):
             return await handler(event, data)
         if isinstance(event, CallbackQuery):
             await event.answer(texts.NOT_ALLOWED, show_alert=True)
         elif isinstance(event, Message):
-            await event.answer(texts.NOT_ALLOWED)
+            await self.delivery(await self.access.refuse(user_ref(event)), event.chat.id)
         return None
 
 
@@ -117,14 +126,14 @@ def _pressed_label(callback: CallbackQuery) -> str | None:
 
 
 def build_dispatcher(
-    settings: Settings, conversation: Conversation, delivery: Delivery
+    settings: Settings, conversation: Conversation, delivery: Delivery, access: Access
 ) -> Dispatcher:
     dp = Dispatcher()
     admin = Router(name="admin")
     patients = Router(name="patients")
     patients.message.filter(F.chat.type == "private")
-    patients.message.outer_middleware(AllowedUsers(settings))
-    patients.callback_query.outer_middleware(AllowedUsers(settings))
+    patients.message.outer_middleware(AllowedUsers(access, delivery))
+    patients.callback_query.outer_middleware(AllowedUsers(access, delivery))
 
     if settings.admin_chat_id is not None:
 
@@ -144,6 +153,22 @@ def build_dispatcher(
             await delivery(turn)
             await message.reply("Ответ отправлен пациенту.")
 
+        @admin.callback_query(
+            F.message.chat.id == settings.admin_chat_id, F.data.startswith(ALLOW_PREFIX)
+        )
+        async def allow(callback: CallbackQuery) -> None:
+            user_id = (callback.data or "").removeprefix(ALLOW_PREFIX)
+            by = callback.from_user.full_name or str(callback.from_user.id)
+            turn = await access.approve(int(user_id), by) if user_id.isdigit() else None
+            await callback.answer("Готово" if turn else "Запрос не найден")
+            if turn is None:
+                return
+            message = callback.message
+            if isinstance(message, Message):
+                note = APPROVED_NOTE.format(by=by)
+                await message.edit_text(f"{message.text or ''}\n\n{note}", reply_markup=None)
+            await delivery(turn)
+
     @patients.message(CommandStart())
     async def start(message: Message) -> None:
         await delivery(await conversation.start(user_ref(message)), message.chat.id)
@@ -155,6 +180,10 @@ def build_dispatcher(
     @patients.message(Command("admin"))
     async def call_admin(message: Message) -> None:
         await delivery(await conversation.call_admin(user_ref(message)), message.chat.id)
+
+    @patients.message(Command("forget"))
+    async def forget(message: Message) -> None:
+        await delivery(await conversation.forget(user_ref(message)), message.chat.id)
 
     @patients.message(Command("demo_next"))
     async def demo_next(message: Message) -> None:

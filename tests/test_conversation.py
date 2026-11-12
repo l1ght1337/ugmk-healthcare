@@ -121,7 +121,8 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
 
     # notifications: 14:30 today → no «за 24 часа»; «за 2 часа», then «Как прошёл приём?»
     await chat.demo_next()
-    assert chat.text.startswith("Через 2 часа, в 14:30, — приём в травмпункте")
+    assert chat.text.startswith("Скоро приём в травмпункте: в четверг, 12 ноября, в 14:30.")
+    assert "завтра" not in chat.text and "Через 2 часа" not in chat.text
     assert "подземный паркинг" in chat.text
     assert chat.labels() == [texts.CONFIRM, texts.MOVE, texts.CANCEL]
     await chat.press(texts.CONFIRM)
@@ -173,7 +174,7 @@ async def test_day_before_reminder_lists_documents(make_chat, schedule: MockSche
     await chat.data(f"s:{tomorrow.id}")
     assert chat.text.startswith("Готово, запись перенесена на 13 ноября (пятница)")
     await chat.demo_next()
-    assert chat.text.startswith("Напоминаем: завтра, 13 ноября (пятница)")
+    assert chat.text.startswith("Напоминаем: в пятницу, 13 ноября, в ")
     assert "Пациент: Петров Иван Сергеевич" in chat.text
     assert "паспорт" in chat.text and "СНИЛС" in chat.text
 
@@ -224,6 +225,7 @@ async def test_case_2_handoff_asks_consent_and_contact_then_reply_goes_back(
     await chat.press("Бытовая травма")
     await chat.press("Более 7 дней назад")
     assert texts.CONSENT_HANDOFF in chat.text  # consent before «Поделиться контактом»
+    assert texts.CONSENT_ITEM_GUARDIAN in chat.text and texts.CONSENT_WITHDRAW in chat.text
     assert chat.admin == []
     await chat.press(texts.CONSENT_YES)
     assert chat.replies[-1].ask_contact
@@ -431,3 +433,74 @@ async def test_admin_from_slot_choice_keeps_the_scenario_context(make_chat) -> N
         "Сценарий: 4.6 «Ожоги»" in post
         and "• Как получили ожог? — Кипяток, пар, огонь, солнце" in post
     )
+
+
+async def test_child_booking_asks_the_guardian_item_once(make_chat, db: Database) -> None:
+    chat = make_chat()
+    await book_dislocation(chat)  # adult: consent without the guardian item
+    await chat.press(texts.PAYMENT_SELF)
+    await chat.press(texts.MENU_BOOK)
+    await chat.press(texts.TOPIC_LIST)
+    await chat.press("Ожог")
+    await chat.press("Для ребёнка (до 18 лет)")
+    await chat.say("5 лет")
+    await chat.press("Другая часть тела")
+    await chat.press("Кипяток, пар, огонь, солнце")
+    await chat.press("Менее суток назад")
+    await chat.press("Нет, не обращались")
+    await chat.press(next(lbl for lbl in chat.labels() if lbl[:2] in texts.WEEKDAYS_SHORT))
+    assert texts.CONSENT_ITEM_GUARDIAN in chat.text  # adult consent is not enough for a child
+    await chat.press(texts.CONSENT_YES)
+    await chat.say("Петрова Анна Ивановна")
+    await chat.say("01.02.2021")
+    assert "Анна Ивановна записана" in chat.text  # phone already known
+    await chat.press(texts.PAYMENT_SELF)
+    await chat.press(texts.MENU_BOOK)
+    await chat.press(texts.TOPIC_LIST)
+    await chat.press("Ожог")
+    await chat.press("Для ребёнка (до 18 лет)")
+    await chat.say("5 лет")
+    await chat.press("Другая часть тела")
+    await chat.press("Кипяток, пар, огонь, солнце")
+    await chat.press("Менее суток назад")
+    await chat.press("Нет, не обращались")
+    await chat.press(next(lbl for lbl in chat.labels() if lbl[:2] in texts.WEEKDAYS_SHORT))
+    assert chat.labels() == ["Петрова Анна, 01.02.2021", texts.PATIENT_NEW]  # no consent again
+
+
+async def test_consent_text_mentions_withdrawal(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_ADMIN)
+    assert texts.CONSENT_WITHDRAW in chat.text and "/forget" in chat.text
+    assert texts.CONSENT_ITEM_GUARDIAN not in chat.text
+
+
+async def test_forget_deletes_data_after_confirmation(
+    make_chat, db: Database, schedule: MockSchedule
+) -> None:
+    from app.db.models import Patient, User
+
+    chat = make_chat()
+    await book_dislocation(chat)
+    await chat.press(texts.PAYMENT_SELF)
+    await chat.press(texts.MENU_ADMIN)  # one handoff to the admin chat
+    slot = (await bookings(db))[0].slot_id
+
+    chat._take(await chat.conversation.forget(chat.user))
+    assert chat.text == texts.FORGET_ASK
+    await chat.press(texts.FORGET_NO)
+    assert texts.FORGET_KEPT in chat.text and len(await bookings(db)) == 1
+
+    chat._take(await chat.conversation.forget(chat.user))
+    await chat.press(texts.FORGET_YES)
+    assert texts.FORGOTTEN in chat.text
+    assert "отозвал согласие" in chat.admin[-1].text and "№ 1" in chat.admin[-1].text
+    async with db() as s:
+        for model in (User, Patient, Booking, Reminder, Handoff):
+            assert (await s.scalars(select(model))).all() == [], model
+    assert slot in {s.id for s in await schedule.free_slots(NOW, NOW + timedelta(days=1))}
+
+    await chat.start()  # a new start: consent is asked again
+    await chat.press(texts.MENU_ADMIN)
+    assert texts.CONSENT_HANDOFF in chat.text

@@ -25,6 +25,12 @@ def format_date(day: date) -> str:
     return f"{day.day} {texts.MONTHS_GENITIVE[day.month - 1]} ({texts.WEEKDAYS[day.weekday()]})"
 
 
+def format_when(moment: datetime) -> str:
+    """«в пятницу, 13 ноября, в 14:30» (clinic time expected)."""
+    day = f"{moment.day} {texts.MONTHS_GENITIVE[moment.month - 1]}"
+    return f"{texts.WEEKDAYS_ON[moment.weekday()]}, {day}, в {moment:%H:%M}"
+
+
 def format_time(moment: time | datetime) -> str:
     return f"{moment:%H:%M}"
 

@@ -9,6 +9,7 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
 
+from app.bot.access import Access
 from app.bot.conversation import Conversation
 from app.bot.telegram import Delivery, build_dispatcher
 from app.config import get_clinic_data, get_settings
@@ -41,7 +42,7 @@ async def run() -> None:
         default=DefaultBotProperties(link_preview_is_disabled=True),
     )
     delivery = Delivery(bot, conversation, settings.admin_chat_id)
-    dispatcher = build_dispatcher(settings, conversation, delivery)
+    dispatcher = build_dispatcher(settings, conversation, delivery, Access(settings, db))
     scheduler = start_scheduler(conversation, delivery)
 
     warm_up = None
@@ -53,6 +54,7 @@ async def run() -> None:
         BotCommand(command="start", description="Начать"),
         BotCommand(command="menu", description="Меню"),
         BotCommand(command="admin", description="Позвать администратора"),
+        BotCommand(command="forget", description="Удалить мои данные и отозвать согласие"),
     ]
     if settings.demo_mode:
         commands.append(BotCommand(command="demo_next", description="Демо: следующее уведомление"))
