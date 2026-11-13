@@ -58,7 +58,10 @@ def render_labels(kb: KnowledgeBase) -> str:
         "| Где | Кнопки |",
         "|---|---|",
         _row("Главное меню", [b.label for row in _menu() for b in row]),
-        _row("После «Записаться в травмпункт»", [texts.TOPIC_LIST]),
+        _row(
+            "После «Записаться в травмпункт»: группы тем сразу, под «С чем обращаетесь?»",
+            [item.caption for item in kb.topics.menus[kb.topics.root].items],
+        ),
         _row("Каждый экран записи (кроме первого вопроса после напоминания)", [texts.BACK]),
         _row("Для кого запись", [texts.AUDIENCE_SELF, texts.AUDIENCE_CHILD]),
         _row(
@@ -109,7 +112,7 @@ def render_labels(kb: KnowledgeBase) -> str:
         _row(
             "Пожелание выполнить нельзя (врач не дежурит, времени нет)",
             [
-                texts.WISH_NEAREST_DOCTOR.format(when="вс, 15.11, 20:00"),
+                texts.WISH_NEAREST_DOCTOR.format(doctor="Ярунин", when="вс, 15.11, 20:00"),
                 texts.WISH_OTHER_DOCTOR.format(day="Завтра, 14.11"),
                 texts.OTHER_DAY,
                 texts.WISH_CLEAR,
@@ -139,7 +142,7 @@ def render_labels(kb: KnowledgeBase) -> str:
         _row(
             "Кого записываем", ["Петров Иван, 12.03.1985 (сохранённый пациент)", texts.PATIENT_NEW]
         ),
-        _row("Телефон (клавиатура Telegram)", [texts.CONTACT_BUTTON]),
+        _row("Телефон (клавиатура Telegram)", [texts.CONTACT_BUTTON, texts.BACK]),
         _row("После карточки записи: оплата", [texts.PAYMENT_SELF, texts.PAYMENT_INSURANCE]),
         _row(
             "Маршрут с вариантом «передать администратору»", [texts.HANDOFF_YES, texts.HANDOFF_NO]

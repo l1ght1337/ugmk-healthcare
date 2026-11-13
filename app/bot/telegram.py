@@ -87,8 +87,9 @@ def inline(buttons: tuple[tuple[Button, ...], ...], *, styles: bool = True) -> I
 def markup(reply: Reply, *, styles: bool = True) -> Markup:
     if reply.ask_contact:
         button = KeyboardButton(text=texts.CONTACT_BUTTON, request_contact=True)
+        back = KeyboardButton(text=texts.BACK)  # comes as the text «Назад»: one step back
         return ReplyKeyboardMarkup(
-            keyboard=[[button]], resize_keyboard=True, one_time_keyboard=True
+            keyboard=[[button], [back]], resize_keyboard=True, one_time_keyboard=True
         )
     if reply.buttons:
         return inline(reply.buttons, styles=styles)

@@ -96,10 +96,13 @@ def short_name(full: str) -> str:
     return " ".join([surname, *(f"{n[0]}." for n in names)])
 
 
-def dative(full: str) -> str:
-    """«к Ярунину А. А.»; a surname the rules do not cover — «к врачу Шевченко Т. Г.»."""
+def dative(full: str, *, initials: bool = True) -> str:
+    """«к Ярунину А. А.»; a surname the rules do not cover — «к врачу Шевченко Т. Г.».
+
+    ``initials=False`` — «к Ярунину», as a patient would write it.
+    """
     surname, *names = full.split()
-    initials = " ".join(f"{n[0]}." for n in names)
+    letters = " ".join(f"{n[0]}." for n in names) if initials else ""
     female = bool(names) and _norm(names[-1]).endswith(("вна", "чна", "кызы"))
     low = _norm(surname)
     form = None
@@ -112,8 +115,8 @@ def dative(full: str) -> str:
     elif low.endswith(("ская", "цкая")) and female:
         form = surname[:-2] + "ой"
     if form is None:
-        return f"к врачу {surname} {initials}".strip()
-    return f"к {form} {initials}".strip()
+        return f"к врачу {surname} {letters}".strip()
+    return f"к {form} {letters}".strip()
 
 
 def _surname_forms(surname: str) -> list[str]:

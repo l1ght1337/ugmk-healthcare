@@ -471,7 +471,7 @@ class Menu(_Model):
 class TopicTree(_Model):
     """kb/scenarios/_menu.json: topics about what happened, not diagnoses (part C)."""
 
-    root: str = Field(description="«Выбрать из списка» before any complaint: five groups")
+    root: str = Field(description="the groups shown under «С чем обращаетесь?»")
     areas: dict[Area, str] = Field(description="Menu shown once the body area is known")
     menus: dict[str, Menu]
     area_facts: dict[Area, dict[str, dict[str, FactValue]]] = Field(

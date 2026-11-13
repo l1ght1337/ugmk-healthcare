@@ -41,7 +41,7 @@ def test_audience_is_asked_with_buttons() -> None:
 
 def test_fracture_buttons_cover_the_script_branches(kb: KnowledgeBase) -> None:
     labels = [c.label for c in kb.scenario("fracture").question("how").buttons()]
-    assert labels == ["Бытовая травма", "Открытый перелом или со смещением",
+    assert labels == ["Бытовая травма", "Открытый или со смещением",
                       "Нападение, драка, сбила машина"]  # fmt: skip
 
 

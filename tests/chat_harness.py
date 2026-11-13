@@ -156,8 +156,7 @@ TOPICS = {
 
 
 async def to_topic(chat: Chat, topic: str) -> None:
-    """«Записаться» → «Выбрать из списка» → the five groups → … → the topic."""
+    """«Записаться» → a group → … → the topic."""
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
     for label in TOPICS[topic]:
         await chat.press(label)

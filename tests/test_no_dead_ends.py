@@ -26,7 +26,6 @@ async def test_child_named_in_the_request_is_not_asked_again(make_chat) -> None:
     await chat.start()
     await chat.say("запишите ребёнка")
     assert texts.FOR_WHOM["child"] in chat.text
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     assert texts.ASK_AUDIENCE not in chat.text  # «Для кого запись?» is skipped
@@ -45,7 +44,6 @@ async def test_adult_named_in_the_request_goes_straight_to_the_questions(make_ch
     await chat.start()
     await chat.say("можно записать маму?")
     assert texts.FOR_WHOM["adult"] in chat.text
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     assert "Как получена травма" in chat.text and texts.ASK_AUDIENCE not in chat.text
@@ -56,7 +54,6 @@ async def test_infant_named_in_the_request_is_still_routed(make_chat, kb: Knowle
     chat = make_chat()
     await chat.start()
     await chat.say("запишите сына")
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     await chat.say("4 месяца")
@@ -124,7 +121,6 @@ async def test_typed_label_works_without_deepseek(make_chat) -> None:
     chat = make_chat()  # assistant=None
     await chat.start()
     await chat.say("записаться")
-    await chat.say("выбрать из списка")
     await chat.say("рука или нога")
     await chat.say("похоже на вывих")
     await chat.say("для себя")

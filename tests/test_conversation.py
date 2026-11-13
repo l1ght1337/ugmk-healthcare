@@ -17,7 +17,7 @@ from tests.fake_deepseek import FakeDeepSeek
 
 
 async def to_dislocation(chat: Chat) -> None:
-    """Menu → «Выбрать из списка» → «Рука или нога» → «Похоже на вывих»."""
+    """Menu → «Записаться» → «Рука или нога» → «Похоже на вывих»."""
     await to_topic(chat, "Вывих")
 
 
@@ -45,7 +45,7 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     chat = make_chat()
     await chat.start()
     assert chat.text.startswith("Добрый день! Травмпункт «УГМК-Здоровье», я виртуальный помощник")
-    assert texts.DEMO_GREETING in chat.text
+    assert texts.BOT_DEMO_NOTE in chat.text
     assert chat.labels()[-4:] == [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN]
 
     await chat.press(texts.MENU_BOOK)
@@ -62,7 +62,8 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     await chat.press("Нет, не обращались")
     info, days = chat.replies
     assert info.text == (
-        "Ваши ответы: вывих; для себя; бытовая травма; в течение 7 дней; нет, не обращались.\n\n"
+        "Ваши ответы: вывих; для себя; бытовая травма; в течение 7 дней; к врачу не "
+        "обращались.\n\n"
         "Можно записаться к травматологу-ортопеду: врач попробует вправить вывих."
     )
     labels = [b.label for row in info.buttons for b in row]
@@ -72,8 +73,8 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     assert chat.days()[0].label == "Сегодня, 12.11"
     assert days.buttons[0][0].label.startswith("Ближайшее: сегодня, 1")  # first, one tap
     await chat.pick_day("Сегодня")
-    assert "12 ноября (четверг)" in chat.text and "смены:" in chat.text
-    assert texts.PERIOD_PICK in chat.text
+    assert "12 ноября (четверг)" in chat.text and texts.PERIOD_PICK in chat.text
+    assert "смены" not in chat.text  # the doctor is named above the times only
     assert [b.label for b in chat.periods()] == ["День 12–18", "Вечер 18–23", "Ночь 23–8"]
     await chat.pick_period("13:00")
     times = [b.label for b in chat.times()]

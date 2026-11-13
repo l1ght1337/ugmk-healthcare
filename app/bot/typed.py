@@ -15,7 +15,6 @@ from app.flow.commands import normalize, yes_no
 SYNONYMS: dict[str, frozenset[str]] = {
     "c:yes": frozenset({"согласен", "согласна", "даю согласие", "соглашаюсь", "подтверждаю"}),
     "c:no": frozenset({"не согласен", "не согласна", "отказываюсь"}),
-    "t:list": frozenset({"список", "из списка", "выбрать", "покажи список", "темы"}),
 }
 # «да» / «нет» for buttons whose labels do not start with these words. Consent is not
 # here: it is given by «Согласен», typed or pressed, not by a bare «да».

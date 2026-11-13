@@ -129,11 +129,12 @@ async def test_phrase_on_step(
         assert now == was and after["dialog"] == before["dialog"]
         assert texts.PICK_BUTTON_SHORT not in text and "Уточните" not in text
     elif must == m.MY:
-        assert texts.MY_TITLE in text or texts.MY_EMPTY in text
-        if step in (m.BOOKED, m.REMINDED, m.PAYMENT):
-            assert texts.MY_TITLE in text and {texts.MOVE, texts.CANCEL} <= set(labels)
+        assert texts.MY_ONE in text or texts.MY_EMPTY in text
+        if step in (m.BOOKED, m.REMINDED, m.PAYMENT):  # one booking: one message
+            assert texts.MY_ONE in text and {texts.MOVE, texts.CANCEL} <= set(labels)
+            assert len(chat.replies) == 1
     elif must == m.MY_MOVE:
-        assert texts.MY_TITLE in text and "При переносе сразу покажу" in text
+        assert texts.MY_ONE in text and "При переносе сразу покажу" in text
     elif must == m.CONFIRM:
         assert "Спасибо, ждём Вас" in text and "в 1" in text
         async with chat.conversation.db() as s:

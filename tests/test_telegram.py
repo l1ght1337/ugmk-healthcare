@@ -25,7 +25,7 @@ def test_inline_buttons() -> None:
 
 
 def test_contact_keyboard_and_removal() -> None:
-    kb = markup(Reply("телефон", ask_contact=True))
+    kb = markup(Reply("телефон", ask_contact=True))  # «Назад» is the second row
     assert isinstance(kb, ReplyKeyboardMarkup)
     button = kb.keyboard[0][0]
     assert button.text == texts.CONTACT_BUTTON and button.request_contact

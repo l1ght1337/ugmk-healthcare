@@ -27,7 +27,7 @@
       ],
       "choices": [
         {"label": "Бытовая травма", "facts": {"assault": false}},
-        {"label": "Открытый перелом или со смещением", "facts": {"assault": false, "open_or_displaced": true}},
+        {"label": "Открытый или со смещением", "facts": {"assault": false, "open_or_displaced": true}},
         {"label": "Нападение, драка, сбила машина", "facts": {"assault": true}}
       ],
       "branches": [

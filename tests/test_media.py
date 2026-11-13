@@ -156,7 +156,6 @@ async def test_long_question_in_short_with_more(make_chat, kb: KnowledgeBase) ->
     chat = make_chat()
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рана, ожог, укус")
     await chat.press("Порез, рана")
     for label in ("Для себя", "Руки, ноги, тело", "Да, двигается", "Менее суток назад"):

@@ -120,7 +120,6 @@ async def test_topic_buttons_are_about_what_happened(make_chat) -> None:
     chat = make_chat()
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)  # no complaint yet: the groups
     assert chat.labels() == [*GROUPS, texts.BACK]
     await chat.press("Рука или нога")  # from the groups: every topic one press away
     assert chat.labels() == [
@@ -214,7 +213,6 @@ async def test_buttons_replace_the_message_with_the_next_step(make_chat) -> None
 
 
 async def to_topic_after_book(chat: Chat) -> None:
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
 
@@ -387,7 +385,6 @@ async def test_no_two_column_row_has_a_long_label(make_chat, kb: KnowledgeBase) 
     await chat.start()
     await chat.press(texts.MENU_BOOK)
     turns = []
-    await chat.press(texts.TOPIC_LIST)
     turns.append(chat.turn)
     for group in GROUPS[:5]:
         await chat.press(group)
@@ -718,7 +715,6 @@ async def test_two_presses_really_start_each_scenario(make_chat, kb: KnowledgeBa
                 continue
             await chat.start()
             await chat.press(texts.MENU_BOOK)
-            await chat.press(texts.TOPIC_LIST)
             await chat.press(group.label)
             if item is not group:
                 await chat.press(item.label)

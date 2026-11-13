@@ -75,7 +75,7 @@ from app.flow.identity import (
 from app.flow.loader import KnowledgeBase
 from app.flow.safety import find_phrase
 from app.flow.schema import Booking as BookingSpec
-from app.flow.schema import FactValue, Question, Scenario
+from app.flow.schema import Choice, FactValue, Question, Scenario
 from app.flow.wishes import Parsed, Wish, dative, short_name
 from app.flow.wishes import parse as parse_wish
 from app.flow.words import days as days_word
@@ -97,6 +97,8 @@ CONTROL_DAYS_BEFORE = 3  # «Другой день» for a control visit starts 
 WISH_TTL = timedelta(hours=3)  # a wish named long ago is not carried into a new request
 UNFINISHED_WINDOW = timedelta(minutes=45)  # later than this the reminder is not sent at all
 EXAMPLE_ANKLE = ("ligament_rupture", "dislocation", "fracture")  # «Подвернул ногу»
+EXAMPLE_DOCTOR = 1  # the greeting's example names the second doctor of config/schedule.yaml
+FEW_TIMES = 8  # a day with this many free times or fewer shows them at once, no part of the day
 FREE_TIMES_SHOWN = 8  # «есть время вечером?» — the first times, then «и позже»
 DOCTOR_DAYS_SHOWN = 6  # «когда работает Ярунин?» — the nearest days
 
@@ -309,12 +311,18 @@ class Ctx:
         return self.via_button and not self.turn.replies
 
 
-def _answer_label(question: Question, facts: dict[str, FactValue]) -> str | None:
-    """The button that matches the given answer, for the administrators' summary."""
+def _answer_choice(question: Question, facts: dict[str, FactValue]) -> Choice | None:
+    """The button that matches the given answer."""
     for choice in question.buttons():
         if all(facts.get(k) == v for k, v in choice.facts.items()):
-            return choice.label
+            return choice
     return None
+
+
+def _answer_label(question: Question, facts: dict[str, FactValue]) -> str | None:
+    """The label of that button, for the administrators' summary."""
+    choice = _answer_choice(question, facts)
+    return choice.label if choice else None
 
 
 def _home() -> list[Button]:
@@ -627,10 +635,11 @@ class Conversation:
         text = common.greeting.text.format(
             part_of_day=common.greeting_for(self._local(c.now).time())
         )
-        doctor = dative(self.clinic.schedule.doctors[0])  # an example with a real doctor
+        doctors = self.clinic.schedule.doctors  # the example names a real doctor
+        doctor = dative(doctors[min(EXAMPLE_DOCTOR, len(doctors) - 1)], initials=False)
         text += "\n\n" + texts.GREETING_HINT.format(doctor=doctor)
         if self.settings.is_demo_booking:
-            text += "\n\n" + texts.DEMO_GREETING
+            text += "\n\n" + texts.BOT_DEMO_NOTE
         first = c.user.welcomed_at is None  # the welcome animation — at the first /start only
         if first:
             c.user.welcomed_at = c.now
@@ -764,9 +773,11 @@ class Conversation:
         c.back = True
         await self._render_screen(c)
 
-    def _complaint_screen(self, c: Ctx) -> None:
-        c.s.step = "complaint"
-        self._screen(c, texts.ASK_COMPLAINT, [Button(texts.TOPIC_LIST, "t:list", "primary")])
+    def _complaint_screen(self, c: Ctx, ask: str = texts.ASK_COMPLAINT) -> None:
+        """«С чем обращаетесь?» with the topic groups right under it: one tap less."""
+        c.s.step, c.s.menu = "complaint", None
+        items = topics.visible(self.kb, topics.start_menu(self.kb, c.s.area), c.s.area)
+        self._screen(c, ask, [Button(item.caption, f"t:{item.id}") for item in items])
 
     def _menu_screen(self, c: Ctx, menu_id: str) -> None:
         """Topic buttons about what happened, only those that fit the body area."""
@@ -915,13 +926,11 @@ class Conversation:
                 await self._other_day(c)
                 return True
             if wants_other_time(text):  # the time grid: the other parts of this day
-                found = await self._day_times(c)
-                parts = slots_view.periods_with(found[2], self.settings.tz) if found else []
-                if len(parts) > 1:
+                if c.s.period is None:  # the grid already shows the whole day
+                    await self._other_day(c)
+                else:
                     c.s.period = None
                     await self._show_periods(c)
-                else:
-                    await self._other_day(c)
                 return True
         if step in ("idle", "payment") and yes_no(text) is not None:
             await self._show_menu(c)
@@ -1090,8 +1099,7 @@ class Conversation:
         if menu is not None:
             self._menu_screen(c, menu)
             return
-        c.s.step = "complaint"
-        self._screen(c, ask, [Button(texts.TOPIC_LIST, "t:list", "primary")])
+        self._complaint_screen(c, ask)
 
     async def _crisis(self, c: Ctx, text: str) -> None:
         """Suicide or self-harm: a calm answer with a helpline, a separate note to the admins."""
@@ -1302,7 +1310,7 @@ class Conversation:
             await self._show_menu(c)
 
     async def _on_topic(self, c: Ctx, value: str) -> None:
-        if value == "list":  # «Выбрать из списка»: the area's topics, or the five groups
+        if value == "list":  # a button of an older message: the area's topics, or the groups
             c.s.wizard = True
             self._menu_screen(c, topics.start_menu(self.kb, c.s.area))
             return
@@ -1594,9 +1602,14 @@ class Conversation:
         elif d.audience == "adult":
             parts.append(texts.SUMMARY_ADULT if c.s.for_whom == "adult" else texts.SUMMARY_SELF)
         for q in self.kb.scenario(d.scenario_id).questions:
-            label = _answer_label(q, d.facts)
-            if label and all(f.name in d.facts for f in q.fields if f.default is None):
-                parts.append(label)
+            choice = _answer_choice(q, d.facts)
+            if choice and all(f.name in d.facts for f in q.fields if f.default is None):
+                # «Нет, не обращались» means nothing without its question: the bot's own words
+                keys = [(name, str(value)) for name, value in choice.facts.items()]
+                words = next(
+                    (texts.SUMMARY_ANSWERS[k] for k in keys if k in texts.SUMMARY_ANSWERS), None
+                )
+                parts.append(words or choice.label)
         # «Бытовая травма» → «бытовая травма»; «МРТ подтвердило» stays as it is
         answers = "; ".join(p if p[1:2].isupper() else p[:1].lower() + p[1:] for p in parts)
         lines = [texts.SUMMARY.format(answers=answers)]
@@ -1762,8 +1775,11 @@ class Conversation:
         )
         if nearest:
             when = slots_view.nearest_when(nearest[0], today, tz)
-            label = texts.WISH_NEAREST_DOCTOR if short else texts.NEAREST
-            rows.append([Button(label.format(when=when), f"s:{nearest[0].id}", "primary")])
+            label = texts.NEAREST.format(when=when)
+            if wish.doctor:  # «Ярунин: сегодня, 13:00»
+                surname = wish.doctor.split()[0]
+                label = texts.WISH_NEAREST_DOCTOR.format(doctor=surname, when=when)
+            rows.append([Button(label, f"s:{nearest[0].id}", "primary")])
         if short and slots_view.on_day(allowed, wish.day, tz):
             label = texts.WISH_OTHER_DOCTOR.format(day=render.day_label(wish.day, today))
             rows.append([Button(label, "ws:doctor")])
@@ -1826,12 +1842,16 @@ class Conversation:
         shown = slots_view.times_of_day(slots, c.s.day, spec.slot_policy, windows, self.settings.tz)
         return spec, slots, shown
 
-    def _day_header(self, c: Ctx, shown: list[Slot], slots: list[Slot]) -> list[str]:
+    def _day_header(
+        self, c: Ctx, shown: list[Slot], slots: list[Slot], *, doctors: bool = True
+    ) -> list[str]:
+        """The day and, above the times only, the doctor on duty at the times shown."""
         tz = self.settings.tz
         assert c.s.day is not None
-        day_slots = [s for s in slots if slots_view.local(s, tz).date() == c.s.day]
-        doctors = slots_view.doctors_text(shown, day_slots, self.clinic.schedule, tz)
-        lines = [render.format_date(c.s.day).capitalize(), doctors]
+        lines = [render.format_date(c.s.day).capitalize()]
+        if doctors:
+            day_slots = [s for s in slots if slots_view.local(s, tz).date() == c.s.day]
+            lines.append(slots_view.doctors_text(shown, day_slots, self.clinic.schedule, tz))
         if c.s.anchor is not None:
             lines.insert(0, texts.CONTROL_NEAR.format(date=render.format_date(c.s.anchor)))
         return lines
@@ -1849,12 +1869,13 @@ class Conversation:
             await self._show_days(c)
             return
         periods = slots_view.periods_with(shown, self.settings.tz)
-        if len(periods) == 1:  # one part of the day: straight to its times
-            c.s.period = periods[0].id
+        if len(periods) == 1 or len(shown) <= FEW_TIMES:
+            # one part of the day, or a few times in the whole day: straight to the times
+            c.s.period = periods[0].id if len(periods) == 1 else None
             await self._show_times(c)
             return
         c.s.step, c.s.period = "periods", None
-        lines = [*self._day_header(c, shown, slots), "", texts.PERIOD_PICK]
+        lines = [*self._day_header(c, shown, slots, doctors=False), "", texts.PERIOD_PICK]
         buttons = [Button(p.label, f"pr:{p.id}") for p in periods]
         rows = self._time_rows(c)
         # «Ближайшее» belongs to the first screen of the choice: the day picker, or here for a
@@ -2110,22 +2131,24 @@ class Conversation:
         if not bookings:
             c.say(texts.MY_EMPTY, _menu())
             return
-        title = texts.MY_TITLE
+        title = texts.MY_ONE if len(bookings) == 1 else texts.MY_TITLE
         if wish is not None and not wish.empty:
             c.s.wish = wish
             words = render.wish_words(wish, self._local(c.now).date())
             title += "\n" + texts.WISH_MOVE.format(wish=words)
-        c.say(title)
+        if len(bookings) > 1:  # one booking is one message: the title goes into it
+            c.say(title)
         for b in bookings:
             patient = await c.db.get(Patient, b.patient_id)
             start = self._local(b.start_at)
+            item = texts.MY_ITEM.format(
+                date=render.format_date(start.date()),
+                time=f"{start:%H:%M}",
+                patient=patient.full_name if patient else "—",
+                doctor=b.doctor,
+            )
             c.say(
-                texts.MY_ITEM.format(
-                    date=render.format_date(start.date()),
-                    time=f"{start:%H:%M}",
-                    patient=patient.full_name if patient else "—",
-                    doctor=b.doctor,
-                ),
+                item if len(bookings) > 1 else f"{title}\n{item}",
                 [
                     [
                         Button(texts.MOVE, f"b:move:{b.id}"),

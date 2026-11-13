@@ -35,8 +35,8 @@ async def test_greeting_has_examples_in_text_and_as_buttons(make_chat) -> None:
     await chat.start()
     assert chat.text.startswith("Добрый день! Травмпункт «УГМК-Здоровье», я виртуальный помощник")
     assert "Запишу в травмпункт за минуту — 5 коротких шагов" in chat.text
-    assert "«запишите к Кузнецову Н. А. на завтра»" in chat.text  # the doctor is from the data
-    assert texts.DEMO_GREETING in chat.text
+    assert "«запишите к Ярунину на завтра»" in chat.text  # a doctor from the data
+    assert texts.BOT_DEMO_NOTE in chat.text
     assert chat.labels() == [*EXAMPLES, *MENU]
 
 
@@ -87,7 +87,6 @@ async def test_example_parking_answers_from_the_scripts(make_chat, kb: Knowledge
 
 
 async def to_time(chat: Chat) -> None:
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     await chat.press("Для себя")
@@ -103,7 +102,8 @@ async def test_summary_of_answers_with_the_wish(make_chat) -> None:
     await to_time(chat)
     summary, screen = chat.replies
     assert summary.text == (
-        "Ваши ответы: вывих; для себя; бытовая травма; в течение 7 дней; нет, не обращались.\n"
+        "Ваши ответы: вывих; для себя; бытовая травма; в течение 7 дней; к врачу не "
+        "обращались.\n"
         "Пожелание: к Кузнецову Н. А.\n\n"
         "Можно записаться к травматологу-ортопеду: врач попробует вправить вывих."
     )
@@ -121,8 +121,8 @@ async def test_summary_for_a_child_names_the_age(make_chat) -> None:
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")
     assert chat.replies[0].text == (
-        "Ваши ответы: перелом; для ребёнка, 8 лет; бытовая травма; в течение 7 дней; нет, не "
-        "обращались."
+        "Ваши ответы: перелом; для ребёнка, 8 лет; бытовая травма; в течение 7 дней; к врачу "
+        "не обращались."
     )
     assert labels_of(chat.replies[0]) == [texts.SUMMARY_EDIT]
 
@@ -146,7 +146,6 @@ async def test_route_outcome_has_no_summary(make_chat) -> None:
     chat = make_chat()
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Голова, лицо, глаза, уши")
     await chat.press("Ударился головой")
     await chat.press("Для себя")

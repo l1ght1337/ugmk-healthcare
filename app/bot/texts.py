@@ -14,14 +14,7 @@ PICK_BUTTON = "Не получилось разобрать ответ. Выбе
 PICK_TOPIC = "Выберите, пожалуйста, что случилось:"
 
 PRICE_UNKNOWN = "уточнит администратор"
-DEMO_BOOKING = (
-    "Это тестовая запись: бот работает в демо-режиме, и запись не попадает в настоящее "
-    "расписание травмпункта."
-)
-DEMO_GREETING = (
-    "Бот работает в тестовом режиме: записи демонстрационные и не попадают в настоящее "
-    "расписание травмпункта."
-)
+DEMO_BOOKING = "Тестовая запись: в расписание клиники не попадает."
 
 # After a handoff: the reason from the scenario outcome (patient_reason), then the next step.
 HANDOFF = (
@@ -62,7 +55,6 @@ MENU_ICONS = {"book": "📝", "ask": "❓", "my": "📅", "admin": "👤"}  # ma
 MENU_BACK = "В меню"
 
 ASK_COMPLAINT = "С чем обращаетесь? Что произошло? Опишите своими словами или выберите из списка."
-TOPIC_LIST = "Выбрать из списка"
 CHILD_CONFIRM = "Правильно понимаю: запись для ребёнка, {age}?"
 CHILD_YES = "Да, ребёнок {age}"
 CHILD_NO = "Нет"
@@ -143,9 +135,10 @@ REQUEST_UNCLEAR = "Не совсем понял Вашу просьбу. Выб�
 ONLY_TEXT = "Я понимаю только текст и кнопки. Напишите, пожалуйста, словами или выберите кнопкой."
 
 # --- comfort (task 3): the greeting, the summary, «зачем данные», answers, unfinished bookings
+# One example in the text — the one that is not a button below it.
 GREETING_HINT = (
-    "Запишу в травмпункт за минуту — 5 коротких шагов. Напишите своими словами, например: "
-    "«подвернул ногу», «запишите {doctor} на завтра», «где парковаться?» — или нажмите кнопку."
+    "Запишу в травмпункт за минуту — 5 коротких шагов. Напишите своими словами, например "
+    "«запишите {doctor} на завтра», или нажмите кнопку."
 )
 EXAMPLES = (
     ("ankle", "Подвернул ногу"),
@@ -157,6 +150,30 @@ SUMMARY_EDIT = "Изменить ответы"
 SUMMARY_SELF = "для себя"
 SUMMARY_ADULT = "для взрослого"
 SUMMARY_CHILD = "для ребёнка"
+# Answers that mean nothing without their question («да», «нет», «нет, не обращались») — in
+# the bot's own words, by the fact the button sets: (field, value) → words. Not script phrases.
+SUMMARY_ANSWERS = {
+    ("seen_doctor", "no"): "к врачу не обращались",
+    ("seen_doctor", "our_trauma_center"): "уже обращались в ваш травмпункт",
+    ("seen_doctor", "other_doctor"): "обращались к другому врачу",
+    ("danger_signs", "True"): "есть перечисленные признаки",
+    ("danger_signs", "False"): "перечисленных признаков нет",
+    ("first_dressing_here", "True"): "первую перевязку делали в вашем травмпункте",
+    ("first_dressing_here", "False"): "первую перевязку делали не у вас",
+    ("motor_function", "True"): "конечность двигается",
+    ("motor_function", "False"): "конечность не двигается",
+    ("suture_type", "surgical"): "нужен хирургический шов",
+    ("had_injury", "True"): "была травма",
+    ("had_injury", "False"): "травмы не было",
+    ("help_provided", "no"): "помощь ещё не оказана",
+    ("help_provided", "yes"): "помощь уже оказана",
+    ("puncture_before_here", "True"): "пункцию у вас уже делали",
+    ("puncture_before_here", "False"): "пункция впервые",
+    ("first_visit_here", "True"): "первично лечились в вашем травмпункте",
+    ("first_visit_here", "False"): "первично лечились в другом месте",
+    ("sick_leave_open", "True"): "больничный открыт",
+    ("sick_leave_open", "False"): "больничный не открыт",
+}
 WHY_NAME = "Эти данные нужны только для записи и хранятся у клиники."
 WHY_PHONE = "Номер нужен, чтобы администратор мог связаться с Вами по записи."
 HELPED = "Помогло"
@@ -244,7 +261,7 @@ TODAY_EMPTY = "На {days} записей нет."
 TODAY_OFF = "Записи в этот чат не отправляются: включите BOOKINGS_TO_ADMIN_CHAT=true в .env."
 PATIENT_PICK = "Кого записываем?"
 PATIENT_NEW = "Другой пациент"
-ASK_NAME = "Напишите, пожалуйста, фамилию, имя и отчество пациента."
+ASK_NAME = "Начнём с ФИО."
 ASK_NAME_AGAIN = (
     "Напишите, пожалуйста, фамилию, имя и отчество полностью, например: Иванов Иван Иванович."
 )
@@ -254,7 +271,8 @@ ASK_BIRTH_AGAIN = (
     "например: 12.03.2015."
 )
 ASK_CONTACT = (
-    "Поделитесь, пожалуйста, номером телефона — нажмите кнопку «Поделиться контактом» внизу."
+    "Поделитесь, пожалуйста, номером телефона — нажмите кнопку «Поделиться контактом» внизу. "
+    "Или напишите номер."
 )
 CONTACT_BUTTON = "Поделиться контактом"
 CONTACT_NOT_OWN = "Пожалуйста, отправьте свой номер кнопкой «Поделиться контактом»."
@@ -264,6 +282,7 @@ THANKS = "Спасибо!"
 
 MY_EMPTY = "У Вас нет предстоящих записей."
 MY_TITLE = "Ваши записи:"
+MY_ONE = "Ваша запись:"
 MY_ITEM = "{date} в {time} — {patient}. Врач: {doctor}."
 MOVE = "Перенести"
 CANCEL = "Отменить"
@@ -402,7 +421,7 @@ WISH_TIME_NEVER = (
     "В ближайшие дни {time} свободного времени по Вашему пожеланию нет. Показываю другое время."
 )
 WISH_DOCTOR_NONE = "{doctor}: свободного времени в ближайшие дни нет."
-WISH_NEAREST_DOCTOR = "Ближайшее у врача: {when}"
+WISH_NEAREST_DOCTOR = "{doctor}: {when}"  # «Ярунин: сегодня, 13:00»
 WISH_OTHER_DOCTOR = "{day} — другой врач"
 WISH_ANOTHER_DOCTOR = "Выбрать другого врача"
 

@@ -49,7 +49,7 @@ async def test_my_bookings_by_text_lists_the_booking(make_chat, kb: KnowledgeBas
     await chat.press(texts.PAYMENT_SELF)
     for phrase in ("когда у меня приём", "отмени запись", "перенеси запись на завтра"):
         await chat.say(phrase)
-        assert texts.MY_TITLE in chat.text and "Петров Иван Сергеевич" in chat.text
+        assert texts.MY_ONE in chat.text and "Петров Иван Сергеевич" in chat.text
         assert {texts.MOVE, texts.CANCEL} <= set(chat.labels())
 
 

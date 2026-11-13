@@ -122,7 +122,7 @@ def scenarios_under(
 
 
 def start_menu(kb: KnowledgeBase, area: str | None) -> str:
-    """«Выбрать из списка»: the area's menu once the area is known, else the five groups."""
+    """The first screen of booking: the area's menu once the area is known, else the groups."""
     return kb.topics.areas.get(area, kb.topics.root) if area else kb.topics.root  # type: ignore[call-overload]
 
 

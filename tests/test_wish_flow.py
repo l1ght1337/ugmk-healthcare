@@ -27,7 +27,6 @@ NO_LLM = "the wish is read by code: DeepSeek is not called"
 
 async def through_dislocation(chat: Chat) -> None:
     """From the «Что случилось» screen to the time choice, by buttons."""
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     await chat.press("Для себя")
@@ -70,9 +69,10 @@ async def test_1_doctor_and_day(make_chat, kb: KnowledgeBase, schedule: MockSche
 
     await through_dislocation(chat)
     assert "Шаг 4 из 5" in chat.text and FRIDAY in chat.text  # straight to tomorrow
-    assert "Врач смены: Ярунин Андрей Александрович (08:00–20:00)" in chat.text
     assert not chat.days() and texts.WISH_CLEAR in chat.labels()
-    await chat.pick_period()
+    if chat.periods():  # more than eight free times that day
+        await chat.pick_period()
+    assert "Врач смены: Ярунин Андрей Александрович (08:00–20:00)" in chat.text
     slots = await offered(chat, schedule)
     assert slots and {s.doctor for s in slots} == {YARUNIN}
     assert {local_day(s) for s in slots} == {date(2026, 11, 13)}
@@ -97,9 +97,8 @@ async def test_2_doctor_without_a_day(make_chat, schedule: MockSchedule) -> None
     assert days[:3] == ["Сегодня, 12.11", "Сб, 14.11", "Вс, 15.11"]
     assert chat.nearest().label.startswith("Ближайшее: сегодня, 1")
     assert {s.doctor for s in await offered(chat, schedule)} == {KUZNETSOV}
-    await chat.pick_day("Сб")
-    assert [b.label for b in chat.periods()] == ["Вечер 18–23", "Ночь 23–8"]  # from 20:00
-    await chat.pick_period()
+    await chat.pick_day("Сб")  # from 20:00: a few times, so the grid at once
+    assert not chat.periods() and chat.times()[0].label >= "20:00"
     slots = await offered(chat, schedule)
     assert slots and {s.doctor for s in slots} == {KUZNETSOV}
 
@@ -147,7 +146,7 @@ async def test_5_doctor_is_off_that_day(make_chat, schedule: MockSchedule, clock
     await through_dislocation(chat)
     assert "Завтра, 14 ноября, Ярунин А. А. не дежурит." in chat.text  # said plainly
     labels = screen_labels(chat)
-    assert labels[0].startswith("Ближайшее у врача: сегодня, 1")
+    assert labels[0].startswith("Ярунин: сегодня, 1")
     assert labels[1:4] == ["Завтра, 14.11 — другой врач", "Другой день", texts.WISH_CLEAR]
     assert not chat.days()
 
@@ -206,7 +205,7 @@ async def test_8_reschedule_to_tomorrow(make_chat) -> None:
     await book_dislocation(chat)
     await chat.press(texts.PAYMENT_SELF)
     await chat.say("перенеси запись на завтра")
-    assert texts.MY_TITLE in chat.text and texts.MOVE in chat.labels()  # «Мои записи»
+    assert texts.MY_ONE in chat.text and texts.MOVE in chat.labels()  # «Мои записи»
     assert "завтра, 13 ноября" in chat.text
     await chat.press(texts.MOVE)
     assert FRIDAY in chat.text and not chat.days()  # tomorrow at once
@@ -362,7 +361,6 @@ async def test_repeat_visit_rules_come_before_the_wish(make_chat, schedule) -> N
     chat = make_chat()
     await chat.start()
     await chat.say("запишите к Кузнецову")
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Уже лечусь у вас")
     await chat.press("Повторный приём")
     await chat.press("Для себя")
@@ -386,7 +384,6 @@ async def test_wish_typed_as_an_answer_goes_on_with_the_question(make_chat, kb) 
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     await chat.press("Для себя")
@@ -403,7 +400,6 @@ async def test_only_a_wish_on_a_question_step_repeats_the_question(make_chat, kb
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     await chat.press("Для себя")
@@ -418,7 +414,6 @@ async def test_answer_to_a_question_is_not_taken_for_a_wish(make_chat, kb) -> No
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     await chat.press("Для себя")
