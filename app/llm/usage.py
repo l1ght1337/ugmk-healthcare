@@ -26,7 +26,10 @@ class Usage:
     cache_hit_tokens: int = 0  # DeepSeek context cache: billed at the cheaper rate
     cache_miss_tokens: int = 0
     latency_ms: int = 0
-    error: str | None = None
+    error: str | None = None  # short detail: exception class, JSON position, field — no texts
+    # Why the attempt failed: timeout / network / http_429 / api_error / invalid_json /
+    # invalid_answer (JSON, but not the format of the task). None — success.
+    reason: str | None = None
     at: str = field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
 
 

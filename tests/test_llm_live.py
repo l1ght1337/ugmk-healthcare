@@ -5,6 +5,8 @@ Needs DEEPSEEK_API_KEY in .env. Prints token usage at the end (cache hits includ
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -15,15 +17,17 @@ from app.flow.loader import KnowledgeBase
 from app.llm.assistant import Assistant
 from app.llm.client import DeepSeekClient
 from app.llm.usage import Usage, log_usage
+from tests.live_report import LIVE_LOG, RUN_ID
 
 pytestmark = pytest.mark.live
+
 
 CASES = yaml.safe_load((Path(__file__).parent / "data" / "extraction_cases.yaml").read_text())
 USAGE: list[Usage] = []
 
 
 @pytest.fixture
-def assistant(kb: KnowledgeBase) -> Assistant:
+def assistant(kb: KnowledgeBase, request: pytest.FixtureRequest) -> Assistant:
     settings = get_settings()
     if settings.deepseek_api_key is None:
         pytest.skip("DEEPSEEK_API_KEY is not set")
@@ -32,9 +36,21 @@ def assistant(kb: KnowledgeBase) -> Assistant:
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_model,
         timeout=settings.llm_timeout_seconds,
-        recorders=[log_usage, USAGE.append],
+        recorders=[log_usage, USAGE.append, _to_live_log(request.node.name)],
     )
     return Assistant(client, kb)
+
+
+def _to_live_log(test: str):  # type: ignore[no-untyped-def]
+    """Every call of this test, for `uv run python -m tests.live_report` (no texts, counters)."""
+
+    def record(usage: Usage) -> None:
+        LIVE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LIVE_LOG.open("a", encoding="utf-8") as fh:
+            row = {"run": RUN_ID, "test": test, "kind": "call", **asdict(usage)}
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    return record
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["text"])
@@ -128,7 +144,8 @@ def test_usage_and_cache_summary() -> None:
         f"\nDeepSeek: {len(USAGE)} calls, prompt {prompt} tokens (cache hit {hit}, "
         f"{hit / prompt:.0%}), completion {out}, slowest {slow} ms"
     )
-    assert all(u.ok for u in USAGE)
+    failed = [u for u in USAGE if not u.ok]
+    print(f"failed attempts: {len(failed)} " + ", ".join(sorted({u.reason or "?" for u in failed})))
     assert hit > 0, "stable system prompts should be served from the DeepSeek cache"
 
 

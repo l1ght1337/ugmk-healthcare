@@ -71,6 +71,7 @@ docker run -d --name ugmk-bot --restart unless-stopped \
 ```bash
 uv run ruff check . && uv run pytest     # без сети: LLM и Telegram подменены
 uv run pytest -m live -s                 # живой DeepSeek (нужен ключ), печатает токены и долю кэша
+uv run python -m tests.live_report       # последние 3 live-прогона: тест, причина сбоя, время
 ```
 - `tests/test_acceptance.py` — исходы движка по кейсам из `docs/test_cases.md`.
 - `tests/test_manual_cases.py` — все 20 приёмочных кейсов одним аккаунтом через логику диалога, как в Telegram.

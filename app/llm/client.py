@@ -17,12 +17,14 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
 import httpx2
 import openai
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from app.llm.usage import Usage, UsageRecorder, log_usage
 
@@ -38,7 +40,31 @@ MAX_ERROR_CHARS = 300
 
 
 class LLMUnavailable(RuntimeError):
-    """No usable answer: timeout, API error or invalid JSON twice."""
+    """No usable answer: timeout, API error or invalid JSON twice. ``reason`` as in Usage."""
+
+    def __init__(self, message: str, reason: str = "api_error") -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def _api_reason(exc: openai.APIError) -> str:
+    if isinstance(exc, openai.APITimeoutError):
+        return "timeout"
+    if isinstance(exc, openai.APIConnectionError):
+        return "network"
+    if isinstance(exc, openai.APIStatusError):
+        return f"http_{exc.status_code}"
+    return "api_error"
+
+
+def _describe(exc: ValueError) -> str:
+    """Where the answer broke the format — field names and error types, never the values."""
+    if isinstance(exc, json.JSONDecodeError):
+        return f"{exc.msg} at char {exc.pos}"
+    if isinstance(exc, ValidationError):
+        parts = [f"{'.'.join(map(str, e['loc'])) or 'answer'}: {e['type']}" for e in exc.errors()]
+        return "; ".join(parts)[:MAX_ERROR_CHARS]
+    return str(exc)[:MAX_ERROR_CHARS]
 
 
 class DeepSeekClient:
@@ -74,36 +100,51 @@ class DeepSeekClient:
         max_tokens: int = 400,
         on_text: TextSink | None = None,
     ) -> T:
-        """Ask for a JSON object and turn it into ``T`` with ``parse`` (may raise ValueError)."""
+        """Ask for a JSON object and turn it into ``T`` with ``parse`` (may raise ValueError).
+
+        Every attempt is recorded once its answer is checked: ok, or the reason it failed.
+        """
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
         attempt = 0
+        started = time.monotonic()
         try:
             async with asyncio.timeout(self.timeout):
                 while True:
                     attempt += 1
                     stream = on_text if attempt == 1 else None
-                    content = await self._call(
+                    content, usage = await self._call(
                         task, messages, attempt, temperature, max_tokens, stream
                     )
                     try:
                         data = json.loads(content)
                         if not isinstance(data, dict):
-                            raise ValueError("expected a JSON object")
-                        return parse(data)
+                            raise json.JSONDecodeError("expected a JSON object", content, 0)
+                        result = parse(data)
                     except ValueError as exc:  # JSONDecodeError and ValidationError included
+                        reason = (
+                            "invalid_json" if isinstance(exc, json.JSONDecodeError)
+                            else "invalid_answer"
+                        )  # fmt: skip
+                        self._record(replace(usage, ok=False, reason=reason, error=_describe(exc)))
                         if attempt >= 2:
-                            raise LLMUnavailable(f"{task}: invalid answer twice: {exc}") from exc
+                            raise LLMUnavailable(f"{task}: {reason} twice", reason) from exc
                         error = str(exc)[:MAX_ERROR_CHARS]
                         messages += [
                             {"role": "assistant", "content": content},
                             {"role": "user", "content": RETRY_NOTE.format(error=error)},
                         ]
+                    else:
+                        self._record(usage)
+                        return result
         except TimeoutError as exc:
-            self._record(Usage(task, self.model, attempt, ok=False, error="timeout"))
-            raise LLMUnavailable(f"{task}: no answer within {self.timeout:g} s") from exc
+            self._record(
+                Usage(task, self.model, attempt, ok=False, reason="timeout",
+                      error=f"no answer within {self.timeout:g} s", latency_ms=_ms(started))
+            )  # fmt: skip
+            raise LLMUnavailable(f"{task}: no answer within {self.timeout:g} s", "timeout") from exc
 
     async def _call(
         self,
@@ -113,7 +154,7 @@ class DeepSeekClient:
         temperature: float,
         max_tokens: int,
         on_text: TextSink | None = None,
-    ) -> str:
+    ) -> tuple[str, Usage]:
         started = time.monotonic()
         try:
             if on_text is not None:
@@ -126,15 +167,16 @@ class DeepSeekClient:
                 max_tokens=max_tokens,
             )
         except openai.APIError as exc:
+            reason = _api_reason(exc)
             self._record(
-                Usage(task, self.model, attempt, ok=False, error=type(exc).__name__,
-                      latency_ms=_ms(started))
+                Usage(task, self.model, attempt, ok=False, reason=reason,
+                      error=type(exc).__name__, latency_ms=_ms(started))
             )  # fmt: skip
-            raise LLMUnavailable(f"{task}: {type(exc).__name__}") from exc
-        self._record(_usage(task, self.model, attempt, response, _ms(started)))
+            raise LLMUnavailable(f"{task}: {type(exc).__name__}", reason) from exc
+        usage = _usage(task, self.model, attempt, response, _ms(started))
         if not response.choices:
-            return ""
-        return response.choices[0].message.content or ""
+            return "", usage
+        return response.choices[0].message.content or "", usage
 
     async def _stream(
         self,
@@ -144,7 +186,7 @@ class DeepSeekClient:
         temperature: float,
         max_tokens: int,
         on_text: TextSink,
-    ) -> str:
+    ) -> tuple[str, Usage]:
         started = time.monotonic()
         stream = await self._client.chat.completions.create(
             model=self.model,
@@ -167,8 +209,7 @@ class DeepSeekClient:
                     await on_text("".join(parts))
                 except Exception:  # a failed draft must not break the answer
                     log.warning("streaming a draft failed", exc_info=True)
-        self._record(_usage(task, self.model, attempt, last, _ms(started)))
-        return "".join(parts)
+        return "".join(parts), _usage(task, self.model, attempt, last, _ms(started))
 
     def _record(self, usage: Usage) -> None:
         for recorder in self.recorders:

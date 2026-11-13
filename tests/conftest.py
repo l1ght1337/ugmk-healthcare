@@ -128,3 +128,16 @@ def make_chat(kb: KnowledgeBase, clinic: ClinicData, db: Database, schedule: Moc
         return Chat(conversation)
 
     return _make
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):  # type: ignore[no-untyped-def]
+    """Live DeepSeek tests: the outcome of each goes to data/live_runs.jsonl (tests/live_report)."""
+    outcome = yield
+    report = outcome.get_result()
+    if item.get_closest_marker("live") is None:
+        return
+    if report.when == "call" or (report.when == "setup" and report.outcome != "passed"):
+        from tests.live_report import record_outcome
+
+        record_outcome(item.name, report.outcome, report.duration)

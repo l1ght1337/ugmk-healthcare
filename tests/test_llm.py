@@ -64,7 +64,8 @@ async def test_slow_deepseek_falls_back_to_buttons(kb: KnowledgeBase) -> None:
     reading = await read_answer(fake.assistant(kb, timeout=0.2), sc, sc.question("when"), "вчера")
     assert reading.unavailable
     assert time.monotonic() - started < 1
-    assert fake.usage[-1].error == "timeout"
+    last = fake.usage[-1]
+    assert (last.ok, last.reason) == (False, "timeout") and 150 <= last.latency_ms < 1000
 
 
 @pytest.mark.parametrize("status", [429, 500, 503])
@@ -195,3 +196,55 @@ async def test_route_tolerates_odd_area_and_candidates(kb: KnowledgeBase) -> Non
     result = await fake.assistant(kb).route("болит нога")
     assert (result.kind, result.area, result.candidates) == ("complaint", None, [])
     assert len(fake.requests) == 1  # no retry for a value that only narrows the menu
+
+
+@pytest.mark.parametrize(
+    ("replies", "reasons"),
+    [
+        (("не json", "{оборвано"), ["invalid_json", "invalid_json"]),
+        (([1, 2], {"type": "complaint"}), ["invalid_json", None]),  # a list is not an object
+        (({"type": "диагноз"}, {"kind": 1}), ["invalid_answer", "invalid_answer"]),
+        ((429,), ["http_429"]),
+        ((503,), ["http_503"]),
+    ],
+)
+async def test_each_attempt_is_logged_with_its_reason(
+    kb: KnowledgeBase, replies: tuple, reasons: list
+) -> None:
+    fake = FakeDeepSeek(*replies)
+    try:
+        await fake.assistant(kb).route("болит рука")
+    except LLMUnavailable as exc:
+        assert exc.reason == reasons[-1]
+    assert [u.reason for u in fake.usage] == reasons
+    assert [u.ok for u in fake.usage] == [r is None for r in reasons]
+    assert all(u.latency_ms >= 0 for u in fake.usage)
+
+
+async def test_invalid_answer_detail_names_fields_not_values(kb: KnowledgeBase) -> None:
+    fake = FakeDeepSeek({"type": "Иванов Иван"}, {"type": "Иванов Иван"})
+    with pytest.raises(LLMUnavailable):
+        await fake.assistant(kb).route("болит рука")
+    assert fake.usage[0].error == "type: literal_error"
+    assert "Иванов" not in str([asdict(u) for u in fake.usage])
+
+
+async def test_network_error_is_logged_as_network(kb: KnowledgeBase) -> None:
+    import httpx2
+
+    from app.llm.client import DeepSeekClient
+
+    def broken(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("no route to host", request=request)
+
+    usage: list = []
+    client = DeepSeekClient(
+        api_key="k", base_url="https://api.deepseek.test", model="deepseek-chat",
+        recorders=[usage.append],
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(broken)),
+    )  # fmt: skip
+    from app.llm.assistant import Assistant
+
+    with pytest.raises(LLMUnavailable) as caught:
+        await Assistant(client, kb).route("болит рука")
+    assert caught.value.reason == "network" and usage[-1].reason == "network"
