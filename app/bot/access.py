@@ -10,7 +10,7 @@ from __future__ import annotations
 from app.bot import texts
 from app.bot.conversation import AdminPost, Button, Reply, Turn, UserRef
 from app.config import Settings
-from app.db.models import AccessRequest, utcnow
+from app.db.models import AccessRequest, User, utcnow
 from app.db.session import Database
 
 ALLOW_PREFIX = "allow:"
@@ -60,6 +60,22 @@ class Access:
                 )
                 return Turn([Reply(f"{texts.NOT_ALLOWED} {texts.ACCESS_REQUESTED}")], [post])
         return Turn([Reply(texts.NOT_ALLOWED)])
+
+    async def forget(self, user_id: int) -> bool:
+        """Remove what was stored for an id that is not a person: the bot itself.
+
+        Older versions took the «… закрепил(а) сообщение» service message for a stranger
+        and asked the administrators to let the bot in. Called at startup with the bot's id.
+        """
+        self._approved.discard(user_id)
+        async with self.db() as db:
+            request = await db.get(AccessRequest, user_id)
+            user = await db.get(User, user_id)
+            for row in (request, user):
+                if row is not None:
+                    await db.delete(row)
+            await db.commit()
+        return request is not None or user is not None
 
     async def approve(self, user_id: int, by: str) -> Turn | None:
         """«Разрешить» pressed in the admin chat: let the user in and tell them."""

@@ -22,6 +22,8 @@ YES_DATA = frozenset({"h:yes", "ca:yes"})
 NO_DATA = frozenset({"h:no", "ca:no"})
 _SMALL_WORDS = frozenset({"или", "и", "на", "до", "в", "у", "с", "по", "к", "не"})
 MIN_PREFIX = 4
+# Words that are on topic buttons but name no topic: «травма» is not «Травма глаза».
+_TOPIC_STOP_WORDS = frozenset({"травма", "травмы", "прием", "другой", "другая"})
 
 
 def _words(label: str) -> list[str]:
@@ -39,13 +41,31 @@ def _covers(text: str, label: str) -> bool:
     return bool(typed) and all(w in words for w in typed) and len(typed) * 2 >= len(words)
 
 
+def _names_topic(typed: str, label: str) -> bool:
+    """A topic button named by its word: «ударился» for «Упал, ударился, подвернул»,
+    «укус» for «Укус животного».
+
+    A label that is a list — one or more of its items, whole. A short label — at least
+    half of its words. A label with a number («Ребёнок до 6 месяцев») — never: the number
+    decides the route, so only the whole label presses it.
+    """
+    if any(ch.isdigit() for ch in label):
+        return False
+    items = [normalize(part) for part in label.split(",")]
+    if len(items) > 1:
+        return set(typed.split()) <= set(items)
+    if len(typed) < MIN_PREFIX or set(typed.split()) <= _TOPIC_STOP_WORDS:
+        return False
+    return _covers(typed, items[0])
+
+
 def pressed(text: str, buttons: Sequence[tuple[str, str]], *, mode: str = "choice") -> str | None:
     """The callback data of the button the text names, or None.
 
-    ``buttons`` — (label, data). ``mode``: «exact» — the whole label only (topic menus: a
-    typed «ребёнок» is not «Ребёнок до 6 месяцев»); «answer» — also the beginning of a
-    label (scenario questions: the branch must not be guessed); «choice» — also words in
-    any order (days, time, «для кого»).
+    ``buttons`` — (label, data). ``mode``: «exact» — the whole label only; «topic» — also a
+    word that is on one topic button only (a typed «ребёнок» is still not «Ребёнок до 6
+    месяцев»); «answer» — also the beginning of a label (scenario questions: the branch
+    must not be guessed); «choice» — also words in any order (days, time, «для кого»).
     """
     typed = normalize(text)
     if not typed:
@@ -66,6 +86,8 @@ def pressed(text: str, buttons: Sequence[tuple[str, str]], *, mode: str = "choic
         head = "да" if answer else "нет"
         by_label = only({d for label, d in labels if label.split()[:1] == [head]})
         return by_label or only(datas & (YES_DATA if answer else NO_DATA))
+    if mode == "topic":
+        return only({data for label, data in buttons if _names_topic(typed, label)})
     if mode == "exact" or len(typed) < MIN_PREFIX:
         return None
     starts = {d for label, d in labels if label.startswith(typed) and _covers(typed, label)}

@@ -134,7 +134,9 @@ async def test_phrase_on_step(
             assert texts.MY_ONE in text and {texts.MOVE, texts.CANCEL} <= set(labels)
             assert len(chat.replies) == 1
     elif must == m.MY_MOVE:
-        assert texts.MY_ONE in text and "При переносе сразу покажу" in text
+        assert text.startswith("Переношу запись с пятницы, 13 ноября, 1")
+        assert now in ("days", "periods", "times") and after.get("reschedule_of")
+        assert labels[-1] == texts.KEEP_AS_IS and texts.MY_ONE not in text
     elif must == m.CONFIRM:
         assert "Спасибо, ждём Вас" in text and "в 1" in text
         async with chat.conversation.db() as s:

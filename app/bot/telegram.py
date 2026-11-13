@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
+from aiogram.enums import ContentType
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -110,7 +111,9 @@ def rich_card(card: Card) -> InputRichMessage:
         for icon, name, value in card.fields
     ]
     blocks += [InputRichBlockParagraph(text=f"{icons['price']} {p}") for p in card.paragraphs]
-    blocks.append(InputRichBlockSectionHeading(text=f"{icons['bring']} {card.list_title}", size=4))
+    blocks.append(  # a bold line like «Дата» and «Врач»: a second heading splits the card
+        InputRichBlockParagraph(text=[RichTextBold(text=f"{icons['bring']} {card.list_title}:")])
+    )
     blocks.append(
         InputRichBlockList(
             items=[
@@ -411,6 +414,55 @@ class Drafts:
         return send
 
 
+# What a person can send to the bot. Everything else is a service message («… закрепил(а)
+# сообщение», a new chat title, a payment…): nobody wrote it, so nobody is answered.
+PATIENT_CONTENT = frozenset(
+    {
+        ContentType.TEXT, ContentType.CONTACT, ContentType.ANIMATION, ContentType.AUDIO,
+        ContentType.DOCUMENT, ContentType.PHOTO, ContentType.STICKER, ContentType.VIDEO,
+        ContentType.VIDEO_NOTE, ContentType.VOICE, ContentType.LOCATION, ContentType.VENUE,
+        ContentType.POLL, ContentType.DICE, ContentType.STORY, ContentType.PAID_MEDIA,
+        ContentType.LIVE_PHOTO,
+    }
+)  # fmt: skip
+
+
+class OnlyPatients(BaseMiddleware):
+    """The first gate of the patients' router: a person, in a private chat, with a message.
+
+    Service messages and any update from a bot go no further — neither to the access check
+    nor to the dialog. When the bot pins the booking card, Telegram reports it with a
+    service message whose author is the bot itself; that message is removed from the chat.
+    """
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user = getattr(event, "from_user", None)
+        message = event if isinstance(event, Message) else getattr(event, "message", None)
+        if isinstance(message, Message) and message.chat.type != "private":
+            return None
+        if isinstance(event, Message) and event.content_type not in PATIENT_CONTENT:
+            if event.pinned_message is not None:
+                await self._remove(data.get("bot"), event)
+            return None
+        if user is None or user.is_bot:
+            return None
+        return await handler(event, data)
+
+    @staticmethod
+    async def _remove(bot: Bot | None, message: Message) -> None:
+        if bot is None:
+            return
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except TelegramAPIError:  # cosmetic: the line «… закрепил(а) сообщение» stays
+            log.debug("could not delete the pin service message", exc_info=True)
+
+
 class AllowedUsers(BaseMiddleware):
     """Closed test: ALLOWED_USER_IDS and users approved with «Разрешить» in the admin chat."""
 
@@ -487,8 +539,9 @@ def build_dispatcher(
     admin = Router(name="admin")
     patients = Router(name="patients")
     patients.message.filter(F.chat.type == "private")
-    patients.message.outer_middleware(AllowedUsers(access, delivery))
-    patients.callback_query.outer_middleware(AllowedUsers(access, delivery))
+    for observer in (patients.message, patients.callback_query):
+        observer.outer_middleware(OnlyPatients())  # no service messages, no bots
+        observer.outer_middleware(AllowedUsers(access, delivery))
 
     if settings.admin_chat_id is not None:
 

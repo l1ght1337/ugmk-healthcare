@@ -80,8 +80,13 @@ def render_labels(kb: KnowledgeBase) -> str:
             ],
         ),
         _row(
-            "Первая кнопка на экране дня (у контрольного приёма — на экране времени суток)",
-            [texts.NEAREST.format(when="сегодня, 14:30")],
+            "Первая кнопка на экране дня (у контрольного приёма и у дня, который назвал "
+            "пациент, — на экране времени)",
+            [
+                texts.NEAREST.format(when="сегодня, 14:30"),
+                texts.NEAREST.format(when=f"{texts.TONIGHT}, 01:00"),
+                texts.NEAREST.format(when="вс, 15.11, 08:00"),
+            ],
         ),
         _row(
             "Время суток (только где есть свободное время)",
@@ -135,6 +140,13 @@ def render_labels(kb: KnowledgeBase) -> str:
                 texts.MENU_HOME,
             ],
         ),
+        _row(
+            "Ответ на «какие у вас врачи?»",
+            [texts.MENU_BOOK, "Кузнецов Н. А.", "Ярунин А. А.", texts.MENU_HOME],
+        ),
+        _row(
+            "Расписание врача по кнопке с его фамилией", [texts.BOOK_THIS_DOCTOR, texts.MENU_HOME]
+        ),
         _row("Карточка записи", [texts.MOVE, texts.CANCEL]),
         _row("Длинная фраза скрипта (коротко)", [texts.MORE]),
         _row("Напоминание за 2 часа", [texts.HOW_TO_GET, texts.CONFIRM, texts.MOVE, texts.CANCEL]),
@@ -154,6 +166,14 @@ def render_labels(kb: KnowledgeBase) -> str:
             ["кнопки вопроса", texts.MENU_HOME],
         ),
         _row("Мои записи", [texts.MOVE, texts.CANCEL]),
+        _row("Перенос записи: внизу каждого экрана выбора дня и времени", [texts.KEEP_AS_IS]),
+        _row(
+            "«Перенеси на завтра», когда записей несколько: какую переносим",
+            [
+                texts.MOVE_ITEM.format(day="Чт, 12.11", time="13:00", patient="Петров И. С."),
+                texts.MENU_HOME,
+            ],
+        ),
         _row(
             "Подтверждение текстом («подтверждаю», «да, приду»)",
             [texts.MOVE, texts.CANCEL, texts.MENU_HOME],

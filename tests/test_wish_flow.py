@@ -205,10 +205,11 @@ async def test_8_reschedule_to_tomorrow(make_chat) -> None:
     await book_dislocation(chat)
     await chat.press(texts.PAYMENT_SELF)
     await chat.say("перенеси запись на завтра")
-    assert texts.MY_ONE in chat.text and texts.MOVE in chat.labels()  # «Мои записи»
-    assert "завтра, 13 ноября" in chat.text
-    await chat.press(texts.MOVE)
+    assert chat.text.startswith("Переношу запись с четверга, 12 ноября")
+    assert "Пожелание: завтра, 13 ноября" in chat.text
     assert FRIDAY in chat.text and not chat.days()  # tomorrow at once
+    assert chat.nearest().label.startswith("Ближайшее: завтра, ")
+    assert chat.labels()[-1] == texts.KEEP_AS_IS
     await chat.pick_time()
     (booking,) = await bookings(chat.conversation.db)
     assert booking.start_at.astimezone(TZ).date() == date(2026, 11, 13)
@@ -496,13 +497,28 @@ async def test_unknown_doctor_with_a_complaint_goes_on(make_chat, kb: KnowledgeB
     assert "Иванов" not in fake.sent()  # masked like any other surname
 
 
-async def test_old_wish_is_forgotten(make_chat, clock) -> None:
+async def test_old_wish_is_forgotten_outside_a_booking(make_chat, clock) -> None:
+    """The doctor asked about hours ago is not carried into a new request."""
+    chat = make_chat()
+    await chat.start()
+    await chat.say("когда работает Кузнецов?")
+    assert texts.BOOK_THIS_DOCTOR in chat.labels()
+    clock.now = NOW + timedelta(hours=4)
+    await chat.say("запишите меня")
+    assert texts.ASK_COMPLAINT in chat.text and "Пожелание" not in chat.text
+    await through_dislocation(chat)
+    assert "Пожелание" not in chat.text and chat.days()[1].label == "Завтра, 13.11"
+
+
+async def test_wish_named_in_a_booking_lives_until_the_time_is_chosen(make_chat, clock) -> None:
     chat = make_chat()
     await chat.start()
     await chat.say("запишите к Кузнецову")
-    clock.now = NOW + timedelta(hours=4)
+    clock.now = NOW + timedelta(hours=4)  # the patient came back later: the booking goes on
     await through_dislocation(chat)
-    assert "Пожелание" not in chat.text and chat.days()[1].label == "Завтра, 13.11"
+    assert "Пожелание: к Кузнецову Н. А." in chat.text
+    await chat.press(texts.WISH_CLEAR)  # … or until «Убрать пожелание»
+    assert "Пожелание" not in chat.text and chat.days()
 
 
 async def test_menu_button_starts_without_the_old_wish(make_chat) -> None:

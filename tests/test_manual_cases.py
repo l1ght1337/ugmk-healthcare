@@ -68,6 +68,8 @@ async def _play(chat: Chat, fake: FakeDeepSeek, case: Case) -> None:
         await _do(chat, step)
         for fragment in step.expect:
             assert fragment in chat.text, f"{where}: нет «{fragment}» в ответе:\n{chat.text}"
+        for fragment in step.absent:
+            assert fragment not in chat.text, f"{where}: «{fragment}» в ответе:\n{chat.text}"
         for fragment in step.admin:
             assert len(chat.admin) > posted, f"{where}: нет сообщения администраторам"
             assert fragment in chat.admin[-1].text, f"{where}: «{fragment}»"

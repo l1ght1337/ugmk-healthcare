@@ -92,11 +92,10 @@ async def test_one_booking_is_one_message(make_chat) -> None:
     assert only.text.startswith("Ваша запись:\n12 ноября (четверг) в 1")
     assert "Петров Иван Сергеевич. Врач: Кузнецов Николай Александрович." in only.text
     assert chat.labels() == [texts.MOVE, texts.CANCEL]
-    await chat.say("перенеси запись на завтра")
-    (only,) = chat.replies
-    assert only.text.startswith(
-        "Ваша запись:\nПри переносе сразу покажу время по пожеланию: завтра"
-    )
+    await chat.say("перенеси запись на завтра")  # the move at once, no «Мои записи» between
+    line, screen = chat.replies
+    assert line.text.startswith("Переношу запись с четверга, 12 ноября, 1") and not line.buttons
+    assert "13 ноября (пятница)" in screen.text
 
 
 async def test_several_bookings_keep_the_title_and_a_message_each(make_chat) -> None:

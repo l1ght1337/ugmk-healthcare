@@ -68,6 +68,17 @@ def test_doctor_in_any_case_and_register(doctors, text: str, doctor: str) -> Non
         "кузнечик укусил",
         "у Кузнецова Ивана Петровича перелом, запишите его",
         "Билалов Тимур упал с велосипеда",
+        # «запишите» does not make a doctor of a surname: the name after it is the patient's
+        "запишите мою дочь Кузнецову Аню, упала с качели",
+        "запишите на завтра Кузнецову Марию, вывих",
+        "запишите сына, Ярунин Миша, 8 лет, на завтра",
+        "запишите Аню Кузнецову на завтра",
+        "запишите Кузнецова",
+        "запишите Кузнецову, вывих плеча",
+        # «not to this doctor» is not a wish for the doctor
+        "только не к Кузнецову",
+        "запишите, но не к Ярунину",
+        "к любому врачу, кроме Билалова",
     ],
 )
 def test_patient_surname_is_not_a_doctor(doctors, text: str) -> None:
@@ -211,8 +222,8 @@ def test_part_of_the_day(doctors, text: str, period: str) -> None:
         ("завтра в 14.30", time(14, 30)),
         ("запишите на 15:00", time(15)),
         ("можно в 3 часа дня?", time(15)),
-        ("можно в 3?", time(15)),
         ("завтра вечером в 7", time(19)),
+        ("завтра в 7", time(7)),  # another day: the hour as it is said
         ("запишите на 2 декабря в 10", time(10)),
     ],
 )
@@ -234,6 +245,34 @@ def test_exact_time(doctors, text: str, at: time) -> None:
 def test_time_window(doctors, text: str, start: time | None, end: time | None) -> None:
     wish = parse(text, doctors, TODAY).wish
     assert (wish.start, wish.end) == (start, end), text
+
+
+@pytest.mark.parametrize(
+    ("text", "now", "at"),
+    [
+        ("можно сегодня в 7?", time(5, 0), time(7)),  # the trauma centre works round the clock
+        ("можно сегодня в 7?", time(10, 0), time(19)),  # 7:00 has passed
+        ("можно в 3?", time(10, 0), time(15)),
+        ("можно в 3?", time(1, 30), time(3)),
+        ("приду в 5", time(4, 0), time(5)),
+        ("приду в 5", time(12, 0), time(17)),
+        ("сегодня в 7:30", time(6, 0), time(7, 30)),
+        ("сегодня в 7:30", time(9, 0), time(19, 30)),
+        ("можно в 11?", time(12, 0), time(23)),
+        ("запишите на 15:00", time(16, 0), time(15)),  # 24-hour time is taken as it is
+        ("сегодня утром в 7", time(10, 0), time(7)),  # «утром» says which one
+        ("сегодня вечером в 7", time(5, 0), time(19)),
+    ],
+)
+def test_bare_hour_is_the_nearest_one_ahead(doctors, text: str, now: time, at: time) -> None:
+    assert parse(text, doctors, TODAY, now=now).wish.at == at, (text, now)
+
+
+def test_window_hours_follow_the_clock_too(doctors) -> None:
+    assert parse("можно после 6?", doctors, TODAY, now=time(10)).wish.start == time(18)
+    assert parse("можно после 6?", doctors, TODAY, now=time(4)).wish.start == time(6)
+    wish = parse("сегодня с 2 до 4", doctors, TODAY, now=time(10)).wish
+    assert (wish.start, wish.end) == (time(14), time(16))
 
 
 @pytest.mark.parametrize(
@@ -308,6 +347,15 @@ def test_the_ten_phrases(doctors) -> None:
         ("когда ближайшее свободное время?", "free"),
         ("у Деменкова есть окошко завтра?", "free"),
         ("когда можно записаться?", "free"),
+        # who works here at all: the list of doctors, whatever the verb looks like
+        ("какие у вас врачи", "doctors"),
+        ("кто у вас принимает", "doctors"),
+        ("какие доктора работают", "doctors"),
+        ("а какие доктора вообще раюотают", "doctors"),
+        ("какие врачи у вас работают?", "doctors"),
+        ("сколько у вас врачей?", "doctors"),
+        ("у вас есть травматолог?", "doctors"),
+        ("кто принимает?", "doctors"),
     ],
 )
 def test_schedule_questions(doctors, text: str, question: str) -> None:
@@ -325,7 +373,9 @@ def test_schedule_questions(doctors, text: str, question: str) -> None:
         "сколько стоит приём?",
         "есть ли у вас рентген?",
         "кто такой Ярунин?",  # about the doctor: the справка answers
-        "какие врачи у вас работают?",
+        "сколько стоит приём врача?",
+        "врач принимает детей?",
+        "к какому врачу я записан",
         "Можно записаться именно к Кузнецову?",  # a request with a wish
         "во сколько вы работаете?",
     ],
@@ -377,6 +427,25 @@ def test_merge_keeps_what_was_not_said_again() -> None:
 
 
 # --- what DeepSeek sees --------------------------------------------------------------------
+
+
+def test_patient_with_a_doctors_surname_goes_to_the_llm_as_a_name(doctors) -> None:
+    """Whatever the case of the letters: the surname is the patient's, so «[ИМЯ]»."""
+    marked = mark_doctors("запишите мою дочь Кузнецову Аню, упала с качели", doctors)
+    assert marked == "запишите мою дочь [ИМЯ], упала с качели"
+    low = mark_doctors("запишите на завтра кузнецову марию, вывих", doctors)
+    assert low == "запишите на завтра [ИМЯ], вывих"
+    assert (
+        mark_doctors("запишите сына, Ярунин Миша, 8 лет", doctors) == "запишите сына, [ИМЯ], 8 лет"
+    )
+    assert mark_doctors("только не к Кузнецову", doctors) == "только не к [ВРАЧ]"
+
+
+def test_day_of_a_request_with_the_patients_surname(doctors) -> None:
+    found = parse("запишите на завтра Кузнецову Марию, вывих", doctors, TODAY)
+    assert (found.wish.doctor, found.wish.day) == (None, day(13)) and not found.unknown_doctor
+    found = parse("запишите сына, Ярунин Миша, 8 лет, на завтра", doctors, TODAY)
+    assert (found.wish.doctor, found.wish.day) == (None, day(13))
 
 
 def test_doctor_becomes_a_neutral_label_for_the_llm(doctors) -> None:

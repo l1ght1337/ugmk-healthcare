@@ -8,6 +8,7 @@ routed to), ``_common.json`` (phrases shared by all booking scripts) and ``_menu
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -45,6 +46,19 @@ class KnowledgeBase:
 
     def scenario(self, scenario_id: str) -> Scenario:
         return self.scenarios[scenario_id]
+
+
+def doctor_posts(doctors: Sequence[str], kb_dir: Path = KB_DIR) -> dict[str, str]:
+    """Each doctor's post from kb/info/travmpunkt.md, where a line is «- ФИО — должность»."""
+    path = kb_dir / "info" / "travmpunkt.md"
+    posts: dict[str, str] = {}
+    if not path.exists():
+        return posts
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name, dash, post = line.removeprefix("- ").partition(" — ")
+        if line.startswith("- ") and dash and name.strip() in doctors:
+            posts[name.strip()] = post.strip()
+    return posts
 
 
 def load_kb(kb_dir: Path = KB_DIR) -> KnowledgeBase:

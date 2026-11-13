@@ -341,7 +341,7 @@ async def test_one_part_of_the_day_goes_straight_to_times(make_chat, clock) -> N
 
 
 def test_nearest_label_names_the_day() -> None:
-    from datetime import date, datetime, timedelta
+    from datetime import datetime, timedelta
 
     from app.bot.slots_view import nearest_label
     from app.schedule.base import Slot
@@ -351,10 +351,10 @@ def test_nearest_label_names_the_day() -> None:
         start = datetime(2026, 11, day, hour, 30, tzinfo=TZ)
         return Slot("x", start, start + timedelta(minutes=30), "Д", "К", False, False)
 
-    today = date(2026, 11, 12)
-    assert nearest_label(at(12, 14), today, TZ) == "Ближайшее: сегодня, 14:30"
-    assert nearest_label(at(13, 9), today, TZ) == "Ближайшее: завтра, 09:30"
-    assert nearest_label(at(14, 9), today, TZ) == "Ближайшее: сб, 14.11, 09:30"
+    now = datetime(2026, 11, 12, 12, 0, tzinfo=TZ)
+    assert nearest_label(at(12, 14), now, TZ) == "Ближайшее: сегодня, 14:30"
+    assert nearest_label(at(13, 9), now, TZ) == "Ближайшее: завтра, 09:30"
+    assert nearest_label(at(14, 9), now, TZ) == "Ближайшее: сб, 14.11, 09:30"
 
 
 # --- labels that fit a phone ---------------------------------------------------------------
@@ -730,3 +730,20 @@ async def _session(chat: Chat) -> dict:
     async with chat.conversation.db() as s:
         user = await s.get(User, chat.user.id)
         return user.session
+
+
+def test_rich_card_has_one_heading_and_bold_lines() -> None:
+    """«Что взять с собой» is a bold line like «Дата» and «Врач», not a second heading."""
+    from aiogram.types import InputRichBlockParagraph, InputRichBlockSectionHeading, RichTextBold
+
+    blocks = rich_card(_card()).blocks
+    headings = [b for b in blocks if isinstance(b, InputRichBlockSectionHeading)]
+    assert [h.text for h in headings] == ["✅ Запись"]
+    bold = [
+        b.text[0].text
+        for b in blocks
+        if isinstance(b, InputRichBlockParagraph)
+        and isinstance(b.text, list)
+        and isinstance(b.text[0], RichTextBold)
+    ]
+    assert bold == ["🩺 Врач: ", "🧾 Взять:"]

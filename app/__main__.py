@@ -48,7 +48,10 @@ async def run() -> None:
         media=MediaStore(enabled=settings.media_enabled),
     )
     drafts = Drafts(bot, enabled=settings.stream_answers)
-    dispatcher = build_dispatcher(settings, conversation, delivery, Access(settings, db), drafts)
+    access = Access(settings, db)
+    if await access.forget(bot.id):  # the bot is not a user: see Access.forget
+        log.info("removed the bot's own id %s from access requests", bot.id)
+    dispatcher = build_dispatcher(settings, conversation, delivery, access, drafts)
     scheduler = start_scheduler(conversation, delivery)
 
     warm_up = None

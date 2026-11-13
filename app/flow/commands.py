@@ -218,6 +218,11 @@ _ADULT_WORDS = (
     r"тещ\w+|свекров\w+|тест\w+|свекр\w*)"
 )
 _BOOK_VERB = r"(?:запис\w+|запиш\w+)"
+_BOOK_ORDER = r"(?:запиши|запишите|запишусь|записать|записаться)"
+_MOVE_INTENT = re.compile(
+    rf"\b(?:{_MOVE}|перезапи[сш]\w+)\b"
+    rf"|\b{_CANCEL}\b.*\b{_BOOK_ORDER}\b|\b{_BOOK_ORDER}\b.*\b{_CANCEL}\b"
+)
 _INJURED = (
     r"(?:упал\w*|ударил\w*|сломал\w*|порезал\w*|обжег\w*|обожгл\w*|подвернул\w*|вывихнул\w*|"
     r"ушиб\w*|поранил\w*|травмировал\w*|наступил\w*|прищемил\w*|повредил\w*|разбил\w*|"
@@ -295,6 +300,12 @@ def find_audience(text: str) -> Audience | None:
 def is_booking_order(text: str) -> bool:
     """«Запиши», «запишите», «запишусь»: an order to book, whatever else is in the message."""
     return re.search(r"\bзапиш(?:и|ите|усь)\b", normalize(text)) is not None
+
+
+def wants_move(text: str) -> bool:
+    """A new time is wanted, not only the old one dropped: «перенеси на завтра», «отмени и
+    запиши на воскресенье», «перезапишите на пятницу». «Отмени запись» is not a move."""
+    return _MOVE_INTENT.search(normalize(text)) is not None
 
 
 def is_unsure(text: str) -> bool:

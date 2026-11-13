@@ -27,9 +27,12 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.flow.names import FIRST_NAMES, stem_pattern
+
 DOCTOR_LABEL = "[ВРАЧ]"  # what DeepSeek sees instead of a doctor's name
+NAME_LABEL = "[ИМЯ]"  # … and instead of a patient who has a doctor's surname
 Context = Literal["free", "time", "strict"]
-Question = Literal["who", "doctor", "free"]
+Question = Literal["who", "doctor", "doctors", "free"]
 PERIODS = ("morning", "day", "evening", "night")
 
 
@@ -81,6 +84,7 @@ class Parsed:
     question: Question | None = None  # a question about the schedule
     rest: str = ""  # the other words of the message
     doctor_spans: tuple[tuple[int, int], ...] = ()  # where doctors are named in the text
+    patient_spans: tuple[tuple[int, int], ...] = ()  # «Кузнецову Аню»: a patient, not a doctor
 
 
 # --- names ---------------------------------------------------------------------------------
@@ -278,12 +282,25 @@ _IMPERATIVE = re.compile(r"\b(?:запиши|запишите|запишусь|�
 _BOOKING_WORD = re.compile(r"\b(?:запис\w+|запиш\w+)\b")
 
 _DOCTOR_WORD = r"(?:врач\w*|доктор\w*|травматолог\w*|специалист\w*)"
-_BEFORE_DOCTOR = re.compile(rf"(?:\b(?:к|ко)\s+(?:{_DOCTOR_WORD}\s+)?|\b{_DOCTOR_WORD}\s+)$")
+# A surname of the list is a doctor after «к», «у», «врач», «доктор» — or when the talk is
+# about a shift («Кузнецов завтра работает?»). «Запишите» alone does not make a doctor:
+# «запишите Кузнецову Аню» is a patient.
+_BEFORE_DOCTOR = re.compile(rf"(?:\b(?:к|ко|у)\s+(?:{_DOCTOR_WORD}\s+)?|\b{_DOCTOR_WORD}\s+)$")
 _BEFORE_PATIENT = re.compile(r"\b(?:зовут|фамилия|фио|я|это|пациент\w*)[\s:,—-]*$")
 _ABOUT_SHIFT = re.compile(
     r"\b(?:принима\w+|работа[ею]\w+|дежур\w+|график\w*|расписани\w+|смен[еау]|будет|время|"
-    r"времени|окн[оа]|окошк\w+|свобод\w+|запис\w+|запиш\w+|попасть)\b"
+    r"времени|окн[оа]|окошк\w+|свобод\w+)\b"
 )
+# «только не к Кузнецову», «к любому, кроме Билалова»: named, but not wished for
+_REFUSED = re.compile(
+    rf"\b(?:не|кроме|исключая)\s+(?:хочу\s+|надо\s+|нужно\s+)?(?:(?:к|ко|у)\s+)?"
+    rf"(?:{_DOCTOR_WORD}\s+)?$"
+)
+_NOT_BEFORE = re.compile(r"\b(?:не|кроме|исключая)\s+(?:хочу\s+|надо\s+|нужно\s+)?$")
+_ALSO = re.compile(r"^\s*(?:,|или|и|либо)\s*$")  # «к Ярунину или Кузнецову»
+_NAMES = "(?:" + "|".join(stem_pattern(n).lower().replace("ё", "е") for n in FIRST_NAMES) + ")"
+_FIRST_NAME_AFTER = re.compile(rf"\s+{_NAMES}\b(?:\s+[а-я]+(?:вич|вна|чна)[а-я]{{0,2}}\b)?")
+_FIRST_NAME_BEFORE = re.compile(rf"\b(?P<name>{_NAMES})\s+$")
 _TO_SOMEONE = re.compile(
     rf"\b(?:к|ко)\s+(?P<title>{_DOCTOR_WORD}\s+)?(?P<name>[а-я][а-я-]{{3,}})(?P<next>\s+[а-я]+)?"
 )
@@ -305,7 +322,14 @@ _WHO = re.compile(
     r"\bкто\b(?!\s+меня)(?=.*\b(?:принима\w+|работа[ею]\w+|дежур\w+|смен[еу]|врач\w*|"
     r"доктор\w*|травматолог\w*))"
 )
-_WHICH_DOCTOR = re.compile(r"\bкак(?:ой|ие)\s+(?:врач|доктор|травматолог)\w*")
+# «какие у вас врачи», «какие доктора вообще раюотают», «у вас есть травматолог?»: a question
+# with a doctor in it is about the doctors, whatever the verb looks like
+_DOCTOR_NOUN = r"(?:врач|доктор|травматолог|специалист)\w*"
+_ABOUT_DOCTORS = re.compile(
+    rf"\b(?:как(?:ой|ая|ие|их|им|ими)|кто|что\s+за|сколько|список|перечень|есть)\b.*\b{_DOCTOR_NOUN}"
+    rf"|\b{_DOCTOR_NOUN}\b.*\b(?:как(?:ой|ая|ие|их)|кто|есть|сколько)\b"
+)
+_NOT_ABOUT_DOCTORS = re.compile(r"\b(?:стоит|стоимост\w*|цен\w*|почем|оплат\w*)\b")
 _NOW_OR_SHIFT = re.compile(r"\b(?:сейчас|дежур\w+|смен[еу])\b")
 _WHEN_DOCTOR = re.compile(
     r"\b(?:когда|в\s+какие\s+дни|по\s+каким\s+дням|график\w*|расписани\w+|работает|принимает|"
@@ -346,6 +370,7 @@ class _Mention:
     period: str | None = None
     window: tuple[time | None, time | None] | None = None
     at: time | None = None
+    loose: bool = False  # «в 7» without «утра» or «вечера»: seven in the morning or 19:00
 
 
 def _free_span(taken: list[tuple[int, int]], start: int, end: int) -> bool:
@@ -377,7 +402,7 @@ def _day_of_month(today: date, number: int) -> date | None:
 
 
 def _clock(hour: str, minute: str | None, part: str | None) -> time | None:
-    """«9 утра», «7 вечера», «14:30»; a bare «в 3» is three in the afternoon."""
+    """«9 утра», «7 вечера», «14:30» — the hour as it is said (see ``_is_loose``)."""
     h, m = int(hour), int(minute or 0)
     if h > 23 or m > 59:
         return None
@@ -385,9 +410,37 @@ def _clock(hour: str, minute: str | None, part: str | None) -> time | None:
         h += 12
     elif part == "ночи" and h == 12:
         h = 0
-    elif part is None and 1 <= h <= 7:
-        h += 12
     return time(h, m)
+
+
+def _is_loose(hour: str, part: str | None) -> bool:
+    """«в 7» with no «утра» or «вечера»: 7:00 or 19:00 — the clock decides."""
+    return part is None and 1 <= int(hour) <= 11
+
+
+def _later(moment: time | None) -> time | None:
+    return time(moment.hour + 12, moment.minute) if moment is not None else None
+
+
+def _by_the_clock(wish: Wish, loose: bool, today: date, now: time | None) -> None:
+    """A bare hour is the nearest one ahead: the trauma centre works round the clock.
+
+    At 5 in the morning «в 7» is 7:00, at 10 «в 3» is 15:00. «Утром», «вечером» settle it;
+    for another day the hour stays as it is said.
+    """
+    first = wish.at or wish.start or wish.end
+    if not loose or first is None:
+        return
+    if wish.period in ("morning", "night"):
+        return
+    if wish.period == "evening" or (wish.period == "day" and first.hour <= 6):
+        after_noon = True
+    elif wish.period is None and now is not None and wish.day in (None, today):
+        after_noon = first <= now < time(first.hour + 12, first.minute)
+    else:
+        after_noon = False
+    if after_noon:
+        wish.at, wish.start, wish.end = _later(wish.at), _later(wish.start), _later(wish.end)
 
 
 def _days(t: str, today: date, taken: list[tuple[int, int]]) -> list[_Mention]:
@@ -456,20 +509,23 @@ def _times(t: str, taken: list[tuple[int, int]]) -> list[_Mention]:
         start = _clock(m["h"], m["m"], m["part"])
         end = _clock(m["h2"], m["m2"], m["part"])
         if start and end and start < end and take(m):
-            found.append(_Mention(m.start(), m.end(), False, window=(start, end)))
+            loose = _is_loose(m["h"], m["part"]) and _is_loose(m["h2"], m["part"])
+            found.append(_Mention(m.start(), m.end(), False, window=(start, end), loose=loose))
     for pattern, side in ((_AFTER, 0), (_BEFORE, 1)):
         for m in pattern.finditer(t):
             moment = _clock(m["h"], m["m"], m["part"])
             if moment is None or unit_after(m) or not take(m):
                 continue
             window = (moment, None) if side == 0 else (None, moment)
-            found.append(_Mention(m.start(), m.end(), False, window=window))
+            loose = _is_loose(m["h"], m["part"])
+            found.append(_Mention(m.start(), m.end(), False, window=window, loose=loose))
     for m in _AT.finditer(t):
         moment = _clock(m["h"], m["m"], m["part"])
         if moment is None or unit_after(m) or (bare(m) and not _BARE_HOUR_OK.match(t, m.end())):
             continue
         if take(m):
-            found.append(_Mention(m.start(), m.end(), m["prep"] == "на", at=moment))
+            loose = _is_loose(m["h"], m["part"])
+            found.append(_Mention(m.start(), m.end(), m["prep"] == "на", at=moment, loose=loose))
     for period, pattern in _PERIOD_WORDS:
         for m in pattern.finditer(t):
             if take(m):
@@ -488,21 +544,41 @@ _WISH_WORD = re.compile(
 _Named = tuple[_Doctor, int, int, bool]  # doctor, start, end, sure
 
 
-def _named_doctors(t: str, doctors: tuple[_Doctor, ...]) -> list[_Named]:
-    """Doctors named in the text, in the order they are named.
+@dataclass
+class _People:
+    """Who is named in the text by a surname from the doctors' list."""
 
-    ``sure`` — named as a doctor («к Ярунину», «Кузнецов завтра работает?»), not just a
-    surname that matches: «Кузнецов» alone may be the patient.
+    doctors: list[_Named]  # wished for: «к Ярунину», «Кузнецов завтра работает?»
+    refused: list[tuple[int, int]]  # «только не к Кузнецову»
+    patients: list[tuple[int, int]]  # «Кузнецову Аню»: the surname with the patient's name
+
+
+def _people(t: str, doctors: tuple[_Doctor, ...]) -> _People:
+    """Doctors named in the text, in the order they are named — and who is not a doctor.
+
+    ``sure`` — named as a doctor: after «к», «у», «врач», «доктор», with the doctor's own
+    name or initials, or in a talk about a shift. A surname with another first name next
+    to it is a patient; a bare surname may be either («Кузнецов» alone).
     """
     found: list[_Named] = []
+    refused: list[tuple[int, int]] = []
+    patients: list[tuple[int, int]] = []
     for doctor in doctors:
         for m in doctor.surname.finditer(t):
             before, after = t[: m.start()], t[m.end() :]
             own_name = bool(m.groupdict().get("lead") or m.groupdict().get("tail"))
             if _BEFORE_PATIENT.search(before):
                 continue
-            if not own_name and _OWN_NAME_AFTER.match(after):
-                continue  # «Кузнецова Ивана Петровича»: another person
+            if not own_name:  # «Кузнецову Аню», «Аню Кузнецову», «Кузнецова Ивана Петровича»
+                name_after = _FIRST_NAME_AFTER.match(after) or _OWN_NAME_AFTER.match(after)
+                name_before = _FIRST_NAME_BEFORE.search(before)
+                if name_after or name_before:
+                    start = name_before.start("name") if name_before else m.start()
+                    patients.append((start, m.end() + (name_after.end() if name_after else 0)))
+                    continue
+            if _REFUSED.search(before):
+                refused.append((m.start(), m.end()))
+                continue
             clause_end = _CLAUSE_END.search(after)
             clause = before[-60:] + after[: clause_end.start() if clause_end else len(after)]
             if _BEFORE_DOCTOR.search(before) or own_name or _ABOUT_SHIFT.search(clause):
@@ -520,16 +596,24 @@ def _named_doctors(t: str, doctors: tuple[_Doctor, ...]) -> list[_Named]:
         word = m["name"]
         if len(word) < 6 or _OWN_NAME_AFTER.match(t, m.end("name")):
             continue
+        if _FIRST_NAME_AFTER.match(t, m.end("name")):
+            continue
         for doctor in doctors:
             if any(_near(word, form) for form in doctor.forms):
-                found.append((doctor, m.start("name"), m.end("name"), True))
+                if _NOT_BEFORE.search(t[: m.start()]):
+                    refused.append((m.start("name"), m.end("name")))
+                else:
+                    found.append((doctor, m.start("name"), m.end("name"), True))
                 break
     unique: list[_Named] = []
     for item in sorted(found, key=lambda f: (f[1], not f[3])):
-        if all(item[1] >= other[2] or item[2] <= other[1] for other in unique):
+        taken = [(o[1], o[2]) for o in unique] + refused + patients
+        if all(item[1] >= end or item[2] <= start for start, end in taken):
+            if unique and not item[3] and unique[-1][3] and _ALSO.match(t[unique[-1][2] : item[1]]):
+                item = (item[0], item[1], item[2], True)  # «к Ярунину или Кузнецову»
             unique.append(item)
     sure = [f for f in unique if f[3]]
-    return sure or unique[:1]
+    return _People(sure or unique[:1], refused, patients)
 
 
 def _unknown_doctor(t: str, original: str, booking: bool) -> tuple[int, int] | None:
@@ -537,6 +621,8 @@ def _unknown_doctor(t: str, original: str, booking: bool) -> tuple[int, int] | N
     for m in _TO_SOMEONE.finditer(t):
         word = m["name"]
         if word in _NOT_SURNAMES or _AFTER_ADJECTIVE.match(t, m.end("name")):
+            continue
+        if _NOT_BEFORE.search(t[: m.start()]):  # «только не к Иванову»
             continue
         capital = original[m.start("name")].isupper()
         surname_like = len(word) >= 6 and _SURNAME_DATIVE.match(word) is not None
@@ -560,12 +646,14 @@ def parse(
     today: date,
     *,
     context: Context = "free",
+    now: time | None = None,
 ) -> Parsed:
     """The wish in a message.
 
     ``context``: «time» — the patient is choosing the time, any word about it counts;
     «strict» — the patient is answering a scenario question, only an explicit request
-    counts («на завтра», «запишите к Кузнецову»); «free» — any other text.
+    counts («на завтра», «запишите к Кузнецову»); «free» — any other text. ``now`` — the
+    clinic's clock: a bare «в 7» is the nearest seven ahead.
     """
     t = _norm(text)
     if len(t) != len(text):  # an exotic letter changed the length: positions would drift
@@ -575,11 +663,11 @@ def parse(
     imperative = _IMPERATIVE.search(t) is not None
     booking_word = _BOOKING_WORD.search(t) is not None
 
-    named = _named_doctors(t, known)
+    people = _people(t, known)
+    named = people.doctors
     unknown = None
-    if named:
-        taken += [(start, end) for _, start, end, _ in named]
-    else:
+    taken += [(start, end) for _, start, end, _ in named] + people.refused + people.patients
+    if not named and not people.refused and not people.patients:
         unknown = _unknown_doctor(t, text, booking_word)
         if unknown is not None:
             taken.append(unknown)
@@ -613,6 +701,7 @@ def parse(
 
     counted = sorted((m for m in mentions if counts(m)), key=lambda m: (not m.explicit, m.start))
     wish = Wish()
+    loose = False
     for mention in counted:
         if mention.day is not None and wish.day is None:
             wish.day = mention.day
@@ -621,12 +710,15 @@ def parse(
             wish.period = mention.period
         elif mention.window is not None and not wish.has_time:
             wish.start, wish.end = mention.window
+            loose = mention.loose
         elif mention.at is not None and not (wish.at or window):
             wish.at = mention.at
+            loose = mention.loose
+    _by_the_clock(wish, loose, today, now)
 
     # everything but the wish, the request words and the greeting
     consumed = [(m.start, m.end) for m in counted]
-    consumed += [(start, end) for _, start, end, _ in named]
+    consumed += [(start, end) for _, start, end, _ in named] + people.refused + people.patients
     if unknown is not None:
         consumed.append(unknown)
     chars = list(t)
@@ -635,8 +727,9 @@ def parse(
     words = re.findall(r"[а-яa-z0-9]+", "".join(chars))
     rest = [w for w in words if w not in _FILLERS and not re.fullmatch(r"[а-я]", w)]
 
-    # a bare surname is a doctor only when the message is about nothing else
-    if named and not named[0][3] and (rest or _EVENT.search(t)):
+    # a bare surname is a doctor only when the message is about nothing else: «Ярунин»,
+    # «Билалов завтра». «Запишите Кузнецова» may be about a patient
+    if named and not named[0][3] and (rest or _EVENT.search(t) or booking_word):
         named = []
     if named:
         wish.doctor = named[0][0].full
@@ -648,10 +741,12 @@ def parse(
         question = "free"
     elif not booking_word:  # «можно записаться к Кузнецову?» is a request, not a question
         about_now = wish.day or wish.has_time or _NOW_OR_SHIFT.search(t)
+        asks = (_WHO.search(t) or _ABOUT_DOCTORS.search(t)) and not _EVENT.search(t)
         if named and _WHEN_DOCTOR.search(t):
             question = "doctor"
-        elif not named and about_now and (_WHO.search(t) or _WHICH_DOCTOR.search(t)):
-            question = "who"
+        elif not named and asks and not _NOT_ABOUT_DOCTORS.search(t):
+            # with a day — who is on duty then; without — who works here at all
+            question = "who" if about_now else "doctors"
 
     has_wish = not wish.empty or unknown is not None
     return Parsed(
@@ -661,8 +756,14 @@ def parse(
         pure=has_wish and not rest and question is None,
         question=question,
         rest=" ".join(rest),
-        doctor_spans=tuple((start, end) for _, start, end, _ in named),
+        doctor_spans=(*((start, end) for _, start, end, _ in named), *people.refused),
+        patient_spans=tuple(people.patients),
     )
+
+
+def names_doctors(text: str) -> bool:
+    """«Врач», «доктор», «травматолог» is in the text: a question with it is about them."""
+    return re.search(rf"\b{_DOCTOR_NOUN}\b", _norm(text)) is not None
 
 
 def mark_doctors(text: str, doctors: tuple[str, ...] | list[str]) -> str:
@@ -673,7 +774,9 @@ def mark_doctors(text: str, doctors: tuple[str, ...] | list[str]) -> str:
     """
     if len(_norm(text)) != len(text):
         return text
-    spans = parse(text, doctors, date.today(), context="time").doctor_spans
-    for start, end in sorted(spans, reverse=True):
-        text = text[:start] + DOCTOR_LABEL + text[end:]
+    found = parse(text, doctors, date.today(), context="time")
+    labels = [(span, DOCTOR_LABEL) for span in found.doctor_spans]
+    labels += [(span, NAME_LABEL) for span in found.patient_spans]  # a patient: personal data
+    for (start, end), label in sorted(labels, reverse=True):
+        text = text[:start] + label + text[end:]
     return text

@@ -140,3 +140,129 @@ def test_dispatcher_wires_patient_and_admin_routers(kb, clinic, schedule, tmp_pa
     assert len(patients.message.handlers) == 9 and len(patients.callback_query.handlers) == 1
     admin = dp.sub_routers[0]
     assert len(admin.message.handlers) == 2 and len(admin.callback_query.handlers) == 2
+
+
+# --- service messages and bots never reach the dialog (the pinned card, 13.11) -------------
+
+
+def _message(**kw):  # type: ignore[no-untyped-def]
+    from datetime import datetime
+
+    from aiogram.types import Chat, Message, User
+
+    who = kw.pop("who", User(id=1001, is_bot=False, first_name="Тест"))
+    chat = kw.pop("chat", Chat(id=1001, type="private"))
+    return Message(
+        message_id=kw.pop("message_id", 7), date=datetime.now(), chat=chat, from_user=who, **kw
+    )
+
+
+class _Deleting:
+    def __init__(self) -> None:
+        self.deleted: list[tuple[int, int]] = []
+
+    async def delete_message(self, chat_id: int, message_id: int) -> bool:
+        self.deleted.append((chat_id, message_id))
+        return True
+
+
+async def test_pin_service_message_from_the_bot_gets_no_answer(tmp_path) -> None:
+    """The bot pins the booking card; Telegram reports it with the bot as the author."""
+    from aiogram.types import Chat, User
+    from sqlalchemy import select
+
+    from app.bot.access import Access
+    from app.bot.telegram import OnlyPatients
+    from app.db.models import AccessRequest
+    from app.db.session import Database
+
+    db = Database(f"sqlite+aiosqlite:///{tmp_path}/a.db")
+    await db.init()
+    answers: list[object] = []
+    reached: list[str] = []
+
+    async def handler(event, data):  # type: ignore[no-untyped-def]
+        reached.append(event.content_type)
+        return "ok"
+
+    async def deliver(turn, chat_id=None):  # type: ignore[no-untyped-def]
+        answers.append(turn)
+
+    access = Access(Settings(_env_file=None, allowed_user_ids="1001", admin_chat_id=-100), db)
+    allowed = AllowedUsers(access, deliver)
+    patients = OnlyPatients()
+
+    async def chain(event):  # type: ignore[no-untyped-def]
+        async def inner(e, d):  # type: ignore[no-untyped-def]
+            return await allowed(handler, e, d)
+
+        return await patients(inner, event, {"bot": api})
+
+    api = _Deleting()
+    bot = User(id=9021237787, is_bot=True, first_name="Ассистент УГМК", username="ummc_ai")
+    card = _message(message_id=5, who=bot, text="Запись в травмпункт")
+    pinned = _message(message_id=7, who=bot, pinned_message=card)
+    assert await chain(pinned) is None
+    assert reached == [] and answers == []  # no reply to the patient, no post to the group
+    assert api.deleted == [(1001, 7)]  # «… закрепил(а) сообщение» is removed from the chat
+    async with db() as s:
+        assert (await s.scalars(select(AccessRequest))).all() == []
+
+    assert await chain(_message(who=bot, text="привет от бота")) is None  # any update from a bot
+    group = Chat(id=-100, type="supergroup")
+    assert await chain(_message(chat=group, text="в группе")) is None  # not a private chat
+    assert await chain(_message(chat=group, new_chat_title="УГМК")) is None
+    assert reached == [] and answers == [] and api.deleted == [(1001, 7)]
+
+    assert await chain(_message(text="запишите меня")) == "ok"  # a patient is served as before
+    from aiogram.types import Contact
+
+    contact = Contact(phone_number="+79123456789", first_name="Тест", user_id=1001)
+    assert await chain(_message(contact=contact)) == "ok"
+    assert reached == ["text", "contact"]
+    await db.close()
+
+
+async def test_the_bot_itself_is_removed_from_access_requests(tmp_path) -> None:
+    from sqlalchemy import select
+
+    from app.bot.access import Access
+    from app.bot.conversation import UserRef
+    from app.db.models import AccessRequest
+    from app.db.session import Database
+
+    db = Database(f"sqlite+aiosqlite:///{tmp_path}/a.db")
+    await db.init()
+    access = Access(Settings(_env_file=None, allowed_user_ids="1", admin_chat_id=-100), db)
+    bot = UserRef(id=9021237787, chat_id=1001, username="ummc_ai", display_name="Ассистент УГМК")
+    await access.refuse(bot)  # what the old code did when the bot pinned a card
+    await access.approve(bot.id, "Администратор")
+    assert await access.allowed(bot.id)
+    assert await access.forget(bot.id)  # at startup: the bot is not a user
+    assert not await access.allowed(bot.id)
+    async with db() as s:
+        assert (await s.scalars(select(AccessRequest))).all() == []
+    assert not await access.forget(bot.id)  # nothing left to remove
+    await db.close()
+
+
+def test_only_patients_comes_before_the_access_check(kb, clinic, schedule, tmp_path) -> None:
+    from app.bot.access import Access
+    from app.bot.conversation import Conversation
+    from app.bot.telegram import OnlyPatients, build_dispatcher
+    from app.db.session import Database
+
+    settings = Settings(_env_file=None, admin_chat_id=-100123, allowed_user_ids="1")
+    conversation = Conversation(
+        kb=kb, clinic=clinic, settings=settings, schedule=schedule, assistant=None,
+        db=Database(f"sqlite+aiosqlite:///{tmp_path}/b.db"),
+    )  # fmt: skip
+
+    async def deliver(turn, chat_id=None):  # type: ignore[no-untyped-def]
+        return None
+
+    dp = build_dispatcher(settings, conversation, deliver, Access(settings, conversation.db))  # type: ignore[arg-type]
+    patients = dp.sub_routers[1]
+    for observer in (patients.message, patients.callback_query):
+        first, second = list(observer.outer_middleware)[:2]
+        assert isinstance(first, OnlyPatients) and isinstance(second, AllowedUsers)

@@ -47,10 +47,13 @@ async def test_my_bookings_by_text_lists_the_booking(make_chat, kb: KnowledgeBas
     chat = make_chat(assistant=FakeDeepSeek().assistant(kb))
     await book_dislocation(chat)
     await chat.press(texts.PAYMENT_SELF)
-    for phrase in ("когда у меня приём", "отмени запись", "перенеси запись на завтра"):
+    for phrase in ("когда у меня приём", "отмени запись", "отмени запись на сегодня"):
         await chat.say(phrase)
         assert texts.MY_ONE in chat.text and "Петров Иван Сергеевич" in chat.text
         assert {texts.MOVE, texts.CANCEL} <= set(chat.labels())
+    await chat.say("перенеси запись на завтра")  # a new day is named: the move starts at once
+    assert chat.text.startswith("Переношу запись с четверга, 12 ноября")
+    assert "13 ноября (пятница)" in chat.text and chat.labels()[-1] == texts.KEEP_AS_IS
 
 
 async def test_admin_by_text_twice_is_one_request(make_chat) -> None:

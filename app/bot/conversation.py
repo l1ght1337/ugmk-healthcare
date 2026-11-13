@@ -51,6 +51,7 @@ from app.flow.commands import (
     is_booking_order,
     is_question,
     is_unsure,
+    wants_move,
     wants_nearest,
     wants_other_day,
     wants_other_time,
@@ -72,18 +73,18 @@ from app.flow.identity import (
     parse_full_name,
     parse_phone,
 )
-from app.flow.loader import KnowledgeBase
+from app.flow.loader import KnowledgeBase, doctor_posts
 from app.flow.safety import find_phrase
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import Choice, FactValue, Question, Scenario
-from app.flow.wishes import Parsed, Wish, dative, short_name
+from app.flow.wishes import Parsed, Wish, dative, names_doctors, short_name
 from app.flow.wishes import parse as parse_wish
 from app.flow.words import days as days_word
 from app.flow.words import format_age
 from app.flow.words import years as years_word
 from app.llm.assistant import Assistant
 from app.llm.masking import KnownPerson
-from app.llm.reader import AnswerReading, read_answer, read_question, read_text
+from app.llm.reader import AnswerReading, TextReading, read_answer, read_question, read_text
 from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, plan
 from app.schedule.base import ScheduleProvider, Slot, SlotUnavailable
 from app.schedule.rules import all_slots, eligible
@@ -94,13 +95,15 @@ HANDOFF_IDLE = timedelta(days=1)  # an open request with no activity for a day i
 CRISIS_THREAD = timedelta(minutes=30)  # later crisis messages go under the same note
 MAX_HISTORY = 12  # «Назад» steps kept per user
 CONTROL_DAYS_BEFORE = 3  # «Другой день» for a control visit starts a little before the target
-WISH_TTL = timedelta(hours=3)  # a wish named long ago is not carried into a new request
+WISH_TTL = timedelta(hours=3)  # outside a booking: a wish named long ago is not carried on
 UNFINISHED_WINDOW = timedelta(minutes=45)  # later than this the reminder is not sent at all
 EXAMPLE_ANKLE = ("ligament_rupture", "dislocation", "fracture")  # «Подвернул ногу»
 EXAMPLE_DOCTOR = 1  # the greeting's example names the second doctor of config/schedule.yaml
 FEW_TIMES = 8  # a day with this many free times or fewer shows them at once, no part of the day
 FREE_TIMES_SHOWN = 8  # «есть время вечером?» — the first times, then «и позже»
 DOCTOR_DAYS_SHOWN = 6  # «когда работает Ярунин?» — the nearest days
+LABEL_MAX = 40  # a button's label, so that it is not cut on a phone
+TOPIC_DEPTH = 3  # how many topic menus one typed word may go through
 
 DraftSink = Callable[[str], Awaitable[None]]
 
@@ -232,7 +235,7 @@ INPUT_STEPS = frozenset({"age", "name", "birth", "contact"})
 MESSAGE_STEPS = frozenset({"admin_reply", "visit_question", "feedback_text"})
 DATA_STEPS = INPUT_STEPS | MESSAGE_STEPS
 # How a button's label typed as text is matched on a step (app/bot/typed.py).
-TYPED_MODE = {**dict.fromkeys(("complaint", "topic", "describe"), "exact"), "question": "answer"}
+TYPED_MODE = {**dict.fromkeys(("complaint", "topic", "describe"), "topic"), "question": "answer"}
 MENU_ITEM = {"book": "book", "my_bookings": "my", "ask": "ask", "admin": "admin"}
 COMMAND_ACTIONS = frozenset({*MENU_ITEM, "forget", "about_bot"})
 
@@ -301,6 +304,8 @@ class Ctx:
     back: bool = False  # «Назад» restored an earlier screen
     draft: DraftSink | None = None  # streams a partial answer (Telegram sendMessageDraft)
     for_whom: str | None = None  # «запишите ребёнка», «у мамы перелом» in this message
+    had_history: bool = False  # «Назад» had somewhere to go when the turn began
+    came_from: tuple[object, ...] | None = None  # the wizard screen the turn began on
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
@@ -327,6 +332,10 @@ def _answer_label(question: Question, facts: dict[str, FactValue]) -> str | None
 
 def _home() -> list[Button]:
     return [Button(texts.MENU_HOME, "m:home")]
+
+
+def _same_screen(reply: Reply, shown: Reply) -> bool:
+    return (reply.text, reply.buttons) == (shown.text, shown.buttons)
 
 
 def _menu() -> list[list[Button]]:
@@ -366,6 +375,7 @@ class Conversation:
         self.assistant = assistant
         self.clock = clock
         self.engine = Engine(kb, clinic)
+        self.posts = doctor_posts(clinic.schedule.doctors)  # «врач-травматолог-ортопед»
         self._locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     # --- entry points ------------------------------------------------------------------
@@ -591,6 +601,8 @@ class Conversation:
             ctx = Ctx(db, row, session, Turn(), self.clock(), via_button=via_button, draft=draft)
             before = session.model_dump(mode="json")
             before_key = _screen_key(session)
+            ctx.had_history = bool(session.history)
+            ctx.came_from = before_key if session.step in WIZARD_STEPS else None
             await handler(ctx)
             if not ctx.deleted:
                 self._remember_screen(ctx, before, before_key)
@@ -687,11 +699,16 @@ class Conversation:
         return "\n".join(lines) or None
 
     def _wish(self, c: Ctx) -> Wish | None:
-        """The wish in force: not too old, and its day is not in the past."""
+        """The wish in force: its day is not in the past.
+
+        While a booking or a move goes on, the wish lives until the time is chosen or
+        «Убрать пожелание»; outside one, a wish named long ago is dropped.
+        """
         wish = c.s.wish
         if wish is None:
             return None
-        if wish.noted is not None and c.now - wish.noted > WISH_TTL:
+        booking = c.s.wizard or c.s.reschedule_of is not None
+        if not booking and wish.noted is not None and c.now - wish.noted > WISH_TTL:
             wish = Wish()
         elif wish.day is not None and wish.day < self._local(c.now).date():
             wish = wish.without("day")
@@ -716,9 +733,15 @@ class Conversation:
         layout += grid(list(buttons), columns) if columns else pack(buttons)
         layout += [list(r) for r in rows]
         if back is None:
-            back = c.s.wizard or bool(c.s.history) or c.s.reschedule_of is not None
+            if c.back:  # «Назад» restored this screen: what is left behind it
+                past = bool(c.s.history)
+            else:  # what «Назад» will have after this turn (see _remember_screen)
+                past = c.had_history or c.came_from not in (None, _screen_key(c.s))
+            back = c.s.wizard or past
         if back:
             layout.append([Button(texts.BACK, "w:back")])
+        if c.s.reschedule_of is not None:  # a move: the way out is on every screen
+            layout.append([Button(texts.KEEP_AS_IS, f"b:keep:{c.s.reschedule_of}")])
         c.say(body, layout, edit=c.first(), screen=True)
 
     def _final(self, c: Ctx, text: str, rows: Sequence[Sequence[Button]] = ()) -> None:
@@ -768,7 +791,14 @@ class Conversation:
             return
         *rest, snapshot = c.s.history
         wish, nudged = c.s.wish, c.s.nudged  # a wish dropped later is not brought back
+        on_time = c.s.step in TIME_STEPS
         c.s = Session.model_validate(snapshot)
+        if wish is not None and on_time and c.s.step in TIME_STEPS:
+            # «вечером» typed on the way here goes back with the step, or the earlier screen
+            # (all parts of the day) could not be shown again; the doctor and the day stay
+            earlier = (c.s.wish or Wish()).without("doctor", "day", "noted")
+            wish = wish.without_time().merge(earlier)
+            wish = None if wish.empty else wish
         c.s.history, c.s.wish, c.s.nudged = rest, wish, nudged
         c.back = True
         await self._render_screen(c)
@@ -791,6 +821,14 @@ class Conversation:
     async def _on_text(self, c: Ctx, text: str) -> None:
         if not text:
             return
+        shown = await self._screen_now(c)
+        await self._read_text(c, text, shown)
+        replies = c.turn.replies
+        if len(replies) == 1 and shown and _same_screen(replies[0], shown[-1]):
+            # the same step with no word why leaves the patient guessing
+            replies.insert(0, Reply(texts.SAME_STEP))
+
+    async def _read_text(self, c: Ctx, text: str, shown: Sequence[Reply]) -> None:
         if find_phrase(text, self.clinic.clinic.crisis.phrases):
             await self._crisis(c, text)
             return
@@ -800,7 +838,7 @@ class Conversation:
             return
         step = c.s.step
         c.for_whom = find_audience(text)
-        if step not in MESSAGE_STEPS and await self._press_typed(c, text):
+        if step not in MESSAGE_STEPS and await self._press_typed(c, text, shown):
             return  # a button's label typed as text: «бытовая», «вечер», «14:30», «да»
         if (move := find_navigation(text)) is not None:  # «назад», «в меню», «отмена»
             await self._navigate(c, move)
@@ -819,13 +857,21 @@ class Conversation:
         under_way = step in WIZARD_STEPS and step not in START_STEPS
         if action == "confirm" and under_way:  # «буду» there is an answer, not a confirmation
             action = None
+        if action == "my_bookings" and wants_move(text):
+            await self._move_by_text(c, found.wish)  # «перенеси на завтра»: the day at once
+            return
         if action is not None and action != "book":
-            await self._command(c, action, found.wish)  # the same screen as the menu button
+            # the same screen as the menu button; «отмени запись на завтра» names the day
+            # of the booking, not a wish for a new one
+            await self._command(c, action)
             return
         if await self._on_wish_text(c, found):
             return
         if action == "book":
-            if under_way:  # «запишите меня» while booking: the same step, nothing is lost
+            if step in WIZARD_STEPS:  # «запишите меня» while booking: the same step
+                if c.for_whom and step in START_STEPS:
+                    c.s.for_whom = c.for_whom  # type: ignore[assignment]
+                c.say(texts.GOING_ON)
                 await self._render_screen(c)
             else:  # and the wish named just before, if any
                 self._start_booking(c, self._wish(c))
@@ -841,22 +887,35 @@ class Conversation:
         if c.s.step in WIZARD_STEPS:
             await self._render_screen(c)
 
-    async def _buttons_on_screen(self, c: Ctx) -> list[tuple[str, str]]:
-        """(label, data) of the current step's buttons: the step is drawn on a copy."""
+    async def _screen_now(self, c: Ctx) -> list[Reply]:
+        """The current step's screen as it is shown: the step is drawn on a copy."""
         if c.s.step not in WIZARD_STEPS and c.s.step != "offer_admin":
             return []
         shadow = Ctx(c.db, c.user, c.s.model_copy(deep=True), Turn(), c.now)
+        shadow.had_history, shadow.came_from = bool(c.s.history), _screen_key(c.s)
         await self._repeat_buttons(shadow)
-        return [(b.label, b.data) for r in shadow.turn.replies for row in r.buttons for b in row]
+        return shadow.turn.replies
 
-    async def _press_typed(self, c: Ctx, text: str) -> bool:
+    async def _press_typed(self, c: Ctx, text: str, shown: Sequence[Reply]) -> bool:
         """A button's label typed as text presses the button."""
-        buttons = await self._buttons_on_screen(c)
+        buttons = [(b.label, b.data) for r in shown for row in r.buttons for b in row]
         mode = TYPED_MODE.get(c.s.step, "choice")
         data = typed.pressed(text, buttons, mode=mode) if buttons else None
         if data is None:
             return False
         await self._on_button(c, data)
+        # «ожог» on the groups opens «Рана, ожог, укус», where the same word names one topic:
+        # it is pressed too, so a word leads as far as it can without guessing
+        for _ in range(TOPIC_DEPTH):
+            if not data.startswith("t:") or c.s.step != "topic" or not c.turn.replies:
+                break
+            opened = [(b.label, b.data) for row in c.turn.replies[-1].buttons for b in row]
+            further = typed.pressed(text, opened, mode="topic")
+            if further is None or further == data or not further.startswith("t:"):
+                break
+            c.turn.replies.pop()
+            data = further
+            await self._on_button(c, data)
         return True
 
     async def _navigate(self, c: Ctx, move: str) -> None:
@@ -882,7 +941,8 @@ class Conversation:
             self._reset(c)
             c.say(self.kb.common.goodbye.text, _menu())
         elif c.s.step in WIZARD_STEPS or c.s.reschedule_of is not None:
-            await self._render_screen(c)  # booking is under way: the same step
+            c.say(texts.GOING_ON)  # booking is under way: the same step
+            await self._render_screen(c)
         elif talk == "greeting":
             await self._greet(c)
         elif talk == "thanks":
@@ -894,6 +954,7 @@ class Conversation:
     async def _on_input_text(self, c: Ctx, step: str, text: str, action: str | None) -> None:
         """Age, name, birth date, phone: a command or a question typed there is not the data."""
         if action == "book":  # «запишите меня» on the name step is not a name
+            c.say(texts.GOING_ON)
             await self._render_screen(c)
             return
         if action is not None and action != "confirm":
@@ -913,8 +974,11 @@ class Conversation:
     async def _on_short_text(self, c: Ctx, step: str, text: str) -> bool:
         """«Не знаю», «ближайшее», «другое время», a bare «да» with nothing asked."""
         if step in START_STEPS and is_unsure(text):  # the topics as buttons
+            menu = topics.start_menu(self.kb, c.s.area)
+            if c.s.wizard and step == "topic" and c.s.menu == menu:
+                c.say(texts.NONE_FITS)  # the same buttons again: what to do if none fits
             c.s.wizard = True
-            self._menu_screen(c, topics.start_menu(self.kb, c.s.area))
+            self._menu_screen(c, menu)
             return True
         if step in TIME_STEPS:
             if wants_nearest(text):
@@ -944,21 +1008,22 @@ class Conversation:
         else:
             await self._on_day(c, "other")
 
-    async def _aside(self, c: Ctx, text: str) -> bool:
+    async def _aside(self, c: Ctx, text: str, reading: TextReading | None = None) -> bool:
         """A question typed in the middle of booking: the answer, then the same step again.
 
         True — the text was a question and it is dealt with; False — it was not, and the
-        step reads it as usual.
+        step reads it as usual. ``reading`` — what route already said about the text.
         """
         known = await self._known(c)
-        reading = await read_text(self.assistant, text, known)
+        if reading is None:
+            reading = await read_text(self.assistant, text, known)
         if reading.unavailable:
             return False
         if reading.kind == "crisis":
             await self._crisis(c, text)
             return True
         if reading.kind == "schedule_question":
-            await self._answer_schedule(c, self._read_wish(c, text))
+            await self._answer_schedule(c, self._read_wish(c, text), text)
             return True
         if reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS - {"book"}:
             await self._command(c, reading.action)
@@ -1036,6 +1101,7 @@ class Conversation:
         Nothing here reaches the administrators: only buttons and scenario outcomes do.
         """
         asked = c.s.step == "info"
+        at_start = c.s.wizard and c.s.step in START_STEPS  # step 1 of a booking: it goes on
         reading = await read_text(self.assistant, text, await self._known(c))
         if reading.unavailable:
             if asked:
@@ -1057,11 +1123,20 @@ class Conversation:
             await self._begin(c, reading.scenario_id, reading.facts, find_child_age(text))
         elif reading.kind == "complaint":
             area = reading.area or topics.guess_area(text) or c.s.area
-            self._topics_for(c, area, reading.candidates, reading.clarify or texts.ASK_COMPLAINT)
+            # «ударился, болит сильно» with the area known: the word list names the kinds
+            words = topics.guess_candidates(text) if area else []
+            unclear = reading.clarify or texts.TOPIC_UNCLEAR
+            self._topics_for(c, area, reading.candidates or words, unclear)
         elif reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS:
             await self._command(c, reading.action, self._wish(c))
         elif reading.kind == "schedule_question":  # a wording the word list did not catch
-            await self._answer_schedule(c, self._read_wish(c, text))
+            await self._answer_schedule(c, self._read_wish(c, text), text)
+        elif at_start and await self._aside(c, text, reading):
+            pass  # a question on step 1: answered, the booking and the wish stay
+        elif at_start and reading.kind in ("other_medical", "offtopic"):
+            # not a complaint for the trauma centre: said so, the booking and the wish stay
+            c.say(texts.NOT_OUR_PROFILE if reading.kind == "other_medical" else texts.OFFTOPIC)
+            await self._render_screen(c)
         elif reading.kind == "medical_question":  # no advice and no diagnosis (rule 1)
             self._reset(c)
             book = Button(texts.MENU_BOOK, "m:book", "primary")
@@ -1090,16 +1165,27 @@ class Conversation:
             self._reset(c)
             c.say(texts.OFFTOPIC, _menu())
 
-    def _topics_for(self, c: Ctx, area: str | None, candidates: list[str], ask: str) -> None:
-        """A complaint without a clear scenario: the narrowest fitting topic menu."""
+    def _topics_for(self, c: Ctx, area: str | None, candidates: list[str], unclear: str) -> None:
+        """A complaint without a clear scenario: the narrowest fitting topic menu.
+
+        ``unclear`` — what is missing, in words: DeepSeek's question or a line of ours. A
+        vaguer text never leads back to a wider menu, the same menu is never shown twice
+        without that line, and the reply to a description is never «опишите своими словами».
+        """
+        shown = c.s.menu if c.s.wizard and c.s.step == "topic" else None
         wish, for_whom = c.s.wish, c.for_whom or c.s.for_whom
         self._reset(c)
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
         menu = topics.best_menu(self.kb, area, candidates)
-        if menu is not None:
-            self._menu_screen(c, menu)
+        if shown is not None and topics.stays(self.kb, shown, menu, area, candidates):
+            menu = shown
+        if menu is None:
+            self._complaint_screen(c, unclear)
             return
-        self._complaint_screen(c, ask)
+        menus = self.kb.topics.menus
+        if shown is not None and menus[menu].text == menus[shown].text:
+            c.say(unclear)  # the same question again: why
+        self._menu_screen(c, menu)
 
     async def _crisis(self, c: Ctx, text: str) -> None:
         """Suicide or self-harm: a calm answer with a helpline, a separate note to the admins."""
@@ -1223,8 +1309,8 @@ class Conversation:
 
     async def _on_phone_text(self, c: Ctx, text: str) -> None:
         phone = parse_phone(text)
-        if phone is None:
-            self._ask_contact(c)
+        if phone is None:  # what is wrong, not the same request once more
+            c.say(texts.ASK_CONTACT_AGAIN, ask_contact=True)
             return
         await self._got_phone(c, phone)
 
@@ -1774,7 +1860,7 @@ class Conversation:
             allowed, other_day.without_time(), tz
         )
         if nearest:
-            when = slots_view.nearest_when(nearest[0], today, tz)
+            when = slots_view.nearest_when(nearest[0], self._local(c.now), tz)
             label = texts.NEAREST.format(when=when)
             if wish.doctor:  # «Ярунин: сегодня, 13:00»
                 surname = wish.doctor.split()[0]
@@ -1804,8 +1890,25 @@ class Conversation:
         """«Ближайшее: сегодня, 14:30» — the first time by the 04-09 rules, one tap."""
         if not slots:
             return []
-        label = slots_view.nearest_label(slots[0], self._local(c.now).date(), self.settings.tz)
+        label = slots_view.nearest_label(slots[0], self._local(c.now), self.settings.tz)
         return [[Button(label, f"s:{slots[0].id}", "primary")]]
+
+    def _opened_by_wish(self, c: Ctx) -> bool:
+        """The day on screen was named by the patient: there was no day picker before it."""
+        wish = self._wish(c)
+        return wish is not None and wish.day is not None and wish.day == c.s.day
+
+    def _nearest_that_day(self, c: Ctx, times: Sequence[Slot]) -> list[list[Button]]:
+        """«Ближайшее» of a day the patient named: for a day ahead — from the morning.
+
+        «На воскресенье, когда можно» is not about 00:00 of the night before it; for
+        today the first free time is the nearest whatever the hour.
+        """
+        if c.s.day != self._local(c.now).date():
+            tz = self.settings.tz
+            by_day = [s for s in times if slots_view.local(s, tz).hour >= slots_view.MORNING_FROM]
+            times = by_day or times
+        return self._nearest(c, times)
 
     async def _show_days(self, c: Ctx) -> None:
         free = await self._free(c)
@@ -1879,8 +1982,12 @@ class Conversation:
         buttons = [Button(p.label, f"pr:{p.id}") for p in periods]
         rows = self._time_rows(c)
         # «Ближайшее» belongs to the first screen of the choice: the day picker, or here for a
-        # control visit (no day picker; the 04-09 rules leave no night times)
-        top = self._nearest(c, [s for s in slots if s in shown]) if c.s.anchor else []
+        # control visit or a day the patient named (no day picker before it)
+        top = []
+        if c.s.anchor is not None:
+            top = self._nearest(c, [s for s in slots if s in shown])
+        elif self._opened_by_wish(c):
+            top = self._nearest_that_day(c, shown)
         self._screen(c, "\n".join(lines), buttons, top=top, rows=rows)
 
     async def _show_times(self, c: Ctx) -> None:
@@ -1906,6 +2013,8 @@ class Conversation:
                 wanted=f"{wish.at:%H:%M}", time=f"{slots_view.local(near, tz):%H:%M}"
             )
             top.append([Button(label, f"s:{near.id}", "primary")])
+        elif self._opened_by_wish(c) and len(shown) == len(day_times):
+            top = self._nearest_that_day(c, shown)  # no part-of-the-day screen before this one
         rows = self._time_rows(c)
         self._screen(c, "\n".join(lines), buttons, top=top, rows=rows, columns=TIME_COLUMNS)
 
@@ -2117,9 +2226,7 @@ class Conversation:
             return None
         return booking
 
-    async def _my_bookings(self, c: Ctx, wish: Wish | None = None) -> None:
-        """``wish`` — «перенеси запись на завтра»: «Перенести» opens that day at once."""
-        self._reset(c)
+    async def _upcoming(self, c: Ctx) -> Sequence[Booking]:
         rows = await c.db.scalars(
             select(Booking)
             .where(
@@ -2127,15 +2234,21 @@ class Conversation:
             )
             .order_by(Booking.start_at)
         )
-        bookings = rows.all()
+        return rows.all()
+
+    async def _my_bookings(self, c: Ctx, wish: Wish | None = None) -> None:
+        """``wish`` — a day or a time named with it: «Перенести» opens it at once."""
+        self._reset(c)
+        bookings = await self._upcoming(c)
         if not bookings:
             c.say(texts.MY_EMPTY, _menu())
             return
         title = texts.MY_ONE if len(bookings) == 1 else texts.MY_TITLE
+        note = None  # the booking first, then what «Перенести» will do
         if wish is not None and not wish.empty:
             c.s.wish = wish
             words = render.wish_words(wish, self._local(c.now).date())
-            title += "\n" + texts.WISH_MOVE.format(wish=words)
+            note = texts.WISH_MOVE.format(wish=words)
         if len(bookings) > 1:  # one booking is one message: the title goes into it
             c.say(title)
         for b in bookings:
@@ -2147,8 +2260,10 @@ class Conversation:
                 patient=patient.full_name if patient else "—",
                 doctor=b.doctor,
             )
+            if len(bookings) == 1:
+                item = "\n".join([title, item, *(["", note] if note else [])])
             c.say(
-                item if len(bookings) > 1 else f"{title}\n{item}",
+                item,
                 [
                     [
                         Button(texts.MOVE, f"b:move:{b.id}"),
@@ -2156,6 +2271,50 @@ class Conversation:
                     ]
                 ],
             )
+        if note and len(bookings) > 1:
+            c.say(note)
+
+    async def _move_by_text(self, c: Ctx, wish: Wish) -> None:
+        """«Перенеси на завтра», «отмени и запиши на воскресенье»: the new time at once.
+
+        One booking — its move starts here; several — which one is asked first. The old
+        time is held until a new one is chosen.
+        """
+        bookings = await self._upcoming(c)
+        named = None if wish.empty else wish
+        if len(bookings) == 1:
+            await self._start_move(c, bookings[0], named)
+            return
+        self._reset(c)
+        if not bookings:
+            c.say(texts.MY_EMPTY, _menu())
+            return
+        c.s.wish = named
+        rows = []
+        for b in bookings:
+            patient = await c.db.get(Patient, b.patient_id)
+            start = self._local(b.start_at)
+            label = texts.MOVE_ITEM.format(
+                day=f"{texts.WEEKDAYS_SHORT[start.weekday()]}, {start:%d.%m}",
+                time=f"{start:%H:%M}",
+                patient=short_name(patient.full_name) if patient else "—",
+            )
+            rows.append([Button(label[:LABEL_MAX], f"b:move:{b.id}")])
+        c.say(texts.MOVE_WHICH, [*rows, _home()])
+
+    async def _start_move(self, c: Ctx, booking: Booking, wish: Wish | None) -> None:
+        """«Переношу запись с субботы, 14 ноября, 11:30», then the day and the time."""
+        self._reset(c)
+        c.s.reschedule_of, c.s.wish = booking.id, wish
+        start = self._local(booking.start_at)
+        c.say(
+            texts.MOVING.format(
+                weekday=texts.WEEKDAYS_FROM[start.weekday()],
+                date=render.day_month(start.date()),
+                time=f"{start:%H:%M}",
+            )
+        )
+        await self._offer_time(c)
 
     async def _on_booking_action(self, c: Ctx, value: str) -> None:
         action, _, booking_ref = value.partition(":")
@@ -2166,11 +2325,7 @@ class Conversation:
         start = self._local(booking.start_at)
         when = {"date": render.format_date(start.date()), "time": f"{start:%H:%M}"}
         if action == "move":  # the card or the reminder stays; the day picker comes below
-            wish = self._wish(c)  # «перенеси запись на завтра»
-            self._reset(c)
-            c.s.reschedule_of, c.s.wish = booking.id, wish
-            c.say(texts.MOVE_PICK)
-            await self._offer_time(c)
+            await self._start_move(c, booking, self._wish(c))  # «…на завтра» named before
         elif action == "cancel":
             c.say(
                 texts.CANCEL_ASK.format(**when),
@@ -2187,7 +2342,9 @@ class Conversation:
             self._unpin(c, booking)
             self._reset(c)
             c.say(texts.CANCELLED, _menu())
-        else:
+        else:  # «Нет, оставить», «Оставить как есть»
+            if c.s.reschedule_of is not None:
+                self._reset(c)
             c.say(texts.KEPT, _menu())
 
     async def _reschedule(self, c: Ctx, slot: Slot) -> None:
@@ -2407,8 +2564,14 @@ class Conversation:
         """The wish in a text, read by code before masking and before DeepSeek."""
         step = c.s.step
         context = "time" if step in TIME_STEPS else "free" if step in FREE_STEPS else "strict"
-        today = self._local(c.now).date()
-        found = parse_wish(text, self.clinic.schedule.doctors, today, context=context)  # type: ignore[arg-type]
+        local = self._local(c.now)  # a bare «в 7» is the nearest seven by the clinic's clock
+        found = parse_wish(
+            text,
+            self.clinic.schedule.doctors,
+            local.date(),
+            context=context,  # type: ignore[arg-type]
+            now=local.time(),
+        )
         if not found.wish.empty:
             found.wish.noted = c.now
         return found
@@ -2453,7 +2616,9 @@ class Conversation:
         c.s.wish = None if wish.empty else wish
         if not found.pure:
             return False  # the rest of the message goes on: a complaint, an answer, a question
-        if under_way:
+        if step in WIZARD_STEPS:  # the booking goes on: the same step, now with the wish
+            if c.for_whom and step in START_STEPS:
+                c.s.for_whom = c.for_whom  # type: ignore[assignment]
             await self._render_screen(c)
         else:
             self._start_booking(c, c.s.wish)
@@ -2475,16 +2640,22 @@ class Conversation:
         if action == "book":  # under an answer about the schedule
             self._start_booking(c, wish)
             return
-        if action == "doc":
+        if action in ("doc", "when"):
             doctors = self.clinic.schedule.doctors
             if not ref.isdigit() or int(ref) >= len(doctors):
                 c.say(texts.STALE, [_home()])
                 return
-            wish = (wish or Wish()).merge(Wish(doctor=doctors[int(ref)], noted=c.now))
+            doctor = doctors[int(ref)]
+        if action == "when":  # a doctor under «какие у вас врачи?»: when he sees patients
+            text, asked = await self._doctor_days(c, Wish(doctor=doctor))
+            await self._schedule_answer(c, text, asked, texts.BOOK_THIS_DOCTOR)
+            return
+        if action == "doc":
+            wish = (wish or Wish()).merge(Wish(doctor=doctor, noted=c.now))
             if c.s.step in TIME_STEPS:
                 c.s.wish = wish
                 await self._offer_time(c)
-            elif c.s.step in WIZARD_STEPS and c.s.step not in START_STEPS:
+            elif c.s.step in WIZARD_STEPS:
                 c.s.wish = wish
                 await self._render_screen(c)
             else:
@@ -2505,14 +2676,21 @@ class Conversation:
 
     # --- questions about the schedule: answered by code from the provider ------------------
 
-    async def _answer_schedule(self, c: Ctx, found: Parsed) -> None:
+    async def _answer_schedule(self, c: Ctx, found: Parsed, text: str = "") -> None:
         """«Кто принимает завтра?», «когда работает Ярунин?», «есть время сегодня вечером?».
 
         Under the answer — a booking button that carries what the schedule can give: the
         day, the doctor or the time asked about.
         """
         asked = found.wish
-        question = found.question or ("doctor" if asked.doctor else "free")  # None: by route
+        question = found.question
+        if question is None:  # found by route: a wording the word list did not catch
+            about_doctors = "who" if asked.day else "doctors"
+            by_words = about_doctors if names_doctors(text) else "free"
+            question = "doctor" if asked.doctor else by_words  # type: ignore[assignment]
+        if question == "doctors":
+            await self._doctors(c)
+            return
         if question == "who":
             text, wish = await self._who_is_on(c, asked)
             label = texts.BOOK_THIS_DAY if wish.day else texts.MENU_BOOK
@@ -2522,6 +2700,9 @@ class Conversation:
         else:
             text, wish = await self._free_time(c, asked)
             label = texts.BOOK_THIS_TIME if wish.day or wish.has_time else texts.MENU_BOOK
+        await self._schedule_answer(c, text, wish, label)
+
+    async def _schedule_answer(self, c: Ctx, text: str, wish: Wish, label: str) -> None:
         if c.s.step in WIZARD_STEPS or c.s.reschedule_of is not None:
             c.say(text)  # booking is under way: the answer, then the same step again
             await self._render_screen(c)
@@ -2530,6 +2711,29 @@ class Conversation:
         if not wish.empty:
             c.s.wish = wish.model_copy(update={"noted": c.now})
         c.say(text, [[Button(label, "ws:book", "primary")], _home()])
+
+    async def _doctors(self, c: Ctx) -> None:
+        """«Какие у вас врачи?»: everyone from the data, who is on duty now, each one's days."""
+        doctors = self.clinic.schedule.doctors
+        lines = [texts.DOCTORS_TITLE]
+        for name in doctors:
+            post = self.posts.get(name)
+            lines.append(texts.DOCTORS_LINE.format(name=name, role=post) if post else f"• {name}")
+        today = self._local(c.now).date()
+        slots = await self.schedule.slots(*slots_view.day_bounds(today, self.settings.tz))
+        on_duty = [s.doctor for s in slots if s.start <= c.now < s.end and not s.repeat_cabinet]
+        if on_duty:
+            names = ", ".join(dict.fromkeys(on_duty))
+            lines += ["", texts.DOCTORS_NOW.format(doctors=names)]
+        if c.s.step in WIZARD_STEPS or c.s.reschedule_of is not None:
+            c.say("\n".join(lines))  # booking is under way: the answer, then the same step
+            await self._render_screen(c)
+            return
+        self._reset(c)
+        lines.append(texts.DOCTORS_HINT)
+        each = pack([Button(short_name(d), f"ws:when:{i}") for i, d in enumerate(doctors)])
+        book = Button(texts.MENU_BOOK, "m:book", "primary")
+        c.say("\n".join(lines), [[book], *each, _home()])
 
     async def _shifts_from_now(self, c: Ctx, day: date) -> list[Slot]:
         """Every slot of the day, free or taken; a shift that is over by now is left out."""
@@ -2599,7 +2803,7 @@ class Conversation:
             return "\n".join([text, doctors, texts.FREE_NOTE])
 
         def nearest(slots: Sequence[Slot]) -> str:
-            return slots_view.nearest_label(slots[0], today, tz) + "."
+            return slots_view.nearest_label(slots[0], self._local(c.now), tz) + "."
 
         if asked.day is None:
             if fitting:
@@ -2667,8 +2871,8 @@ class Conversation:
 
     def _is_request(self, c: Ctx, text: str) -> bool:
         """«Запишите…», or a booking with a doctor, a day or a time: not a question."""
-        today = self._local(c.now).date()
-        found = parse_wish(text, self.clinic.schedule.doctors, today)  # type: ignore[arg-type]
+        local = self._local(c.now)
+        found = parse_wish(text, self.clinic.schedule.doctors, local.date(), now=local.time())  # type: ignore[arg-type]
         return is_booking_order(text) or (found.booking and not found.wish.empty)
 
     async def _handoff(

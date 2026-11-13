@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from app.flow.names import FIRST_NAMES, stem_pattern
 from app.flow.words import relative_day
 
 NAME = "[ИМЯ]"
@@ -119,34 +120,7 @@ _SURNAME = re.compile(
 )
 _INTRO = re.compile(rf"(?i:зовут|фамилия|фио|имя)[:\s]+((?:{_L}{_l}+\s*){{1,3}})")
 
-# Common first names and short forms (nominative). Inflected forms are matched by stem.
-_FIRST_NAMES_TEXT = """
-Александр Саша Алексей Алёша Лёша Андрей Антон Артём Артемий Борис Вадим Валентин Валерий
-Василий Вася Виктор Витя Виталий Владимир Вова Володя Владислав Влад Всеволод Вячеслав Георгий
-Гоша Глеб Григорий Гриша Даниил Данил Даня Денис Дима Дмитрий Евгений Женя Егор Иван Ваня Игорь
-Илья Кирилл Константин Костя Лев Лёва Леонид Макар Максим Макс Марк Матвей Михаил Миша Никита
-Николай Коля Олег Павел Паша Пётр Петя Роман Рома Руслан Семён Сергей Серёжа Станислав Степан
-Тимофей Тимур Тимоша Фёдор Федя Юрий Юра Ярослав Ян Анна Аня Алина Алиса Алла Анастасия Настя
-Ангелина Валентина Валерия Лера Варвара Варя Вера Вероника Виктория Вика Галина Галя Дарья Даша
-Диана Ева Евгения Екатерина Катя Елена Лена Елизавета Лиза Жанна Зоя Злата Инна Ирина Ира Карина
-Кира Кристина Ксения Ксюша Лариса Лидия Любовь Люба Людмила Люда Маргарита Рита Марина Мария
-Маша Милана Надежда Надя Наталья Наташа Нина Оксана Ольга Оля Полина Поля Светлана Света София
-Соня Софья Тамара Татьяна Таня Ульяна Юлия Юля Яна
-"""
-_FIRST_NAMES = _FIRST_NAMES_TEXT.split()
-
-
-def _stem_pattern(name: str) -> str:
-    """A name and its case forms: Маша/Маши/Машей, Иван/Ивана/Иваном, Юрий/Юрия."""
-    word = name.replace("ё", "[её]").replace("Ё", "[ЕЁ]")
-    if name[-1] in "ая":
-        return word[:-1] + r"(?:а|я|ы|и|е|у|ю|ой|ей|ою|ею)"
-    if name[-1] in "йь":
-        return word[:-1] + r"(?:й|ь|я|ю|ем|ём|е|и)"
-    return word + r"(?:а|у|ом|ем|е|ы|ой)?"
-
-
-_FIRST_NAME_RE = re.compile(r"\b(?:" + "|".join(_stem_pattern(n) for n in _FIRST_NAMES) + r")\b")
+_FIRST_NAME_RE = re.compile(r"\b(?:" + "|".join(stem_pattern(n) for n in FIRST_NAMES) + r")\b")
 
 
 def _known_names(known: KnownPerson) -> list[tuple[re.Pattern[str], str]]:

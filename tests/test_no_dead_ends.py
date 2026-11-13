@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import select
 
 from app.bot import texts
@@ -107,8 +108,8 @@ async def test_cancel_while_moving_a_booking_keeps_it(make_chat) -> None:
     chat = make_chat()
     await book_dislocation(chat)
     await chat.press(texts.PAYMENT_SELF)
-    await chat.say("хочу перенести")
-    await chat.press(texts.MOVE)
+    await chat.say("хочу перенести")  # one booking: its move starts, the day picker
+    assert chat.text.startswith("Переношу запись с четверга, 12 ноября") and chat.days()
     (before,) = await bookings(chat.conversation.db)
     await chat.say("отмена")
     assert chat.text == texts.KEPT and texts.MENU_BOOK in chat.labels()
@@ -248,3 +249,109 @@ async def test_stale_button_leads_to_the_menu(make_chat) -> None:
     await chat.start()
     await chat.data("q:when:0")  # a button of a question that is not on screen
     assert chat.text == texts.STALE and chat.labels() == [texts.MENU_HOME]
+
+
+# --- the same screen is never shown twice with no word why (13.11, item 2) -----------------
+
+LIMB_TOPICS = "темы «Рука или нога»"
+FALL_TOPICS = "«На что больше похоже?»"
+OTHER_TOPICS = "меню «Другое»"
+DESCRIBE = "«Опишите своими словами»"
+START_SCREENS = (m.COMPLAINT, LIMB_TOPICS, FALL_TOPICS, OTHER_TOPICS, DESCRIBE)
+SCREENS = (*m.WIZARD, *START_SCREENS[1:])
+DESCRIPTIONS = (
+    "ударился болит сильно",
+    "болит рука",
+    "упал вчера, до сих пор болит",
+    "не могу наступить на ногу",
+)
+PHRASES = (*sorted({i.phrase for i in m.INTENTS if not i.phrase.startswith("<")}), *DESCRIPTIONS)
+NOTHING = {"type": "complaint", "area": None, "scenario": None}
+ASKS_BACK = {**NOTHING, "clarify": "Подскажите, пожалуйста, что именно болит?"}
+# what DeepSeek may make of a text it did not understand; () — it does not answer at all
+READINGS = {
+    "жалоба без темы": (NOTHING,),
+    "жалоба и встречный вопрос": (ASKS_BACK,),
+    "не по теме": ({"type": "offtopic"},),
+    "не наш профиль": ({"type": "other_medical"},),
+    "вопрос без ответа в справке": ({"type": "clinic_question"}, {"found": False}),
+    "DeepSeek не отвечает": (),
+}
+COMPLAINT_READINGS = ("жалоба без темы", "жалоба и встречный вопрос", "DeepSeek не отвечает")
+
+
+async def to_screen(chat: Chat, screen: str) -> None:
+    if screen not in START_SCREENS[1:]:
+        await to_step(chat, screen)
+        return
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    if screen in (LIMB_TOPICS, FALL_TOPICS):
+        await chat.press("Рука или нога")
+    if screen == FALL_TOPICS:  # as after «подвернул ногу»
+        chat._take(await chat.conversation.button(chat.user, "ex:ankle"))
+    if screen in (OTHER_TOPICS, DESCRIBE):
+        await chat.press("Другое")
+    if screen == DESCRIBE:
+        await chat.press("Опишите своими словами")
+
+
+async def put_back(chat: Chat, saved: dict) -> None:
+    async with chat.conversation.db() as s:
+        (await s.get(User, chat.user.id)).session = saved
+        await s.commit()
+
+
+@pytest.mark.parametrize("reading", READINGS)
+@pytest.mark.parametrize("screen", SCREENS)
+async def test_same_screen_is_never_repeated_without_a_line(
+    make_chat, kb: KnowledgeBase, screen: str, reading: str
+) -> None:
+    """Every phrase on every booking screen, whatever DeepSeek makes of it."""
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await to_screen(chat, screen)
+    shown, saved = chat.replies[-1], await session(chat)
+    assert saved["step"] in ("complaint", "topic", "describe") or screen in m.WIZARD
+    for phrase in PHRASES:
+        await put_back(chat, saved)
+        fake.replies = list(READINGS[reading])
+        await chat.say(phrase)
+        where = f"«{phrase}» на шаге {screen}, {reading}:\n{chat.text}"
+        assert chat.replies and chat.replies[-1].text.strip(), where
+        repeated = [r for r in chat.replies if (r.text, r.buttons) == (shown.text, shown.buttons)]
+        assert len(repeated) <= 1, where
+        if repeated:  # the same screen again: a line before it says why
+            assert chat.replies[0] is not repeated[0] and chat.replies[0].text.strip(), where
+
+
+@pytest.mark.parametrize("reading", READINGS)
+@pytest.mark.parametrize("screen", START_SCREENS)
+async def test_description_on_step_1_is_not_answered_with_describe_it(
+    make_chat, kb: KnowledgeBase, screen: str, reading: str
+) -> None:
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say("запишите к Ярунину на завтра")  # the wish in the header of step 1
+    for label in {
+        m.COMPLAINT: (),
+        LIMB_TOPICS: ("Рука или нога",),
+        FALL_TOPICS: ("Рука или нога", "упал"),
+        OTHER_TOPICS: ("Другое",),
+        DESCRIBE: ("Другое", "Опишите своими словами"),
+    }[screen]:
+        await (chat.say(label) if label.islower() else chat.press(label))
+    saved = await session(chat)
+    saved_wish = saved["wish"]
+    for phrase in DESCRIPTIONS:
+        await put_back(chat, saved)
+        fake.replies = list(READINGS[reading])
+        await chat.say(phrase)
+        where = f"«{phrase}» на шаге {screen}, {reading}:\n{chat.text}"
+        now = await session(chat)
+        assert now["wizard"] and now["step"] in ("complaint", "topic", "describe"), where
+        assert now["wish"] and now["wish"]["doctor"] == saved_wish["doctor"], where
+        assert "Пожелание: к Ярунину А. А., завтра" in chat.text and chat.buttons(), where
+        if reading in COMPLAINT_READINGS:  # read as a complaint: never «опишите своими словами»
+            assert "своими словами" not in chat.text.lower(), where

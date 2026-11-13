@@ -61,7 +61,10 @@ CANDIDATE_WORDS: dict[str, tuple[str, ...]] = {
     "head_trauma": (r"сотряс\w*",),
 }  # fmt: skip
 # Twisting a joint can be any of these three (the «Упал, ударился, подвернул» menu).
-SPRAIN_WORDS = (r"подвернул\w*", r"подвернул\w* ног\w*", r"потянул\w*", r"ушиб\w*", r"упал\w*")
+SPRAIN_WORDS = (
+    r"подвернул\w*", r"подвернул\w* ног\w*", r"потянул\w*", r"ушиб\w*", r"упал\w*",
+    r"ударил\w*", r"ударен\w*",
+)  # fmt: skip
 FALL_SCENARIOS = ("dislocation", "fracture", "ligament_rupture")
 
 
@@ -154,6 +157,37 @@ def best_menu(kb: KnowledgeBase, area: str | None, candidates: list[str]) -> str
     if best == kb.topics.root and not area:
         return None
     return best
+
+
+def _menus_under(kb: KnowledgeBase, menu_id: str, area: str | None) -> set[str]:
+    found: set[str] = set()
+    stack = [menu_id]
+    while stack:
+        for item in visible(kb, stack.pop(), area):
+            if item.menu is not None and item.menu not in found:
+                found.add(item.menu)
+                stack.append(item.menu)
+    return found
+
+
+def stays(
+    kb: KnowledgeBase, shown: str, found: str | None, area: str | None, candidates: list[str]
+) -> bool:
+    """The topic menu on screen stays after a text that named no topic.
+
+    It stays when the text gave nothing narrower and the menu still offers what the text
+    may be about: «болит рука» on «На что больше похоже?» does not lead back to «Что
+    случилось с рукой или ногой?». «Другое» offers no topics, so it never stays.
+    """
+    under = scenarios_under(kb, shown, area)
+    if not under:
+        return False
+    if found == shown:
+        return True
+    wanted = {c for c in candidates if c in kb.scenarios and kb.scenario(c).fits(area)}
+    if wanted and not wanted & under:
+        return False  # the text is about something this menu does not offer
+    return found is None or shown in _menus_under(kb, found, area)
 
 
 def area_facts(kb: KnowledgeBase, scenario_id: str, area: str | None) -> dict[str, FactValue]:

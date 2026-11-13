@@ -39,6 +39,8 @@ PERIOD_IDS = frozenset(p.id for p in PERIODS)
 DAYS_PER_PAGE = 6
 NEAR_WINDOW_TIMES = 8  # sick leave open: «любое свободное время, близкое к» the windows
 NOT_BEFORE = time(6)  # «до 12» is about the morning, not the night before it
+EVENING_FROM = 18  # from this hour a time before the next morning is «сегодня ночью»
+MORNING_FROM = 8
 
 
 def local(slot: Slot, tz: ZoneInfo) -> datetime:
@@ -109,19 +111,25 @@ def in_period(slots: Sequence[Slot], period: str | None, tz: ZoneInfo) -> list[S
     return [s for s in slots if period_of(local(s, tz).time()).id == period]
 
 
-def nearest_when(slot: Slot, today: date, tz: ZoneInfo) -> str:
-    """«сегодня, 14:30» / «сб, 14.11, 09:00»."""
+def nearest_when(slot: Slot, now: datetime, tz: ZoneInfo) -> str:
+    """«сегодня, 14:30» / «сегодня ночью, 01:00» / «сб, 14.11, 09:00». ``now`` — clinic time.
+
+    Late in the evening «завтра, 01:00» reads as the night after next: a time before the
+    morning of the next day is «сегодня ночью».
+    """
     start = local(slot, tz)
-    if start.date() == today:
+    ahead = (start.date() - now.date()).days
+    if ahead == 0:
         return f"{texts.TODAY.lower()}, {start:%H:%M}"
-    if (start.date() - today).days == 1:
-        return f"{texts.TOMORROW.lower()}, {start:%H:%M}"
+    if ahead == 1:
+        tonight = now.hour >= EVENING_FROM and start.hour < MORNING_FROM
+        return f"{texts.TONIGHT if tonight else texts.TOMORROW.lower()}, {start:%H:%M}"
     return f"{texts.WEEKDAYS_SHORT[start.weekday()].lower()}, {start:%d.%m, %H:%M}"
 
 
-def nearest_label(slot: Slot, today: date, tz: ZoneInfo) -> str:
+def nearest_label(slot: Slot, now: datetime, tz: ZoneInfo) -> str:
     """«Ближайшее: сегодня, 14:30» / «Ближайшее: сб, 14.11, 09:00»."""
-    return texts.NEAREST.format(when=nearest_when(slot, today, tz))
+    return texts.NEAREST.format(when=nearest_when(slot, now, tz))
 
 
 def _shift_span(moment: datetime, config: ScheduleConfig) -> str:
