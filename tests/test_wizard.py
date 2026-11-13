@@ -110,16 +110,26 @@ async def test_list_button_keeps_to_the_area(make_chat, kb: KnowledgeBase) -> No
     assert not set(chat.labels()) & (HEAD_TOPICS | TORSO_TOPICS)
 
 
+GROUPS = [
+    "Рука или нога", "Рана, ожог, укус", "Голова, лицо, глаза, уши", "Шея, спина, грудь, живот",
+    "Уже лечусь у вас", "Ребёнок до 6 месяцев", "Другое",
+]  # fmt: skip
+
+
 async def test_topic_buttons_are_about_what_happened(make_chat) -> None:
     chat = make_chat()
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)  # no complaint yet: the five groups
+    await chat.press(texts.TOPIC_LIST)  # no complaint yet: the groups
+    assert chat.labels() == [*GROUPS, texts.BACK]
+    await chat.press("Рука или нога")  # from the groups: every topic one press away
     assert chat.labels() == [
-        "Рука или нога", "Рана, ожог, укус", "Голова, лицо, глаза, уши", "Уже лечусь у вас",
-        "Другое", texts.BACK,
+        "Похоже на вывих", "Похоже на перелом", "Растяжение или разрыв связок",
+        "Наложить гипс", "Снять гипс", "Ортез", "Скотчкаст", "Другое", texts.BACK,
     ]  # fmt: skip
-    await chat.press("Рука или нога")
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await chat.say("болит рука")  # after a complaint: what happened, then the details
     assert chat.labels() == [
         "Упал, ударился, подвернул", "Порез, рана", "Ожог", "Укус животного",
         "Гипс, ортез, скотчкаст", "Уже лечусь у вас", "Другое", texts.BACK,
@@ -141,9 +151,7 @@ async def test_unsure_goes_the_dislocation_way_for_now(make_chat) -> None:
     chat = make_chat()
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Рука или нога")
-    await chat.press("Упал, ударился, подвернул")
+    await chat.say("подвернул ногу")  # no LLM: the word list → «На что больше похоже?»
     await chat.press("Не знаю")
     await chat.press("Для себя")
     assert "Как получена травма?" in chat.text
@@ -164,7 +172,9 @@ def test_word_list_finds_the_area() -> None:
     assert topics.guess_area("подвернул ногу") == "limb"
     assert topics.guess_area("обжёг палец") == "limb"
     assert topics.guess_area("ударился головой") == "head"
-    assert topics.guess_area("потянул спину") == "torso"
+    assert topics.guess_area("потянул спину") == "neck_back"
+    assert topics.guess_area("шея болит") == "neck_back"
+    assert topics.guess_area("ударился грудью") == "chest_abdomen"
     assert topics.guess_area("грудничок упал с дивана") is None  # a baby, not the chest
     assert topics.guess_area("ударился головой и болит колено") is None  # two areas
 
@@ -182,7 +192,9 @@ def test_every_scenario_has_body_areas(kb: KnowledgeBase) -> None:
         assert sc.body_areas, sc.id
     assert kb.scenario("dislocation").body_areas == ("limb",)
     assert kb.scenario("head_trauma").body_areas == ("head",)
-    assert kb.scenario("neurology").body_areas == ("torso",)
+    assert kb.scenario("neurology").body_areas == ("neck_back",)
+    assert kb.scenario("chest_abdomen").body_areas == ("chest_abdomen",)
+    assert kb.scenario("genital_trauma").body_areas == ("genital",)
 
 
 # --- one message, «Шаг N из M», «Назад» ---------------------------------------------------
@@ -204,7 +216,6 @@ async def test_buttons_replace_the_message_with_the_next_step(make_chat) -> None
 async def to_topic_after_book(chat: Chat) -> None:
     await chat.press(texts.TOPIC_LIST)
     await chat.press("Рука или нога")
-    await chat.press("Упал, ударился, подвернул")
     await chat.press("Похоже на вывих")
 
 
@@ -378,16 +389,15 @@ async def test_no_two_column_row_has_a_long_label(make_chat, kb: KnowledgeBase) 
     turns = []
     await chat.press(texts.TOPIC_LIST)
     turns.append(chat.turn)
-    for group in ("Рука или нога", "Рана, ожог, укус", "Голова, лицо, глаза, уши"):
+    for group in GROUPS[:5]:
         await chat.press(group)
         turns.append(chat.turn)
         await chat.press(texts.BACK)
-    for path in (("Рука или нога", "Упал, ударился, подвернул"), ("Уже лечусь у вас",)):
-        for label in path:
-            await chat.press(label)
-            turns.append(chat.turn)
-        for _ in path:
-            await chat.press(texts.BACK)
+    for complaint in ("болит рука", "подвернул ногу", "шея болит", "ударился головой"):
+        await chat.start()
+        await chat.press(texts.MENU_BOOK)
+        await chat.say(complaint)
+        turns.append(chat.turn)
     for turn in turns:
         for reply in turn.replies:
             for row in reply.buttons:
@@ -628,3 +638,93 @@ def test_bot_profile(clinic) -> None:
     assert names == ["start", "book", "my", "ask", "admin", "menu", "forget", "demo_next"]
     no_demo = Settings(_env_file=None, demo_mode=False)
     assert "demo_next" not in [c.command for c in bot_commands(no_demo)]
+
+
+# --- finer areas and the groups (follow-up 2–3) ---------------------------------------------
+
+NECK_TOPICS = [
+    "Потянул шею или спину", "Порез, рана", "Ожог", "Укус животного", "Уже лечусь у вас",
+    "Другое",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("llm", [True, False])
+async def test_a_sore_neck_shows_only_neck_and_back_topics(
+    make_chat, kb: KnowledgeBase, llm: bool
+) -> None:
+    reply = route("neck_back", "neurology")
+    chat = make_chat(assistant=FakeDeepSeek(reply).assistant(kb) if llm else None)
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await chat.say("шея болит")
+    assert chat.labels() == [*NECK_TOPICS, texts.BACK]
+    labels = await every_topic_label(chat)
+    assert "Травма половых органов" not in labels and "Удар в грудь или живот" not in labels
+
+
+@pytest.mark.parametrize(
+    ("text", "area", "first"),
+    [("ударился грудью", "chest_abdomen", "Удар в грудь или живот"),
+     ("травма мошонки", "genital", "Травма половых органов")],
+)  # fmt: skip
+async def test_chest_and_genital_areas_have_their_own_topics(
+    make_chat, text: str, area: str, first: str
+) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await chat.say(text)
+    assert chat.labels()[0] == first
+    assert "Потянул шею или спину" not in chat.labels()
+
+
+def _presses_to_each_scenario(kb: KnowledgeBase) -> dict[str, int]:
+    """Fewest presses from the groups menu, never through «Другое» or its actions."""
+    found: dict[str, int] = {}
+    for group in topics.visible(kb, kb.topics.root, None):
+        if group.menu == "other":
+            continue
+        if group.scenario:
+            found[group.scenario] = min(found.get(group.scenario, 9), 1)
+            continue
+        for item in topics.visible(kb, group.menu, group.area):
+            if item.scenario:
+                found[item.scenario] = min(found.get(item.scenario, 9), 2)
+    return found
+
+
+def test_every_scenario_is_two_presses_from_the_groups(kb: KnowledgeBase) -> None:
+    presses = _presses_to_each_scenario(kb)
+    assert set(presses) == set(kb.scenarios), set(kb.scenarios) - set(presses)
+    assert max(presses.values()) <= 2
+    assert "Шея, спина, грудь, живот" in [i.label for i in kb.topics.menus["root"].items]
+
+
+async def test_two_presses_really_start_each_scenario(make_chat, kb: KnowledgeBase) -> None:
+    chat = make_chat()
+    started: set[str] = set()
+    for group in topics.visible(kb, kb.topics.root, None):
+        if group.menu == "other":
+            continue
+        items = [group] if group.scenario else topics.visible(kb, group.menu, group.area)
+        for item in items:
+            if not item.scenario:
+                continue
+            await chat.start()
+            await chat.press(texts.MENU_BOOK)
+            await chat.press(texts.TOPIC_LIST)
+            await chat.press(group.label)
+            if item is not group:
+                await chat.press(item.label)
+            session = await _session(chat)  # the scenario started (who it is for, or its outcome)
+            assert session["dialog"]["scenario_id"] or session["pending_scenario"], item.label
+            started.add(item.scenario)
+    assert started == set(kb.scenarios)
+
+
+async def _session(chat: Chat) -> dict:
+    from app.db.models import User
+
+    async with chat.conversation.db() as s:
+        user = await s.get(User, chat.user.id)
+        return user.session

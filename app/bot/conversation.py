@@ -172,7 +172,7 @@ class Session(BaseModel):
     dialog: DialogState = DialogState()
     wizard: bool = False  # booking started from «Записаться» or a complaint: «Шаг N из 5»
     menu: str | None = None  # topic menu on screen
-    area: str | None = None  # body area from the complaint: limb / head / torso
+    area: str | None = None  # body area from the complaint (app/flow/schema.py, Area)
     pending_scenario: str | None = None
     pending_facts: dict[str, FactValue] = {}
     child_age: int | None = None

@@ -23,11 +23,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Audience = Literal["child", "adult"]
 AUDIENCES: tuple[Audience, ...] = ("child", "adult")
-# Body areas for choosing topics by context (part C): limb — arm, leg; head — head, face,
-# eyes, ears; torso — chest, abdomen, back, neck, genitals; any — not tied to one area.
-Area = Literal["limb", "head", "torso"]
-AREAS: tuple[Area, ...] = ("limb", "head", "torso")
-BodyArea = Literal["limb", "head", "torso", "any"]
+# Body areas for choosing topics by context: limb — arm, leg; head — head, face, eyes, ears;
+# neck_back — neck, back, lower back; chest_abdomen — chest, abdomen; genital — genitals;
+# any — not tied to one area.
+Area = Literal["limb", "head", "neck_back", "chest_abdomen", "genital"]
+AREAS: tuple[Area, ...] = ("limb", "head", "neck_back", "chest_abdomen", "genital")
+BodyArea = Literal["limb", "head", "neck_back", "chest_abdomen", "genital", "any"]
 # Facts known before any scenario question is asked.
 CONTEXT_FACTS = frozenset({"audience"})
 

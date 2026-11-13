@@ -17,12 +17,8 @@ from tests.fake_deepseek import FakeDeepSeek
 
 
 async def to_dislocation(chat: Chat) -> None:
-    """Menu → «Выбрать из списка» → «Рука или нога» → «Упал, ударился, подвернул» → вывих."""
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Рука или нога")
-    await chat.press("Упал, ударился, подвернул")
-    await chat.press("Похоже на вывих")
+    """Menu → «Выбрать из списка» → «Рука или нога» → «Похоже на вывих»."""
+    await to_topic(chat, "Вывих")
 
 
 async def book_dislocation(chat: Chat, *, day: str = "Сегодня") -> None:

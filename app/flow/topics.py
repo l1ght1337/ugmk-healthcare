@@ -1,7 +1,8 @@
 """Topics by context (part C): what the patient already said narrows the buttons.
 
-* the body area (limb / head / torso) comes from DeepSeek (route) or, without it, from a
-  word list below; once known, topics of other areas are never shown;
+* the body area (limb, head, neck_back, chest_abdomen, genital) comes from DeepSeek
+  (route) or, without it, from a word list below; once known, topics of other areas are
+  never shown;
 * route also names 3–5 candidate scenarios: the bot opens the narrowest menu that holds
   them all (e.g. «подвернул ногу» → «Похоже на вывих / перелом / связки / Не знаю»).
 
@@ -31,11 +32,15 @@ AREA_WORDS: dict[Area, tuple[str, ...]] = {
         r"лоб", r"лб[ау]", r"щек[аиу]", r"бров\w*", r"висок", r"виск\w*", r"затыл\w*",
         r"макушк\w*", r"сотряс\w*", r"горл[оау]",
     ),
-    "torso": (
-        r"груд[ьи]", r"грудью", r"грудн\w+ клетк\w*", r"живот\w*", r"спин[аыеуой]",
-        r"спиной", r"ше[яиюей]", r"поясниц\w*", r"ребр\w*", r"ребер", r"копчик\w*",
-        r"позвоноч\w*", r"бок[уе]?", r"пах\w*", r"половы\w*", r"мошонк\w*",
+    "neck_back": (
+        r"ше[яиюей]", r"шейн\w*", r"спин[аыеуой]", r"спиной", r"поясниц\w*", r"позвоноч\w*",
+        r"копчик\w*", r"лопатк\w*",
     ),
+    "chest_abdomen": (
+        r"груд[ьи]", r"грудью", r"грудн\w+ клетк\w*", r"живот\w*", r"ребр\w*", r"ребер",
+        r"бок[уе]?",
+    ),
+    "genital": (r"половы\w*", r"мошонк\w*", r"яичк\w*"),
 }  # fmt: skip
 
 # Topic words → candidate scenarios when DeepSeek is not available.

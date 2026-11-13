@@ -5,7 +5,7 @@
   "title": "Неврология: защемление, потянул шею, спину",
   "menu_label": "Защемление, потянул шею, спину",
   "kind": "routing",
-  "body_areas": ["torso"],
+  "body_areas": ["neck_back"],
   "router_hint": "Неврология: защемление, потянул шею, спину и т. д.",
   "entry": [
     {"when": {"audience": "child"}, "outcome": "child"},

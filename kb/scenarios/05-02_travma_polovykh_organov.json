@@ -5,7 +5,7 @@
   "title": "Травма половых органов",
   "menu_label": "Травма половых органов",
   "kind": "routing",
-  "body_areas": ["torso"],
+  "body_areas": ["genital"],
   "router_hint": "Травма половых органов",
   "entry": [
     {"when": {"audience": "child"}, "outcome": "child"},

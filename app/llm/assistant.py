@@ -21,7 +21,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.config import get_settings
 from app.flow.loader import KnowledgeBase
-from app.flow.schema import FactValue, Question, Scenario
+from app.flow.schema import AREAS, FactValue, Question, Scenario
 from app.llm.catalogue import render_catalogue, render_info
 from app.llm.client import DeepSeekClient, LLMUnavailable
 from app.llm.guards import grounded, grounded_prefix, safe_clarify
@@ -40,7 +40,7 @@ class _Out(BaseModel):
 
 
 TextKind = Literal["complaint", "clinic_question", "other_medical", "offtopic", "crisis"]
-Area = Literal["limb", "head", "torso"]
+Area = Literal["limb", "head", "neck_back", "chest_abdomen", "genital"]
 
 
 class RouteOut(_Out):
@@ -57,7 +57,7 @@ class RouteOut(_Out):
     @classmethod
     def _unknown_area(cls, value: object) -> object:
         """«leg», «hand», "" — not worth a retry: the topic menu simply is not narrowed."""
-        return value if value in ("limb", "head", "torso") else None
+        return value if value in AREAS else None
 
     @field_validator("candidates", mode="before")
     @classmethod
