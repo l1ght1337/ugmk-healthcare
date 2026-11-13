@@ -57,6 +57,7 @@ from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import FactValue, Question, Scenario
 from app.flow.words import days as days_word
 from app.flow.words import format_age
+from app.flow.words import years as years_word
 from app.llm.assistant import Assistant
 from app.llm.masking import KnownPerson
 from app.llm.reader import read_answer, read_question, read_text
@@ -114,6 +115,8 @@ class AdminPost:
     handoff_id: int | None = None  # set: an administrator's reply goes back to the patient
     reply_to: int | None = None  # admin chat message to reply to (a thread)
     buttons: tuple[tuple[Button, ...], ...] = ()
+    booking_id: int | None = None  # a booking card: its message id is remembered
+    edit_message: int | None = None  # replace this admin chat message instead of sending
 
 
 @dataclass
@@ -328,7 +331,10 @@ class Conversation:
         async with self.db() as db:
             link = await db.get(AdminMessage, message_id)
             if link is None:
-                return None
+                card = await db.scalar(
+                    select(Booking.id).where(Booking.admin_message_id == message_id)
+                )
+                return texts.ADMIN_CARD_NOTE if card is not None else None
             handoff = await db.get(Handoff, link.handoff_id)
             user = await db.get(User, handoff.user_id) if handoff else None
             if handoff is None or user is None:
@@ -353,6 +359,54 @@ class Conversation:
             handoff.status, handoff.closed_at, handoff.closed_by = "closed", self.clock(), by[:128]
             await db.commit()
             return True
+
+    async def register_booking_card(self, booking_id: int, message_id: int) -> None:
+        async with self.db() as db:
+            booking = await db.get(Booking, booking_id)
+            if booking is not None:
+                booking.admin_message_id = message_id
+                await db.commit()
+
+    async def admin_today(self) -> str:
+        """/today in the admin chat: active bookings for today and tomorrow (clinic time)."""
+        if not self.settings.bookings_to_admin_chat:
+            return texts.TODAY_OFF
+        now = self._local(self.clock())
+        start = datetime.combine(now.date(), datetime.min.time(), tzinfo=self.settings.tz)
+        days = f"{render.format_date(now.date())} и {render.format_date(now.date() + timedelta(1))}"
+        async with self.db() as db:
+            rows = (
+                await db.scalars(
+                    select(Booking)
+                    .where(
+                        Booking.status == "active",
+                        Booking.start_at >= start,
+                        Booking.start_at < start + timedelta(days=2),
+                    )
+                    .order_by(Booking.start_at)
+                )
+            ).all()
+            if not rows:
+                return texts.TODAY_EMPTY.format(days=days)
+            lines = [texts.TODAY_TITLE.format(days=days)]
+            shown_day = None
+            for b in rows:
+                at = self._local(b.start_at)
+                if at.date() != shown_day:
+                    shown_day = at.date()
+                    lines.append(texts.TODAY_DAY.format(date=render.format_date(shown_day)))
+                patient = await db.get(Patient, b.patient_id)
+                lines.append(
+                    texts.TODAY_ITEM.format(
+                        time=f"{at:%H:%M}",
+                        number=b.id,
+                        patient=self._patient_line(patient, now.date()) if patient else "—",
+                        topic=self._topic(b),
+                        visit=texts.VISIT_KIND.get(b.visit, b.visit),
+                        doctor=b.doctor,
+                    )
+                )
+            return "\n".join(lines)
 
     async def register_admin_message(self, message_id: int, handoff_id: int) -> None:
         async with self.db() as db:
@@ -977,6 +1031,9 @@ class Conversation:
         booking = await c.db.get(Booking, c.s.booking_id) if c.s.booking_id else None
         if booking is not None and booking.user_id == c.user.id:
             booking.payment = "insurance" if value == "ins" else "self"
+            if self._cards_on() and booking.admin_message_id:  # the card shows the payment
+                text = await self._admin_booking(c, booking)
+                c.turn.admin.append(AdminPost(text, edit_message=booking.admin_message_id))
         self._reset(c)
         c.say(f"{texts.THANKS} {self.kb.common.more_help.text}", _menu())
 
@@ -1313,6 +1370,9 @@ class Conversation:
         c.db.add(booking)
         await c.db.flush()
         self._plan_reminders(c, booking)
+        if self._cards_on():
+            text = await self._admin_booking(c, booking)
+            c.turn.admin.append(AdminPost(text, booking_id=booking.id))
         c.say(self.kb.common.identify_thanks.text, remove_keyboard=True)
         card = render.booking_card(
             self.kb,
@@ -1344,6 +1404,48 @@ class Conversation:
                 ]
             ],
         )
+
+    # --- bookings in the admin chat (BOOKINGS_TO_ADMIN_CHAT, for the test) --------------------
+
+    def _cards_on(self) -> bool:
+        return self.settings.bookings_to_admin_chat and bool(self.settings.admin_chat_id)
+
+    def _topic(self, booking: Booking) -> str:
+        scenario = self.kb.scenarios.get(booking.scenario_id)
+        return f"{scenario.number} {scenario.title}" if scenario else booking.scenario_id
+
+    def _patient_line(self, patient: Patient, today: date) -> str:
+        months = age_in_months(patient.birth_date, today)
+        age = format_age(months) if months < 36 else years_word(months // 12)  # months: babies
+        who = f"ребёнок, {age}" if patient.audience == "child" else f"взрослый, {age}"
+        return texts.PATIENT_LINE.format(
+            name=patient.full_name, birth=f"{patient.birth_date:%d.%m.%Y}", who=who
+        )
+
+    async def _admin_booking(self, c: Ctx, booking: Booking) -> str:
+        """The booking card for the admin chat: when, doctor, topic, patient, phone, payment."""
+        patient = await c.db.get(Patient, booking.patient_id)
+        today = self._local(c.now).date()
+        telegram = c.user.display_name or ""
+        if c.user.username:
+            telegram += f" @{c.user.username}"
+        return texts.ADMIN_BOOKING.format(
+            number=booking.id,
+            demo=texts.ADMIN_BOOKING_DEMO if booking.demo else "",
+            when=render.format_day_time(self._local(booking.start_at)),
+            doctor=booking.doctor,
+            visit=texts.VISIT_KIND.get(booking.visit, booking.visit),
+            topic=self._topic(booking),
+            patient=self._patient_line(patient, today) if patient else "—",
+            phone=c.user.phone or "—",
+            payment=texts.PAYMENT_KIND.get(booking.payment, booking.payment),
+            telegram=f"{telegram.strip() or '—'} (id {c.user.id})",
+        )
+
+    def _booking_note(self, c: Ctx, booking: Booking, text: str) -> None:
+        """A change to a booking, as a reply to its card in the admin chat."""
+        if self._cards_on() and booking.admin_message_id:
+            c.turn.admin.append(AdminPost(text, reply_to=booking.admin_message_id))
 
     def _plan_reminders(self, c: Ctx, booking: Booking) -> None:
         for kind, due in plan(booking.start_at, booking.end_at, c.now):
@@ -1423,6 +1525,7 @@ class Conversation:
             await self.schedule.release(booking.slot_id)
             booking.status = "cancelled"
             await self._cancel_reminders(c, booking)
+            self._booking_note(c, booking, texts.ADMIN_CANCELLED)
             self._reset(c)
             c.say(texts.CANCELLED, _menu())
         else:
@@ -1444,6 +1547,8 @@ class Conversation:
         booking.slot_id, booking.start_at, booking.end_at = slot.id, slot.start, slot.end
         booking.doctor, booking.cabinet, booking.confirmed_at = slot.doctor, slot.cabinet, None
         self._plan_reminders(c, booking)
+        when = render.format_day_time(self._local(slot.start))
+        self._booking_note(c, booking, texts.ADMIN_MOVED.format(when=when, doctor=slot.doctor))
         self._reset(c)
         start = self._local(slot.start)
         text = texts.MOVED.format(
@@ -1543,6 +1648,8 @@ class Conversation:
             c.say(texts.BOOKING_GONE)
             return
         booking.survey = "ok" if answer == "ok" else "question"
+        survey = texts.ADMIN_FEELING if booking.cycle >= 2 else texts.ADMIN_SURVEY
+        self._booking_note(c, booking, survey[booking.survey])
         if answer == "ok":
             if booking.cycle >= 2:
                 self._rate_prompt(c, booking)
@@ -1603,6 +1710,7 @@ class Conversation:
         booking = await self._user_booking(c, ref)
         if booking is not None and score.isdigit() and 1 <= int(score) <= 5:
             booking.rating = int(score)
+            self._booking_note(c, booking, texts.ADMIN_RATING.format(score=score))
         self._reset(c)
         c.say(f"{texts.RATED} {self.kb.common.more_help.text}", _menu())
 
@@ -1814,6 +1922,7 @@ class Conversation:
             return
         user_id = c.user.id
         bookings = (await c.db.scalars(select(Booking).where(Booking.user_id == user_id))).all()
+        cards = [b.id for b in bookings if b.admin_message_id]
         for b in bookings:
             if b.status == "active":
                 await self.schedule.release(b.slot_id)
@@ -1832,9 +1941,13 @@ class Conversation:
         await c.db.execute(delete(Patient).where(Patient.user_id == user_id))
         await c.db.delete(c.user)
         c.deleted = True
-        if self.settings.admin_chat_id and handoff_ids:
+        items = []
+        if handoff_ids:
             numbers = ", ".join(f"№ {n}" for n in handoff_ids)
-            c.turn.admin.append(
-                AdminPost(texts.FORGET_ADMIN.format(user=user_id, handoffs=numbers))
-            )
+            items.append(texts.FORGET_HANDOFFS.format(numbers=numbers))
+        if cards:
+            items.append(texts.FORGET_BOOKINGS.format(numbers=", ".join(f"№ {n}" for n in cards)))
+        if self.settings.admin_chat_id and items:
+            text = texts.FORGET_ADMIN.format(user=user_id, items="; ".join(items))
+            c.turn.admin.append(AdminPost(text))
         c.say(texts.FORGOTTEN, _menu())

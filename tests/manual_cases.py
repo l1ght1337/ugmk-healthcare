@@ -369,7 +369,8 @@ def render_doc() -> str:
         "",
         "## Подготовка",
         "1. В `.env`: `DEMO_MODE=true`, `SCHEDULE_PROVIDER=mock`, Ваш Telegram ID в "
-        "`ALLOWED_USER_IDS`, бот добавлен в группу `ADMIN_CHAT_ID`.",
+        "`ALLOWED_USER_IDS`, бот добавлен в группу `ADMIN_CHAT_ID`. Чтобы видеть записи в "
+        "группе, поставьте `BOOKINGS_TO_ADMIN_CHAT=true` (карточки и `/today`).",
         "2. Запустите бота: `uv run python -m app`.",
         "3. Отправьте боту /forget → «Да, удалить», чтобы начать с чистого листа.",
         "4. Проходите кейсы по порядку одним аккаунтом: согласие и телефон даются в кейсе 1, "

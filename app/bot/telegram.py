@@ -172,6 +172,14 @@ class Delivery:
             if self.admin_chat_id is None:
                 log.error("ADMIN_CHAT_ID is not set; handoff %s not delivered", post.handoff_id)
                 continue
+            if post.edit_message is not None:  # e.g. the booking card got the payment
+                try:
+                    await self.bot.edit_message_text(
+                        post.text, chat_id=self.admin_chat_id, message_id=post.edit_message
+                    )
+                except TelegramBadRequest:
+                    log.debug("could not edit the admin chat message", exc_info=True)
+                continue
             sent = await self.bot.send_message(
                 self.admin_chat_id,
                 post.text,
@@ -180,6 +188,8 @@ class Delivery:
             )
             if post.handoff_id is not None:
                 await self.conversation.register_admin_message(sent.message_id, post.handoff_id)
+            if post.booking_id is not None:
+                await self.conversation.register_booking_card(post.booking_id, sent.message_id)
 
     async def _send(self, chat_id: int, reply: Reply) -> Message | None:
         if reply.venue is not None:
@@ -374,6 +384,10 @@ def build_dispatcher(
                 return
             await delivery(turn)
             await message.reply("Ответ отправлен пациенту.")
+
+        @admin.message(F.chat.id == settings.admin_chat_id, Command("today"))
+        async def today(message: Message) -> None:
+            await message.reply(await conversation.admin_today())
 
         @admin.callback_query(
             F.message.chat.id == settings.admin_chat_id, F.data.startswith(CLOSE_PREFIX)

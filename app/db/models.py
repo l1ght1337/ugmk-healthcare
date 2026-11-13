@@ -101,6 +101,8 @@ class Booking(Base):
     rating: Mapped[int | None]
     demo: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    # The booking's card in the admin chat (BOOKINGS_TO_ADMIN_CHAT): changes go as replies.
+    admin_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class Reminder(Base):

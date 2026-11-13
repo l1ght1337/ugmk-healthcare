@@ -141,8 +141,44 @@ FORGOTTEN = "Готово: Ваши данные и записи удалены,
 FORGET_KEPT = "Хорошо, данные остаются."
 FORGET_ADMIN = (
     "Пользователь Telegram id {user} отозвал согласие: его данные и записи удалены из бота. "
-    "Обращения {handoffs} в этом чате при необходимости удалите вручную."
+    "В этом чате при необходимости удалите вручную: {items}."
 )
+FORGET_HANDOFFS = "обращения {numbers}"
+FORGET_BOOKINGS = "карточки записей {numbers}"
+
+# --- bookings in the admin chat (BOOKINGS_TO_ADMIN_CHAT) -----------------------------------
+ADMIN_BOOKING = (
+    "Запись № {number}{demo}\n"
+    "Дата и время: {when}\n"
+    "Врач: {doctor}\n"
+    "Приём: {visit}\n"
+    "Тема: {topic}\n"
+    "Пациент: {patient}\n"
+    "Телефон: {phone}\n"
+    "Оплата: {payment}\n"
+    "Telegram: {telegram}"
+)
+ADMIN_BOOKING_DEMO = " (демо)"
+VISIT_KIND = {"primary": "первичный", "repeat": "повторный"}
+PAYMENT_KIND = {"self": "самостоятельно", "insurance": "по страховке", None: "не выбрана"}
+PATIENT_LINE = "{name}, {birth} — {who}"
+ADMIN_MOVED = "Перенесена на {when}. Врач: {doctor}."
+ADMIN_CANCELLED = "Отменена пациентом."
+ADMIN_SURVEY = {
+    "ok": "«Как прошёл приём?» — «Всё хорошо».",
+    "question": "«Как прошёл приём?» — «Есть вопрос» (обращение администратору).",
+}
+ADMIN_FEELING = {
+    "ok": "«Как Вы себя чувствуете?» — «Хорошо».",
+    "question": "«Как Вы себя чувствуете?» — «Есть вопрос».",
+}
+ADMIN_RATING = "Оценка сервиса: {score} из 5."
+ADMIN_CARD_NOTE = "Это карточка записи: ответ на неё пациенту не пересылается."
+TODAY_TITLE = "Записи на {days}:"
+TODAY_DAY = "\n{date}"
+TODAY_ITEM = "• {time} — № {number}, {patient}, {topic}, {visit}. Врач: {doctor}"
+TODAY_EMPTY = "На {days} записей нет."
+TODAY_OFF = "Записи в этот чат не отправляются: включите BOOKINGS_TO_ADMIN_CHAT=true в .env."
 PATIENT_PICK = "Кого записываем?"
 PATIENT_NEW = "Другой пациент"
 ASK_NAME = "Напишите, пожалуйста, фамилию, имя и отчество пациента."
