@@ -115,6 +115,11 @@ async def _check(chat: Chat, faq: Faq) -> None:
         assert text == texts.FEEDBACK and labels[0] == texts.HANDOFF_YES and chat.admin == []
     elif faq.action == "book":
         assert texts.ASK_COMPLAINT in text
+        if "ребёнка" in faq.question or "маму" in faq.question:  # who the visit is for is kept
+            who = "child" if "ребёнка" in faq.question else "adult"
+            assert texts.FOR_WHOM[who] in text
+    elif faq.action == "feedback":
+        assert text == texts.ASK_FEEDBACK
     elif faq.action == "my_bookings":
         assert text == texts.MY_EMPTY
     elif faq.action == "forget":

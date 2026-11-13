@@ -30,6 +30,7 @@ class TextReading:
     candidates: list[str] = field(default_factory=list)
     facts: dict[str, FactValue] = field(default_factory=dict)
     clarify: str | None = None
+    question: bool = False  # the message also asks about the trauma centre
     unavailable: bool = False  # no LLM: the bot falls back to buttons (and the word list)
 
 
@@ -58,7 +59,9 @@ async def read_text(
     except LLMUnavailable as exc:
         log.warning("route unavailable: %s", exc)
         return TextReading(unavailable=True)
-    return TextReading(r.kind, r.action, r.area, r.scenario, r.candidates, r.facts, r.clarify)
+    return TextReading(
+        r.kind, r.action, r.area, r.scenario, r.candidates, r.facts, r.clarify, r.question
+    )
 
 
 async def read_answer(

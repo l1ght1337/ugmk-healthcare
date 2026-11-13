@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot import render, slots_view, texts
+from app.bot import render, slots_view, texts, typed
 from app.bot.layout import DAY_COLUMNS, TIME_COLUMNS, grid, pack
 from app.bot.render import Card, Venue
 from app.config import ClinicData, Settings
@@ -34,7 +34,19 @@ from app.db.models import AdminMessage, Booking, Handoff, Patient, Reminder, Use
 from app.db.session import Database
 from app.flow import topics
 from app.flow.age import find_child_age, parse_age_months
-from app.flow.commands import find_command
+from app.flow.commands import (
+    find_audience,
+    find_command,
+    find_navigation,
+    find_small_talk,
+    is_booking_order,
+    is_question,
+    is_unsure,
+    wants_nearest,
+    wants_other_day,
+    wants_other_time,
+    yes_no,
+)
 from app.flow.engine import (
     FALLBACK_OUTCOME,
     AskPatient,
@@ -62,7 +74,7 @@ from app.flow.words import format_age
 from app.flow.words import years as years_word
 from app.llm.assistant import Assistant
 from app.llm.masking import KnownPerson
-from app.llm.reader import read_answer, read_question, read_text
+from app.llm.reader import AnswerReading, read_answer, read_question, read_text
 from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, plan
 from app.schedule.base import ScheduleProvider, Slot, SlotUnavailable
 from app.schedule.rules import all_slots, eligible
@@ -172,6 +184,7 @@ StepName = Literal[
     "offer_admin",
     "admin_reply",
     "visit_question",
+    "feedback_text",
 ]
 
 # Wizard screens: «Назад» works between them. Stage numbers for «Шаг N из 5».
@@ -190,6 +203,7 @@ STAGE_OF: dict[str, int] = {
     "patient": 5,
     "name": 5,
     "birth": 5,
+    "contact": 5,
 }
 WIZARD_STEPS = frozenset(STAGE_OF)
 TIME_STEPS = frozenset({"days", "periods", "times"})
@@ -198,8 +212,14 @@ START_STEPS = frozenset({"complaint", "topic", "describe"})  # the scenario is n
 # steps the text answers a question («Когда была получена травма?» — «в пятницу»).
 FREE_STEPS = frozenset({"idle", *START_STEPS, "info", "offer_admin", "payment"})
 WISH_SHOWN_UNTIL = 4  # the wish line stays on screen up to «День и время»
-# Steps where the text is data (age, name, phone…): «отмени запись» there is not a command.
-DATA_STEPS = frozenset({"age", "name", "birth", "contact", "admin_reply", "visit_question"})
+# The text is an age, a name, a birth date, a phone number — unless it is a command or a
+# question: «позови администратора» on the name step is not the patient's name.
+INPUT_STEPS = frozenset({"age", "name", "birth", "contact"})
+# The text goes to an administrator as it is: «отмените мою запись» there is the message.
+MESSAGE_STEPS = frozenset({"admin_reply", "visit_question", "feedback_text"})
+DATA_STEPS = INPUT_STEPS | MESSAGE_STEPS
+# How a button's label typed as text is matched on a step (app/bot/typed.py).
+TYPED_MODE = {**dict.fromkeys(("complaint", "topic", "describe"), "exact"), "question": "answer"}
 MENU_ITEM = {"book": "book", "my_bookings": "my", "ask": "ask", "admin": "admin"}
 COMMAND_ACTIONS = frozenset({*MENU_ITEM, "forget", "about_bot"})
 
@@ -233,6 +253,7 @@ class Session(BaseModel):
     reply_handoff: int | None = None
     consent_child: bool = False  # the consent shown includes «законный представитель»
     wish: Wish | None = None  # the doctor, the day and the time the patient asked for
+    for_whom: Literal["adult", "child"] | None = None  # «запишите ребёнка»: not asked again
     history: list[dict[str, Any]] = []  # earlier wizard screens, for «Назад»
 
 
@@ -265,6 +286,7 @@ class Ctx:
     via_button: bool = False  # the input was a pressed button: its message can be replaced
     back: bool = False  # «Назад» restored an earlier screen
     draft: DraftSink | None = None  # streams a partial answer (Telegram sendMessageDraft)
+    for_whom: str | None = None  # «запишите ребёнка», «у мамы перелом» in this message
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
@@ -339,6 +361,10 @@ class Conversation:
 
     async def contact(self, user: UserRef, phone: str, owner_id: int | None) -> Turn:
         return await self._run(user, lambda c: self._on_contact(c, phone, owner_id))
+
+    async def other(self, user: UserRef) -> Turn:
+        """A photo, a voice message, a sticker: the bot reads only text and buttons."""
+        return await self._run(user, self._on_other)
 
     async def call_admin(self, user: UserRef) -> Turn:
         return await self._run(user, lambda c: self._handoff(c, texts.ASK_ADMIN_REASON))
@@ -571,6 +597,8 @@ class Conversation:
         if c.s.wizard:
             name = texts.STAGES[stage - 1]
             lines.append(texts.STEP.format(n=stage, total=len(texts.STAGES), name=name))
+        if c.s.wizard and c.s.for_whom and stage == 1:
+            lines.append(texts.FOR_WHOM[c.s.for_whom])
         wish = self._wish(c)
         booking = c.s.wizard or c.s.reschedule_of is not None
         if wish is not None and booking and stage <= WISH_SHOWN_UNTIL:
@@ -648,6 +676,8 @@ class Conversation:
             self._ask_name(c)
         elif step == "birth":
             self._ask_birth(c)
+        elif step == "contact":
+            c.say(texts.ASK_CONTACT, ask_contact=True)
         else:
             await self._show_menu(c)
 
@@ -686,20 +716,213 @@ class Conversation:
             c.say(render.emergency_message(self.clinic), _menu())
             return
         step = c.s.step
-        if step in DATA_STEPS:  # the text is data: an age, a name, a phone number
+        c.for_whom = find_audience(text)
+        if step not in MESSAGE_STEPS and await self._press_typed(c, text):
+            return  # a button's label typed as text: «бытовая», «вечер», «14:30», «да»
+        if (move := find_navigation(text)) is not None:  # «назад», «в меню», «отмена»
+            await self._navigate(c, move)
+            return
+        if step in MESSAGE_STEPS:  # the text goes to an administrator as it is
             await self._on_step_text(c, step, text)
             return
-        found = self._read_wish(c, text)
+        if (talk := find_small_talk(text)) is not None:  # «привет», «спасибо», «ок», «пока»
+            await self._small_talk(c, talk)
+            return
         action = find_command(text)
+        if step in INPUT_STEPS:
+            await self._on_input_text(c, step, text, action)
+            return
+        found = self._read_wish(c, text)
+        under_way = step in WIZARD_STEPS and step not in START_STEPS
+        if action == "confirm" and under_way:  # «буду» there is an answer, not a confirmation
+            action = None
         if action is not None and action != "book":
             await self._command(c, action, found.wish)  # the same screen as the menu button
             return
         if await self._on_wish_text(c, found):
             return
-        if action == "book":  # «хочу записаться» — and the wish named just before, if any
-            self._start_booking(c, self._wish(c))
+        if action == "book":
+            if under_way:  # «запишите меня» while booking: the same step, nothing is lost
+                await self._render_screen(c)
+            else:  # and the wish named just before, if any
+                self._start_booking(c, self._wish(c))
+            return
+        if await self._on_short_text(c, step, text):
+            return
+        if step not in FREE_STEPS and is_question(text) and await self._aside(c, text):
+            return  # a question in the middle of booking: answered, the step stays
+        await self._on_step_text(c, step, text)
+
+    async def _on_other(self, c: Ctx) -> None:
+        c.say(texts.ONLY_TEXT, [] if c.s.step in WIZARD_STEPS else _menu())
+        if c.s.step in WIZARD_STEPS:
+            await self._render_screen(c)
+
+    async def _buttons_on_screen(self, c: Ctx) -> list[tuple[str, str]]:
+        """(label, data) of the current step's buttons: the step is drawn on a copy."""
+        if c.s.step not in WIZARD_STEPS and c.s.step != "offer_admin":
+            return []
+        shadow = Ctx(c.db, c.user, c.s.model_copy(deep=True), Turn(), c.now)
+        await self._repeat_buttons(shadow)
+        return [(b.label, b.data) for r in shadow.turn.replies for row in r.buttons for b in row]
+
+    async def _press_typed(self, c: Ctx, text: str) -> bool:
+        """A button's label typed as text presses the button."""
+        buttons = await self._buttons_on_screen(c)
+        mode = TYPED_MODE.get(c.s.step, "choice")
+        data = typed.pressed(text, buttons, mode=mode) if buttons else None
+        if data is None:
+            return False
+        await self._on_button(c, data)
+        return True
+
+    async def _navigate(self, c: Ctx, move: str) -> None:
+        """«Назад», «в меню», «отмена» typed as text — on any step."""
+        if move == "back":
+            await self._on_back(c, "")
+        elif move == "home":
+            await self._show_menu(c)
+        elif c.s.reschedule_of is not None:  # moving a booking: it stays as it was
+            self._reset(c)
+            c.say(texts.KEPT, _menu())
+        elif c.s.wizard and c.s.step in WIZARD_STEPS:
+            self._reset(c)
+            c.say(texts.FLOW_STOPPED, _menu())
+        elif c.s.step in ("idle", "payment") and await self._next_booking(c) is not None:
+            await self._my_bookings(c)  # «отмена» with a booking: here it is, with «Отменить»
+        else:
+            await self._show_menu(c)
+
+    async def _small_talk(self, c: Ctx, talk: str) -> None:
+        """«Привет», «спасибо», «ок», «пока»: a polite reply, never «я помогаю только с…»."""
+        if talk == "bye":
+            self._reset(c)
+            c.say(self.kb.common.goodbye.text, _menu())
+        elif c.s.step in WIZARD_STEPS or c.s.reschedule_of is not None:
+            await self._render_screen(c)  # booking is under way: the same step
+        elif talk == "greeting":
+            await self._greet(c)
+        elif talk == "thanks":
+            self._reset(c)
+            c.say(texts.WELCOME, _menu())
+        else:
+            await self._show_menu(c)
+
+    async def _on_input_text(self, c: Ctx, step: str, text: str, action: str | None) -> None:
+        """Age, name, birth date, phone: a command or a question typed there is not the data."""
+        if action == "book":  # «запишите меня» on the name step is not a name
+            await self._render_screen(c)
+            return
+        if action is not None and action != "confirm":
+            await self._command(c, action)
+            return
+        today = self._local(c.now).date()
+        valid = {
+            "age": lambda: parse_age_months(text) is not None,
+            "name": lambda: parse_full_name(text) is not None,
+            "birth": lambda: parse_birth_date(text, today) is not None,
+            "contact": lambda: parse_phone(text) is not None,
+        }[step]()
+        if not valid and is_question(text) and await self._aside(c, text):
             return
         await self._on_step_text(c, step, text)
+
+    async def _on_short_text(self, c: Ctx, step: str, text: str) -> bool:
+        """«Не знаю», «ближайшее», «другое время», a bare «да» with nothing asked."""
+        if step in START_STEPS and is_unsure(text):  # the topics as buttons
+            c.s.wizard = True
+            self._menu_screen(c, topics.start_menu(self.kb, c.s.area))
+            return True
+        if step in TIME_STEPS:
+            if wants_nearest(text):
+                free = await self._free(c)
+                if free is not None and free[1]:
+                    await self._on_slot(c, free[1][0].id)
+                    return True
+            if wants_other_day(text) or (wants_other_time(text) and step != "times"):
+                await self._other_day(c)
+                return True
+            if wants_other_time(text):  # the time grid: the other parts of this day
+                found = await self._day_times(c)
+                parts = slots_view.periods_with(found[2], self.settings.tz) if found else []
+                if len(parts) > 1:
+                    c.s.period = None
+                    await self._show_periods(c)
+                else:
+                    await self._other_day(c)
+                return True
+        if step in ("idle", "payment") and yes_no(text) is not None:
+            await self._show_menu(c)
+            return True
+        return False
+
+    async def _other_day(self, c: Ctx) -> None:
+        wish = self._wish(c)
+        if wish is not None and wish.day is not None:
+            await self._on_wish(c, "day")
+        else:
+            await self._on_day(c, "other")
+
+    async def _aside(self, c: Ctx, text: str) -> bool:
+        """A question typed in the middle of booking: the answer, then the same step again.
+
+        True — the text was a question and it is dealt with; False — it was not, and the
+        step reads it as usual.
+        """
+        known = await self._known(c)
+        reading = await read_text(self.assistant, text, known)
+        if reading.unavailable:
+            return False
+        if reading.kind == "crisis":
+            await self._crisis(c, text)
+            return True
+        if reading.kind == "schedule_question":
+            await self._answer_schedule(c, self._read_wish(c, text))
+            return True
+        if reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS - {"book"}:
+            await self._command(c, reading.action)
+            return True
+        if reading.kind == "clinic_question":
+            info = await read_question(self.assistant, text, known, on_partial=c.draft)
+            c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
+        elif reading.kind == "about_bot":
+            c.say(texts.ABOUT_BOT)
+        elif reading.kind == "medical_question":
+            c.say(texts.MEDICAL_ASIDE)
+        else:
+            return False
+        await self._render_screen(c)
+        return True
+
+    async def _answer_too(self, c: Ctx, text: str) -> None:
+        """«Сколько стоит и запишите на завтра»: the answer first, then the request."""
+        info = await read_question(self.assistant, text, await self._known(c))
+        c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
+
+    async def _next_booking(self, c: Ctx) -> Booking | None:
+        return await c.db.scalar(
+            select(Booking)
+            .where(
+                Booking.user_id == c.user.id, Booking.status == "active", Booking.start_at > c.now
+            )
+            .order_by(Booking.start_at)
+            .limit(1)
+        )
+
+    async def _confirm_by_text(self, c: Ctx) -> None:
+        """«Подтверждаю», «да, приду»: the nearest booking is confirmed, as the button does."""
+        booking = await self._next_booking(c)
+        self._reset(c)
+        if booking is None:
+            c.say(texts.MY_EMPTY, _menu())
+            return
+        booking.confirmed_at = c.now
+        when = render.format_when(self._local(booking.start_at))
+        actions = [
+            Button(texts.MOVE, f"b:move:{booking.id}"),
+            Button(texts.CANCEL, f"b:cancel:{booking.id}", "danger"),
+        ]
+        c.say(texts.CONFIRMED_WHEN.format(when=when), [actions, _home()])
 
     async def _on_step_text(self, c: Ctx, step: str, text: str) -> None:
         handlers: dict[str, Callable[[Ctx, str], Awaitable[None]]] = {
@@ -712,6 +935,7 @@ class Conversation:
             "info": self._on_free_text,
             "admin_reply": self._on_admin_reply_text,
             "visit_question": self._on_visit_question,
+            "feedback_text": self._on_feedback_text,
             "payment": self._on_payment_text,
         }
         if step in handlers:
@@ -741,6 +965,8 @@ class Conversation:
                 area = topics.guess_area(text) or c.s.area
                 self._topics_for(c, area, topics.guess_candidates(text), texts.PICK_TOPIC)
             return
+        if reading.question and reading.kind in ("complaint", "menu_action"):
+            await self._answer_too(c, text)  # the question in the message is not lost
         if reading.kind == "crisis":
             await self._crisis(c, text)
         elif reading.kind == "complaint" and reading.scenario_id:
@@ -785,9 +1011,9 @@ class Conversation:
 
     def _topics_for(self, c: Ctx, area: str | None, candidates: list[str], ask: str) -> None:
         """A complaint without a clear scenario: the narrowest fitting topic menu."""
-        wish = c.s.wish
+        wish, for_whom = c.s.wish, c.for_whom or c.s.for_whom
         self._reset(c)
-        c.s.wizard, c.s.area, c.s.wish = True, area, wish
+        c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
         menu = topics.best_menu(self.kb, area, candidates)
         if menu is not None:
             self._menu_screen(c, menu)
@@ -836,10 +1062,13 @@ class Conversation:
             )
         )
 
+    def _back_row(self) -> list[list[Button]]:
+        return [[Button(texts.BACK, "w:back")]]
+
     async def _on_age(self, c: Ctx, text: str) -> None:
         months = parse_age_months(text)
         if months is None:
-            c.say(texts.ASK_CHILD_AGE_AGAIN)
+            c.say(texts.ASK_CHILD_AGE_AGAIN, self._back_row())
             return
         step = self.engine.set_patient(c.s.dialog, "child", months)
         if step is not None:
@@ -862,7 +1091,11 @@ class Conversation:
             return
         scenario = self.kb.scenario(dialog.scenario_id)
         question = scenario.question(dialog.question_id)
-        reading = await read_answer(self.assistant, scenario, question, text, await self._known(c))
+        if yes_no(text) is not None or is_unsure(text):
+            reading = AnswerReading()  # «да», «не знаю» name no button: the question again
+        else:
+            known = await self._known(c)
+            reading = await read_answer(self.assistant, scenario, question, text, known)
         if reading.crisis:
             await self._crisis(c, text)
             return
@@ -880,7 +1113,7 @@ class Conversation:
     async def _on_name(self, c: Ctx, text: str) -> None:
         name = parse_full_name(text)
         if name is None:
-            c.say(texts.ASK_NAME_AGAIN)
+            c.say(texts.ASK_NAME_AGAIN, self._back_row())
             return
         c.s.draft_name = list(name)
         self._ask_birth(c)
@@ -892,7 +1125,7 @@ class Conversation:
     async def _on_birth(self, c: Ctx, text: str) -> None:
         birth = parse_birth_date(text, self._local(c.now).date())
         if birth is None or not c.s.draft_name:
-            c.say(texts.ASK_BIRTH_AGAIN)
+            c.say(texts.ASK_BIRTH_AGAIN, self._back_row())
             return
         last, first, patronymic = c.s.draft_name
         patient = Patient(
@@ -974,7 +1207,7 @@ class Conversation:
             "ws": self._on_wish,
         }.get(head)
         if handler is None:
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         await handler(c, rest)
 
@@ -984,7 +1217,7 @@ class Conversation:
         elif item == "ask":
             self._reset(c)
             c.s.step = "info"
-            c.say(texts.ASK_INFO)
+            c.say(texts.ASK_INFO, [_home()])
         elif item == "my":
             await self._my_bookings(c)
         elif item == "admin":  # keep the scenario answers: the administrator sees the context
@@ -1002,7 +1235,7 @@ class Conversation:
             return
         item = self.kb.topics.item(value)
         if item is None:
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         c.s.wizard = True
         if item.area is not None:
@@ -1019,7 +1252,7 @@ class Conversation:
 
     async def _on_audience(self, c: Ctx, value: str) -> None:
         if c.s.step != "audience" or value not in ("adult", "child"):
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         step = self.engine.set_patient(c.s.dialog, value)  # type: ignore[arg-type]
         if step is not None:
@@ -1028,7 +1261,7 @@ class Conversation:
     async def _on_child_confirm(self, c: Ctx, value: str) -> None:
         if c.s.step != "child_confirm" or c.s.pending_scenario is None:
             c.s.step = "idle"
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         scenario, facts = c.s.pending_scenario, c.s.pending_facts
         c.s.dialog = DialogState()
@@ -1040,21 +1273,21 @@ class Conversation:
     async def _on_question_button(self, c: Ctx, value: str) -> None:
         dialog = c.s.dialog
         if c.s.step != "question" or dialog.scenario_id is None or dialog.question_id is None:
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         question_id, _, index = value.rpartition(":")
         if question_id and question_id != dialog.question_id:  # a button of an earlier question
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         buttons = self.kb.scenario(dialog.scenario_id).question(dialog.question_id).buttons()
         if not index.isdigit() or int(index) >= len(buttons):
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         await self._show(c, self.engine.answer(dialog, buttons[int(index)].facts))
 
     async def _on_day(self, c: Ctx, value: str) -> None:
         if c.s.step not in ("days", "periods", "times"):
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         kind, _, ref = value.partition(":")
         if kind == "from":  # «‹ Раньше» / «Позже ›»
@@ -1068,11 +1301,11 @@ class Conversation:
             c.s.day, c.s.period = day, None
             await self._show_periods(c)
         else:
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
 
     async def _on_period(self, c: Ctx, value: str) -> None:
         if c.s.step != "periods" or value not in slots_view.PERIOD_IDS:
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         c.s.period = value
         await self._show_times(c)
@@ -1080,7 +1313,7 @@ class Conversation:
     async def _on_slot(self, c: Ctx, value: str) -> None:
         """A time from the grid, or «Ближайшее: …» from the day or period screen."""
         if c.s.step not in ("days", "periods", "times"):
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         slot = await self.schedule.get(value)
         free = slot is not None and slot in await self.schedule.free_slots(
@@ -1098,7 +1331,7 @@ class Conversation:
 
     async def _on_consent(self, c: Ctx, value: str) -> None:
         if c.s.step != "consent":
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         if value != "yes":
             self._reset(c)
@@ -1116,14 +1349,14 @@ class Conversation:
 
     async def _on_patient(self, c: Ctx, value: str) -> None:
         if c.s.step != "patient":
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         if value == "new":
             self._ask_name(c)
             return
         patient = await c.db.get(Patient, int(value)) if value.isdigit() else None
         if patient is None or patient.user_id != c.user.id:
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         c.s.patient_id = patient.id
         await self._identify(c)
@@ -1150,9 +1383,11 @@ class Conversation:
         self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], child_age: int | None
     ) -> None:
         """Start a scenario of the wizard; the body area may already answer a question."""
-        area, wish = c.s.area, c.s.wish
+        area, wish, for_whom = c.s.area, c.s.wish, c.for_whom or c.s.for_whom
         self._reset(c)
-        c.s.wizard, c.s.area, c.s.wish = True, area, wish
+        c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
+        if for_whom and child_age is None:  # «запишите ребёнка»: not asked again
+            self.engine.set_patient(c.s.dialog, for_whom)  # type: ignore[arg-type]
         facts = {**topics.area_facts(self.kb, scenario_id, area), **facts}
         if child_age is not None:
             c.s.step = "child_confirm"
@@ -1209,6 +1444,12 @@ class Conversation:
             self._start_booking(c, wish)
         elif action == "my_bookings":
             await self._my_bookings(c, wish)
+        elif action == "confirm":
+            await self._confirm_by_text(c)
+        elif action == "feedback":  # «хочу пожаловаться»: what happened is asked first
+            self._reset(c)
+            c.s.step = "feedback_text"
+            c.say(texts.ASK_FEEDBACK, [_home()])
         elif action in MENU_ITEM:
             await self._on_menu(c, MENU_ITEM[action])
         elif action == "forget":
@@ -1936,7 +2177,7 @@ class Conversation:
             return
         booking.confirmed_at = c.now
         c.turn.reaction = "👍"
-        c.say(texts.CONFIRMED)
+        c.say(texts.CONFIRMED, [_home()])
 
     async def _on_visit(self, c: Ctx, value: str) -> None:
         answer, _, ref = value.partition(":")
@@ -1956,7 +2197,10 @@ class Conversation:
         else:
             self._reset(c)
             c.s.step, c.s.visit_booking = "visit_question", booking.id
-            c.say(texts.ASK_VISIT_QUESTION)
+            c.say(texts.ASK_VISIT_QUESTION, [_home()])
+
+    async def _on_feedback_text(self, c: Ctx, text: str) -> None:
+        await self._handoff(c, texts.FEEDBACK_REASON, text)
 
     async def _on_visit_question(self, c: Ctx, text: str) -> None:
         booking = await self._user_booking(c, str(c.s.visit_booking or ""))
@@ -2030,6 +2274,7 @@ class Conversation:
         self._reset(c)
         c.s.wizard = True
         c.s.wish = None if wish is None or wish.empty else wish
+        c.s.for_whom = c.for_whom  # type: ignore[assignment]
         self._complaint_screen(c)
 
     async def _on_wish_text(self, c: Ctx, found: Parsed) -> bool:
@@ -2089,7 +2334,7 @@ class Conversation:
         if action == "doc":
             doctors = self.clinic.schedule.doctors
             if not ref.isdigit() or int(ref) >= len(doctors):
-                c.say(texts.STALE)
+                c.say(texts.STALE, [_home()])
                 return
             wish = (wish or Wish()).merge(Wish(doctor=doctors[int(ref)], noted=c.now))
             if c.s.step in TIME_STEPS:
@@ -2102,7 +2347,7 @@ class Conversation:
                 self._start_booking(c, wish)
             return
         if c.s.step not in TIME_STEPS:
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         if wish is not None and action == "doctor":  # the same day, the doctor on duty
             wish = wish.without("doctor")
@@ -2241,6 +2486,9 @@ class Conversation:
         if reading.answer and not reading.offer_admin:
             c.say(f"{reading.answer}\n\n{self.kb.common.more_help.text}", _menu())
             return
+        if not reading.answer and not reading.unavailable and self._is_request(c, text):
+            c.say(texts.REQUEST_UNCLEAR, _menu())  # a request, not a question without data
+            return
         c.s.step = "offer_admin"
         c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
         if reading.answer:
@@ -2248,6 +2496,12 @@ class Conversation:
         else:
             lead = texts.INFO_DOWN if reading.unavailable else texts.INFO_UNKNOWN
             c.say(lead, self._ask_admin_buttons())
+
+    def _is_request(self, c: Ctx, text: str) -> bool:
+        """«Запишите…», or a booking with a doctor, a day or a time: not a question."""
+        today = self._local(c.now).date()
+        found = parse_wish(text, self.clinic.schedule.doctors, today)  # type: ignore[arg-type]
+        return is_booking_order(text) or (found.booking and not found.wish.empty)
 
     async def _handoff(
         self, c: Ctx, reason: str, context: str | None = None, why: str | None = None
@@ -2399,11 +2653,11 @@ class Conversation:
     async def _on_admin_reply_button(self, c: Ctx, value: str) -> None:
         handoff = await c.db.get(Handoff, int(value)) if value.isdigit() else None
         if handoff is None or handoff.user_id != c.user.id:
-            c.say(texts.STALE)
+            c.say(texts.STALE, [_home()])
             return
         self._reset(c)
         c.s.step, c.s.reply_handoff = "admin_reply", handoff.id
-        c.say(texts.ASK_ADMIN_REPLY)
+        c.say(texts.ASK_ADMIN_REPLY, [_home()])
 
     async def _on_admin_reply_text(self, c: Ctx, text: str) -> None:
         handoff_id = c.s.reply_handoff

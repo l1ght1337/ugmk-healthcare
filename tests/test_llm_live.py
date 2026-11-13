@@ -18,6 +18,7 @@ from app.llm.assistant import Assistant
 from app.llm.client import DeepSeekClient
 from app.llm.usage import Usage, log_usage
 from tests.faq_cases import CONFIG, FAQS, KB, Faq
+from tests.intent_cases import G_TWO, INTENTS, Intent
 from tests.live_report import LIVE_LOG, RUN_ID
 
 pytestmark = pytest.mark.live
@@ -121,6 +122,18 @@ async def test_route_with_a_wish(
     assert (result.kind, result.action) == (kind, action), result
     if area:
         assert result.area == area, result
+
+
+INTENT_LIVE = [i for i in INTENTS if i.live]
+
+
+@pytest.mark.parametrize("intent", INTENT_LIVE, ids=[i.phrase for i in INTENT_LIVE])
+async def test_intent_matrix_phrase(assistant: Assistant, intent: Intent) -> None:
+    """docs/intent_matrix.md, the phrases that still need DeepSeek; two-part ones keep both."""
+    result = await assistant.route(intent.phrase)
+    assert result.kind == intent.live, (intent.phrase, result)
+    if intent.group == G_TWO:
+        assert result.question, (intent.phrase, result)
 
 
 async def test_asking_for_a_human(assistant: Assistant) -> None:

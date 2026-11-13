@@ -586,8 +586,8 @@ def build_dispatcher(
         await delivery(turn, chat_id)
 
     @patients.message()
-    async def other(message: Message) -> None:
-        await message.answer(texts.PICK_BUTTON_SHORT)
+    async def other(message: Message) -> None:  # a photo, a voice message, a sticker
+        await delivery(await conversation.other(user_ref(message)), message.chat.id)
 
     @patients.callback_query()
     async def button(callback: CallbackQuery) -> None:

@@ -124,3 +124,69 @@ def test_not_commands(text: str) -> None:
 )
 def test_more_commands(text: str, action: str) -> None:
     assert find_command(text) == action
+
+
+@pytest.mark.parametrize(
+    ("text", "action"),
+    [
+        ("хочу к врачу", "book"),
+        ("мне бы к травматологу попасть", "book"),
+        ("запишыте пожалуста", "book"),
+        ("запишите ребёнка", "book"),
+        ("можно записать маму?", "book"),
+        ("во сколько мне приходить?", "my_bookings"),
+        ("я записан?", "my_bookings"),
+        ("хочу перенести", "my_bookings"),
+        ("перезапишите меня на пятницу", "my_bookings"),
+        ("можно прийти в другой день?", "my_bookings"),
+        ("я не приду", "my_bookings"),
+        ("не смогу прийти завтра", "my_bookings"),
+        ("подтверждаю", "confirm"),
+        ("да, приду", "confirm"),
+        ("буду", "confirm"),
+        ("хочу поговорить с человеком", "admin"),
+        ("перезвоните мне", "admin"),
+        ("забудь меня", "forget"),
+        ("хочу пожаловаться", "feedback"),
+        ("как оставить отзыв", "feedback"),
+    ],
+)
+def test_requests_in_plain_words(text: str, action: str) -> None:
+    assert find_command(text) == action
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "как к вам попасть?",  # the address, not a booking
+        "когда мне приходить на контрольный приём?",  # a general question
+        "не приду в себя никак",
+        "перенёс операцию, болит нога",
+        "хочу к врачу, болит нога",  # a complaint
+        "ждал приёма час, это безобразие",  # a complaint with its text: DeepSeek reads it
+        "подтвердите, что запись есть",
+        "буду завтра в городе, можно записаться?",
+    ],
+)
+def test_still_not_commands(text: str) -> None:
+    assert find_command(text) is None, text
+
+
+def test_navigation_small_talk_and_audience() -> None:
+    from app.flow.commands import find_audience, find_navigation, find_small_talk
+
+    assert [find_navigation(t) for t in ("Назад", "в меню", "Главное меню", "отмена", "стоп")] == [
+        "back", "home", "home", "cancel", "cancel",
+    ]  # fmt: skip
+    assert find_navigation("назад упал на спину") is None
+    assert find_navigation("отмени запись") is None  # a command about the booking
+    assert [find_small_talk(t) for t in ("Привет!", "спасибо большое", "ок", "пока")] == [
+        "greeting", "thanks", "ack", "bye",
+    ]  # fmt: skip
+    assert find_small_talk("спасибо доктору Кузнецову, всё прошло отлично") is None
+    assert find_audience("запишите ребёнка") == "child"
+    assert find_audience("у мамы перелом руки") == "adult"
+    assert find_audience("дочку укусила собака") == "child"
+    assert find_audience("гуляла с сыном, упала") is None
+    assert find_audience("запишите брата") is None  # a child or an adult: the bot asks
+    assert find_audience("мама сказала записаться") is None

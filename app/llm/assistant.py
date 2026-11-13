@@ -67,6 +67,7 @@ class RouteOut(_Out):
     candidates: list[str] = []
     facts: dict[str, Any] = {}
     clarify: str | None = None
+    question: bool = False
 
     @field_validator("action", mode="before")
     @classmethod
@@ -124,6 +125,7 @@ class RouteResult(BaseModel):
     candidates: list[str] = []  # 3–5 scenarios that may fit, for choosing the topic menu
     facts: dict[str, FactValue] = {}
     clarify: str | None = None
+    question: bool = False  # the message also asks about the trauma centre: answer it too
 
 
 class ExtractResult(BaseModel):
@@ -200,14 +202,18 @@ class Assistant:
             if out.type == "menu_action":
                 if out.action is None:
                     raise ValueError("menu_action needs action: book / my_bookings / ask / admin")
-                return RouteResult(kind="menu_action", action=out.action)
+                return RouteResult(kind="menu_action", action=out.action, question=out.question)
             if out.type != "complaint":
                 return RouteResult(kind=out.type)
             candidates = [c for c in dict.fromkeys(out.candidates) if c in self.kb.scenarios][:5]
             if out.scenario is None:
                 clarify = safe_clarify(out.clarify, ROUTE_CLARIFY)
                 return RouteResult(
-                    kind="complaint", area=out.area, candidates=candidates, clarify=clarify
+                    kind="complaint",
+                    area=out.area,
+                    candidates=candidates,
+                    clarify=clarify,
+                    question=out.question,
                 )
             if out.scenario not in self.kb.scenarios:
                 raise ValueError(f"unknown scenario {out.scenario!r}; use an id from the catalogue")
@@ -222,6 +228,7 @@ class Assistant:
                 scenario=scenario.id,
                 candidates=candidates,
                 facts=_valid_facts(scenario, out.facts),
+                question=out.question,
             )
 
         return await self.client.complete_json(

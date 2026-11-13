@@ -135,6 +135,15 @@ def render_labels(kb: KnowledgeBase) -> str:
             ["кнопки вопроса", texts.MENU_HOME],
         ),
         _row("Мои записи", [texts.MOVE, texts.CANCEL]),
+        _row(
+            "Подтверждение текстом («подтверждаю», «да, приду»)",
+            [texts.MOVE, texts.CANCEL, texts.MENU_HOME],
+        ),
+        _row(
+            "«Задать вопрос», «хочу пожаловаться», «Есть вопрос» после приёма: бот ждёт текст",
+            [texts.MENU_HOME],
+        ),
+        _row("Возраст, ФИО или дата рождения не разобраны: бот просит ещё раз", [texts.BACK]),
         _row("Отмена записи", [texts.CANCEL_YES, texts.CANCEL_KEEP]),
         _row("Напоминания за 24 и за 2 часа", [texts.CONFIRM, texts.MOVE, texts.CANCEL]),
         _row("«Как прошёл приём?»", [texts.AFTER_VISIT_OK, texts.AFTER_VISIT_QUESTION]),

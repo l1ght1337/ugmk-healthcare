@@ -13,7 +13,7 @@
 # Задача "route": любое свободное сообщение пациента
 Определи тип сообщения и, если это жалоба на травму, сценарий из каталога.
 Формат ответа (json):
-{"type": "complaint", "crisis": false, "action": null, "area": "limb", "scenario": "dislocation", "candidates": ["dislocation", "fracture", "ligament_rupture"], "facts": {"assault": false, "injury_age": "within_7_days"}, "clarify": null}
+{"type": "complaint", "crisis": false, "action": null, "area": "limb", "scenario": "dislocation", "candidates": ["dislocation", "fracture", "ligament_rupture"], "facts": {"assault": false, "injury_age": "within_7_days"}, "clarify": null, "question": false}
 - type — ровно один из:
   - "complaint" — жалоба на травму или повреждение (ушиб, падение, вывих, перелом, порез, рана, ожог, укус, гипс, повторный приём, перевязка, больничный по травме, удаление спиц и всё, что есть в каталоге);
   - "menu_action" — просьба о действии бота, без описания травмы: записаться, в том числе к названному врачу, на день или время («запиши к [ВРАЧ] на завтра», «хочу на завтра вечером»); посмотреть, перенести или отменить свою уже сделанную запись («когда у меня приём», «на какое число я записан»); задать вопрос; позвать администратора, оператора или живого человека. Общий вопрос о сроках («когда приходить на контрольный приём») — не menu_action, а clinic_question;
@@ -35,6 +35,7 @@
 - candidates — для complaint: 3–5 id сценариев из каталога, которые могут подойти, от самого вероятного; если scenario выбран, он первый. Для других типов — пустой список.
 - facts — ответы на вопросы выбранного сценария, которые пациент уже явно сообщил. Пустой объект, если ничего.
 - clarify — если type = "complaint", а сценарий непонятен: вопрос, что случилось. Иначе null.
+- question — true, если type = "complaint" или "menu_action", а в сообщении есть ещё и вопрос о травмпункте, на который нужно ответить: цена, адрес, часы работы, парковка, документы («сколько стоит и запишите на завтра», «сломал руку, сколько стоит приём?»). Иначе false.
 
 # Задача "extract": ответ пациента на вопрос сценария
 В сообщении указаны сценарий, текущий вопрос, его поля и текст ответа.
@@ -80,6 +81,12 @@
 
 Сообщение: {"task": "route", "text": "а в воскресенье получится попасть на приём?"}
 Ответ: {"type": "schedule_question", "crisis": false, "action": null, "area": null, "scenario": null, "facts": {}, "clarify": null}
+
+Сообщение: {"task": "route", "text": "сколько стоит и запишите на завтра"}
+Ответ: {"type": "menu_action", "crisis": false, "action": "book", "area": null, "scenario": null, "facts": {}, "clarify": null, "question": true}
+
+Сообщение: {"task": "route", "text": "сломал руку, а где вы находитесь?"}
+Ответ: {"type": "complaint", "crisis": false, "action": null, "area": "limb", "scenario": "fracture", "candidates": ["fracture", "dislocation"], "facts": {}, "clarify": null, "question": true}
 
 Сообщение: {"task": "route", "text": "Соедините с оператором"}
 Ответ: {"type": "menu_action", "crisis": false, "action": "admin", "area": null, "scenario": null, "facts": {}, "clarify": null}
