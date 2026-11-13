@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     # Hard limit for one LLM call; after it the bot shows buttons instead of waiting.
     llm_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    # The first request at most this long; then one retry with the time left (also after a
+    # network error, 429 or 5xx).
+    llm_first_attempt_seconds: float = Field(default=6.0, gt=0, le=60)
     # Token usage per call (no texts), for the clinic's cost estimate. Empty — log only.
     llm_usage_log: Path | None = PROJECT_ROOT / "data" / "llm_usage.jsonl"
 

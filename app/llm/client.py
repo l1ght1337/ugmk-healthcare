@@ -3,6 +3,8 @@
 * JSON mode and low temperature for every call;
 * one hard time budget per call (10 s by default) that also covers the single retry,
   so a slow or broken API never blocks the patient — the caller shows buttons instead;
+* the first request may take at most 6 s; after a timeout, a network error, 429 or 5xx
+  it is repeated once with the time that is left;
 * the retry after an invalid answer appends to the same messages, keeping the cached
   prompt prefix (system prompt first, then the request) unchanged;
 * token usage, including DeepSeek cache hits, is recorded for every attempt;
@@ -37,6 +39,9 @@ RETRY_NOTE = (
     "задачи."
 )
 MAX_ERROR_CHARS = 300
+# One more attempt after these (within the overall time budget); 5xx is matched by prefix.
+RETRYABLE = frozenset({"timeout", "network", "http_429"})
+RETRY_PAUSE = 0.3  # seconds
 
 
 class LLMUnavailable(RuntimeError):
@@ -57,6 +62,10 @@ def _api_reason(exc: openai.APIError) -> str:
     return "api_error"
 
 
+def _retryable(reason: str) -> bool:
+    return reason in RETRYABLE or reason.startswith("http_5")
+
+
 def _describe(exc: ValueError) -> str:
     """Where the answer broke the format — field names and error types, never the values."""
     if isinstance(exc, json.JSONDecodeError):
@@ -75,11 +84,15 @@ class DeepSeekClient:
         base_url: str,
         model: str,
         timeout: float = 10.0,
+        first_attempt: float = 6.0,
+        retry_pause: float = RETRY_PAUSE,
         recorders: Sequence[UsageRecorder] = (log_usage,),
         http_client: httpx2.AsyncClient | None = None,
     ) -> None:
         self.model = model
-        self.timeout = timeout
+        self.timeout = timeout  # the whole call, retries included
+        self.first_attempt = first_attempt  # the first request; the rest is left for a retry
+        self.retry_pause = retry_pause
         self.recorders = tuple(recorders)
         self._client = AsyncOpenAI(
             api_key=api_key,
@@ -115,9 +128,15 @@ class DeepSeekClient:
                 while True:
                     attempt += 1
                     stream = on_text if attempt == 1 else None
-                    content, usage = await self._call(
-                        task, messages, attempt, temperature, max_tokens, stream
-                    )
+                    try:
+                        content, usage = await self._attempt(
+                            task, messages, attempt, temperature, max_tokens, stream
+                        )
+                    except LLMUnavailable as exc:
+                        if attempt >= 2 or not _retryable(exc.reason):
+                            raise
+                        await asyncio.sleep(self.retry_pause)  # a slow or busy API: once more
+                        continue
                     try:
                         data = json.loads(content)
                         if not isinstance(data, dict):
@@ -145,6 +164,32 @@ class DeepSeekClient:
                       error=f"no answer within {self.timeout:g} s", latency_ms=_ms(started))
             )  # fmt: skip
             raise LLMUnavailable(f"{task}: no answer within {self.timeout:g} s", "timeout") from exc
+
+    async def _attempt(
+        self,
+        task: str,
+        messages: list[dict[str, str]],
+        attempt: int,
+        temperature: float,
+        max_tokens: int,
+        on_text: TextSink | None,
+    ) -> tuple[str, Usage]:
+        """One request; the first one may take at most ``first_attempt`` seconds."""
+        if attempt > 1 or self.first_attempt >= self.timeout:
+            return await self._call(task, messages, attempt, temperature, max_tokens, on_text)
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(self.first_attempt):
+                return await self._call(task, messages, attempt, temperature, max_tokens, on_text)
+        except TimeoutError as exc:
+            self._record(
+                Usage(task, self.model, attempt, ok=False, reason="timeout",
+                      error=f"first attempt over {self.first_attempt:g} s",
+                      latency_ms=_ms(started))
+            )  # fmt: skip
+            raise LLMUnavailable(
+                f"{task}: first attempt over {self.first_attempt:g} s", "timeout"
+            ) from exc
 
     async def _call(
         self,

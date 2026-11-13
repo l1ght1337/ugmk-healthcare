@@ -69,8 +69,8 @@ async def test_slow_deepseek_falls_back_to_buttons(kb: KnowledgeBase) -> None:
 
 
 @pytest.mark.parametrize("status", [429, 500, 503])
-async def test_api_error_falls_back_to_buttons(kb: KnowledgeBase, status: int) -> None:
-    fake = FakeDeepSeek(status)
+async def test_api_error_twice_falls_back_to_buttons(kb: KnowledgeBase, status: int) -> None:
+    fake = FakeDeepSeek(status, status)
     sc = kb.scenario("burns")
     reading = await read_answer(fake.assistant(kb), sc, sc.question("burn_cause"), "кипяток")
     assert reading.unavailable
@@ -175,7 +175,7 @@ async def test_warm_up_touches_both_system_prompts(kb: KnowledgeBase) -> None:
     systems = {r["messages"][0]["content"] for r in fake.requests}
     assert systems == {assistant.dialog_system, assistant.answer_system}
     assert {u.task for u in fake.usage} == {"warmup"}
-    assert not await FakeDeepSeek(500, 500).assistant(kb).warm_up()  # no exception
+    assert not await FakeDeepSeek(500, 500, 500, 500).assistant(kb).warm_up()  # no exception
 
 
 async def test_event_dates_reach_deepseek_as_relative_time(kb: KnowledgeBase) -> None:
@@ -204,8 +204,9 @@ async def test_route_tolerates_odd_area_and_candidates(kb: KnowledgeBase) -> Non
         (("не json", "{оборвано"), ["invalid_json", "invalid_json"]),
         (([1, 2], {"type": "complaint"}), ["invalid_json", None]),  # a list is not an object
         (({"type": "диагноз"}, {"kind": 1}), ["invalid_answer", "invalid_answer"]),
-        ((429,), ["http_429"]),
-        ((503,), ["http_503"]),
+        ((429, 429), ["http_429", "http_429"]),
+        ((503, {"type": "offtopic"}), ["http_503", None]),
+        ((400,), ["http_400"]),  # not retried: our request is wrong
     ],
 )
 async def test_each_attempt_is_logged_with_its_reason(
@@ -248,3 +249,36 @@ async def test_network_error_is_logged_as_network(kb: KnowledgeBase) -> None:
     with pytest.raises(LLMUnavailable) as caught:
         await Assistant(client, kb).route("болит рука")
     assert caught.value.reason == "network" and usage[-1].reason == "network"
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503])
+async def test_busy_api_is_retried_once(kb: KnowledgeBase, status: int) -> None:
+    fake = FakeDeepSeek(status, {"type": "complaint", "area": "limb", "scenario": None})
+    result = await fake.assistant(kb).route("болит рука")
+    assert result.kind == "complaint"
+    assert [u.reason for u in fake.usage] == [f"http_{status}", None]
+
+
+async def test_slow_first_attempt_is_cut_at_its_limit_and_retried(kb: KnowledgeBase) -> None:
+    fake = FakeDeepSeek(Delay(3), {"type": "offtopic"})
+    started = time.monotonic()
+    result = await fake.assistant(kb, timeout=2.0, first_attempt=0.3).route("привет")
+    assert result.kind == "offtopic"
+    assert time.monotonic() - started < 1.5  # the hung request did not eat the budget
+    first, second = fake.usage
+    assert (first.reason, first.attempt, second.ok, second.attempt) == ("timeout", 1, True, 2)
+    assert 250 <= first.latency_ms < 1000
+
+
+async def test_no_second_retry_after_a_retry(kb: KnowledgeBase) -> None:
+    fake = FakeDeepSeek(500, "не json")
+    with pytest.raises(LLMUnavailable) as caught:
+        await fake.assistant(kb).route("болит рука")
+    assert caught.value.reason == "invalid_json" and len(fake.requests) == 2
+
+
+def test_settings_carry_the_first_attempt_limit(kb: KnowledgeBase) -> None:
+    settings = Settings(_env_file=None, deepseek_api_key="k")
+    assert (settings.llm_timeout_seconds, settings.llm_first_attempt_seconds) == (10.0, 6.0)
+    assistant = make_assistant(settings, kb)
+    assert assistant is not None and assistant.client.first_attempt == 6.0

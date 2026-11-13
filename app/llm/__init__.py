@@ -29,6 +29,7 @@ def make_assistant(settings: Settings, kb: KnowledgeBase) -> Assistant | None:
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_model,
         timeout=settings.llm_timeout_seconds,
+        first_attempt=settings.llm_first_attempt_seconds,
         recorders=recorders,
     )
     return Assistant(client, kb)

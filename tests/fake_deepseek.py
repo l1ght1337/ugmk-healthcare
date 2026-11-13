@@ -81,18 +81,22 @@ class FakeDeepSeek:
             200, content=body.encode(), headers={"content-type": "text/event-stream"}
         )
 
-    def client(self, timeout: float = 10.0) -> DeepSeekClient:
+    def client(self, timeout: float = 10.0, first_attempt: float = 6.0) -> DeepSeekClient:
         return DeepSeekClient(
             api_key="test-key",
             base_url="https://api.deepseek.test",
             model="deepseek-chat",
             timeout=timeout,
+            first_attempt=first_attempt,
+            retry_pause=0,
             recorders=[self.usage.append],
             http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(self._handle)),
         )
 
-    def assistant(self, kb: KnowledgeBase, timeout: float = 10.0) -> Assistant:
-        return Assistant(self.client(timeout), kb)
+    def assistant(
+        self, kb: KnowledgeBase, timeout: float = 10.0, first_attempt: float = 6.0
+    ) -> Assistant:
+        return Assistant(self.client(timeout, first_attempt), kb)
 
     def sent(self) -> str:
         """Everything that left the process, as one string."""
