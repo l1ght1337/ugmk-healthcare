@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -13,19 +14,21 @@ from app.flow.loader import script_text
 from app.flow.schema import Booking
 from app.schedule import make_provider
 from app.schedule.base import Slot, SlotUnavailable
-from app.schedule.generate import ensure_horizon, generate, read_csv, write_csv
+from app.schedule.generate import ensure_horizon, fingerprint, generate, read_csv, write_csv
 from app.schedule.mock import MockSchedule
 from app.schedule.rules import find_slots, order_slots, window_distance
 from tests.conftest import FIRST_DAY, NOW, TZ
 
+DAYS = 21
+
 
 @pytest.fixture(scope="module")
 def rows(clinic: ClinicData):
-    return generate(FIRST_DAY, 14, clinic.schedule)
+    return generate(FIRST_DAY, DAYS, clinic.schedule)
 
 
 def booking(policy: str) -> Booking:
-    return Booking(visit="repeat", service="x", slot_policy=policy, price_key="consultation")
+    return Booking(visit="repeat", service="x", slot_policy=policy, price_key="repeat_visit")
 
 
 def slot(hour: int, minute: int = 0, *, day: int = 0, window=False, repeat_cabinet=False) -> Slot:
@@ -44,16 +47,42 @@ def slot(hour: int, minute: int = 0, *, day: int = 0, window=False, repeat_cabin
 # --- generator --------------------------------------------------------------------------
 
 
-def test_doctors_are_from_script_03_1(clinic: ClinicData) -> None:
+def test_doctors_are_the_four_the_clinic_confirmed(clinic: ClinicData) -> None:
     source = script_text("03-1_info_travmpunkt").replace(" ", "")
     for name in clinic.schedule.doctors:
         assert name.replace(" ", "") in source, name
+    assert [d.split()[0] for d in clinic.schedule.doctors] == [
+        "Кузнецов", "Ярунин", "Билалов", "Деменков",
+    ]  # fmt: skip
 
 
-def test_fourteen_days_of_30_minute_slots(rows) -> None:
-    assert {r.day for r in rows} == {FIRST_DAY + timedelta(days=i) for i in range(14)}
+def test_twenty_one_days_of_30_minute_slots(rows, clinic: ClinicData) -> None:
+    assert clinic.schedule.demo.days_ahead == DAYS
+    assert {r.day for r in rows} == {FIRST_DAY + timedelta(days=i) for i in range(DAYS)}
     per_cabinet = Counter(r.cabinet for r in rows)
-    assert per_cabinet == {"Травматолог 1": 14 * 48, "Травматолог 2": 14 * 24}
+    assert per_cabinet == {"Травматолог 1": DAYS * 48, "Травматолог 2": DAYS * 24}
+
+
+def test_one_doctor_per_shift_and_the_shifts_rotate(rows) -> None:
+    """Clinic: one doctor 8:00–20:00, the next one 20:00–8:00; in the demo all four rotate."""
+    shifts: dict[tuple[date, str], set[str]] = {}
+    for r in rows:
+        if r.repeat_cabinet:
+            continue
+        if time(8) <= r.start < time(20):
+            key = (r.day, "day")
+        elif r.start >= time(20):
+            key = (r.day, "night")
+        else:
+            key = (r.day - timedelta(days=1), "night")
+        shifts.setdefault(key, set()).add(r.doctor)
+    assert all(len(doctors) == 1 for doctors in shifts.values())
+    for kind in ("day", "night"):
+        on_duty = {next(iter(d)) for (_, k), d in shifts.items() if k == kind}
+        assert len(on_duty) == 4, kind
+    for (day, kind), doctors in shifts.items():  # nobody works a night right after a day shift
+        if kind == "day":
+            assert doctors != shifts.get((day, "night")), day
 
 
 def test_repeat_windows_and_second_cabinet(rows) -> None:
@@ -65,10 +94,20 @@ def test_repeat_windows_and_second_cabinet(rows) -> None:
             assert r.repeat_cabinet and not r.repeat_window and time(8) <= r.start < time(20)
 
 
-def test_about_40_percent_busy_and_deterministic(rows, clinic: ClinicData) -> None:
-    share = sum(r.busy for r in rows) / len(rows)
-    assert 0.35 < share < 0.45
-    assert generate(FIRST_DAY, 14, clinic.schedule) == rows
+def _busy_share(rows, start: time, end: time) -> float:
+    if start < end:
+        chosen = [r for r in rows if start <= r.start < end]
+    else:
+        chosen = [r for r in rows if r.start >= start or r.start < end]
+    return sum(r.busy for r in chosen) / len(chosen)
+
+
+def test_busy_morning_free_night_and_deterministic(rows, clinic: ClinicData) -> None:
+    """Load from the clinic: peak 8:00–11:00 (60–70 % busy), the night almost free."""
+    assert 0.6 <= _busy_share(rows, time(8), time(11)) <= 0.7
+    assert _busy_share(rows, time(23), time(7)) <= 0.1
+    assert 0.3 <= _busy_share(rows, time(11), time(20)) <= 0.5
+    assert generate(FIRST_DAY, DAYS, clinic.schedule) == rows
 
 
 def test_a_doctor_is_never_in_two_cabinets_at_once(rows) -> None:
@@ -85,15 +124,26 @@ def test_csv_round_trip(rows, tmp_path: Path) -> None:
 
 def test_ensure_horizon_drops_past_and_adds_days(rows, clinic: ClinicData, tmp_path) -> None:
     path = tmp_path / "schedule.csv"
-    write_csv(rows, path)
+    write_csv(rows, path, fingerprint(clinic.schedule))
     assert ensure_horizon(path, FIRST_DAY, clinic.schedule) is False  # already fresh
     later = FIRST_DAY + timedelta(days=2)
     assert ensure_horizon(path, later, clinic.schedule) is True
     updated = read_csv(path)
     assert min(r.day for r in updated) == later
-    assert max(r.day for r in updated) == later + timedelta(days=13)
+    assert max(r.day for r in updated) == later + timedelta(days=DAYS - 1)
     kept = {r.slot_id: r for r in rows if r.day >= later}
     assert all(kept[r.slot_id] == r for r in updated if r.slot_id in kept)
+
+
+def test_changed_settings_rebuild_the_csv(rows, clinic: ClinicData, tmp_path: Path) -> None:
+    """Old files (eight doctors, flat 40 % busy) are rebuilt; slot ids stay the same."""
+    path = tmp_path / "schedule.csv"
+    old = [replace(r, doctor="Гусев Антон Викторович") for r in rows]
+    write_csv(old, path, "old-config")
+    assert ensure_horizon(path, FIRST_DAY, clinic.schedule) is True
+    rebuilt = read_csv(path)
+    assert rebuilt == rows and {r.slot_id for r in rebuilt} == {r.slot_id for r in old}
+    assert ensure_horizon(path, FIRST_DAY, clinic.schedule) is False
 
 
 def test_make_provider_creates_missing_csv(clinic: ClinicData, tmp_path: Path) -> None:
@@ -190,4 +240,14 @@ async def test_offers_stay_inside_horizon(clinic: ClinicData, schedule: MockSche
     every = await find_slots(
         schedule, booking("repeat_window"), now=NOW, config=clinic.schedule, limit=10_000
     )
-    assert max(s.start for s in every).date() <= date(2026, 11, 25)
+    assert max(s.start for s in every).date() <= FIRST_DAY + timedelta(days=DAYS)
+
+
+async def test_control_visit_time_starts_about_ten_days_later(
+    clinic: ClinicData, schedule: MockSchedule
+) -> None:
+    later = NOW + timedelta(days=10)
+    slots = await find_slots(
+        schedule, booking("repeat_window"), now=NOW, config=clinic.schedule, not_before=later
+    )
+    assert slots and all(s.start >= later for s in slots)

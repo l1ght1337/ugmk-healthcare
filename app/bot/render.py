@@ -131,7 +131,7 @@ def outcome_message(
     """
     parts: list[str] = []
     if done.kind == "emergency":
-        parts.append(clinic.clinic.emergency.reply)
+        parts.append(emergency_message(clinic))
     parts.extend(done.outcome.say)
     if done.places:
         lines = [place_line(p) for p in done.places]
@@ -152,7 +152,10 @@ def outcome_message(
 
 
 def emergency_message(clinic: ClinicData) -> str:
-    return clinic.clinic.emergency.reply
+    """«При угрозе жизни звоните 103 или 112», plus the clinic's own line once it is known."""
+    reply = clinic.clinic.emergency.reply
+    line = clinic.contacts.ambulance_line_phone
+    return f"{reply} {texts.AMBULANCE_LINE.format(phone=line)}" if line else reply
 
 
 def documents(kb: KnowledgeBase, audience: Audience) -> str:

@@ -108,7 +108,7 @@
     },
     "book_primary": {
       "type": "book",
-      "booking": {"visit": "primary", "service": "Приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "booking": {"visit": "primary", "service": "Приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "primary_visit"},
       "source": "04-11, вопрос 3 «Нет»"
     },
     "child_planned_pediatrician": {

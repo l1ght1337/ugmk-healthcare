@@ -66,12 +66,12 @@
   "outcomes": {
     "book_repeat_dressing": {
       "type": "book",
-      "booking": {"visit": "repeat", "service": "Перевязка", "slot_policy": "repeat_window", "price_key": "dressing_or_consultation"},
+      "booking": {"visit": "repeat", "service": "Перевязка", "slot_policy": "repeat_window", "price_key": "repeat_visit"},
       "source": "04-02, вопрос 2 «Да»: строго в отведённое время «Повторный приём» (8:00–10:00, 16:00–18:00) либо во второй кабинет для повторных приёмов (приём Травматолога 2)"
     },
     "book_primary": {
       "type": "book",
-      "booking": {"visit": "primary", "service": "Полноценный приём травматолога", "slot_policy": "nearest", "price_key": "dressing_or_consultation"},
+      "booking": {"visit": "primary", "service": "Полноценный приём травматолога", "slot_policy": "nearest", "price_key": "primary_visit"},
       "source": "04-02, вопрос 3 «На теле»"
     },
     "child_surgeon_or_dgkb9": {

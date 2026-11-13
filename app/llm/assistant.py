@@ -39,7 +39,7 @@ class _Out(BaseModel):
 
 
 class RouteOut(_Out):
-    intent: Literal["complaint", "question", "admin", "unscripted", "other"]
+    intent: Literal["complaint", "question", "admin", "other"]
     scenario: str | None = None
     facts: dict[str, Any] = {}
     clarify: str | None = None
@@ -58,7 +58,7 @@ class AnswerOut(_Out):
 
 
 class RouteResult(BaseModel):
-    intent: Literal["complaint", "question", "admin", "unscripted", "other"]
+    intent: Literal["complaint", "question", "admin", "other"]
     scenario: str | None = None
     facts: dict[str, FactValue] = {}
     clarify: str | None = None

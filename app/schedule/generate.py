@@ -1,20 +1,25 @@
 """Generate the demo schedule data/schedule.csv (no access to «Медиалог» yet).
 
-Doctors come from script 03-1 and the «Повторный приём» windows from 04-09
-(config/schedule.yaml). Everything else — slot length, shifts, the second cabinet's hours,
-busy share — is a demo assumption, and the file says so in its first line.
+Doctors come from script 03-1 (the list the clinic confirmed on 13.11.2026) and the
+«Повторный приём» windows from 04-09 (config/schedule.yaml). The clinic said one doctor is
+on duty 8:00–20:00 and the next one 20:00–8:00; in the demo the shifts rotate between the
+four doctors. Everything else — slot length, the second cabinet's hours, how busy each hour
+is — is a demo assumption, and the file says so in its first line.
 
-    uv run python -m app.schedule.generate            # 14 days from today
-    uv run python -m app.schedule.generate --start 2026-11-12 --days 14
+    uv run python -m app.schedule.generate            # 21 days from today
+    uv run python -m app.schedule.generate --start 2026-11-12 --days 21
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import random
+from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -23,7 +28,7 @@ from app.config import PROJECT_ROOT, ScheduleConfig, get_clinic_data, get_settin
 SCHEDULE_CSV = PROJECT_ROOT / "data" / "schedule.csv"
 HEADER_NOTE = (
     "# Демо-расписание травмпункта: время и занятость вымышленные, это не расписание клиники. "
-    "Создано app/schedule/generate.py"
+    "Создано app/schedule/generate.py, конфигурация {fingerprint}"
 )
 COLUMNS = (
     "slot_id",
@@ -37,7 +42,6 @@ COLUMNS = (
     "busy",
 )
 DEFAULT_SEED = "ugmk-demo"
-DAY_SHIFT = (time(8), time(20))  # main cabinet: day 8–20, night 20–8 (demo)
 
 
 @dataclass(frozen=True)
@@ -53,25 +57,53 @@ class Row:
     busy: bool
 
 
+def fingerprint(config: ScheduleConfig, seed: str = DEFAULT_SEED) -> str:
+    """Changes when anything that shapes the rows changes (not the horizon length)."""
+    data = config.model_dump(mode="json")
+    data["demo"].pop("days_ahead")
+    raw = json.dumps([data, seed], sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(raw.encode()).hexdigest()[:10]
+
+
 def _in_window(moment: time, config: ScheduleConfig) -> bool:
     return any(w.contains(moment) for w in config.repeat_windows)
 
 
-def _main_doctor(day: date, moment: time, doctors: tuple[str, ...]) -> str:
-    k = day.toordinal()
-    if DAY_SHIFT[0] <= moment < DAY_SHIFT[1]:
-        return doctors[(2 * k) % len(doctors)]
-    if moment >= DAY_SHIFT[1]:
-        return doctors[(2 * k + 1) % len(doctors)]
-    return doctors[(2 * (k - 1) + 1) % len(doctors)]  # after midnight: yesterday's night shift
+def shift_doctor(day: date, moment: time, config: ScheduleConfig) -> str:
+    """The doctor on duty in the main cabinet.
+
+    Four-day cycle with four doctors: day shift → «Травматолог 2» next day → night shift the
+    day after → rest. Day shift on day k: doctor k; night shift: doctor k + 2.
+    """
+    doctors, shift = config.doctors, config.demo.day_shift
+    k, night = day.toordinal(), len(config.doctors) // 2
+    if shift.contains(moment):
+        return doctors[k % len(doctors)]
+    if moment >= shift.end:
+        return doctors[(k + night) % len(doctors)]
+    return doctors[(k - 1 + night) % len(doctors)]  # after midnight: yesterday's night shift
 
 
-def _repeat_doctor(day: date, doctors: tuple[str, ...]) -> str:
-    return doctors[(2 * day.toordinal() + 3) % len(doctors)]
+def repeat_doctor(day: date, config: ScheduleConfig) -> str:
+    """«Травматолог 2»: a doctor who is neither on duty today nor coming off last night's shift."""
+    busy = {shift_doctor(day, t, config) for t in (time(0), time(12), time(23))}
+    free = [d for d in config.doctors if d not in busy] or list(config.doctors)
+    return free[day.toordinal() % len(free)]
 
 
-def _busy(slot_id: str, share: float, seed: str) -> bool:
-    return random.Random(f"{seed}:{slot_id}").random() < share
+def _mark_busy(rows: list[Row], config: ScheduleConfig, seed: str) -> list[Row]:
+    """Exactly round(share × n) busy slots per day, cabinet and hour band — no random drift."""
+    groups: dict[tuple[date, str, int], list[int]] = defaultdict(list)
+    bands = config.demo.busy_by_hour
+    for i, r in enumerate(rows):
+        band = next(n for n, b in enumerate(bands) if b.contains(r.start))
+        groups[(r.day, r.cabinet, band)].append(i)
+    busy: set[int] = set()
+    for (day, cabinet, band), indexes in groups.items():
+        k = round(bands[band].share * len(indexes))
+        rnd = random.Random(f"{seed}:{day.isoformat()}:{cabinet}:{band}")
+        busy.update(rnd.sample(indexes, k))
+    return [replace(r, busy=i in busy) for i, r in enumerate(rows)]
 
 
 def generate(
@@ -85,44 +117,42 @@ def generate(
         moment = datetime.combine(day, time(0))
         while moment.date() == day:
             start, end = moment.time(), (moment + step).time()
-            slot_id = f"{day:%Y%m%d}-{start:%H%M}-main"
             rows.append(
                 Row(
-                    slot_id=slot_id,
+                    slot_id=f"{day:%Y%m%d}-{start:%H%M}-main",
                     day=day,
                     start=start,
                     end=end,
                     cabinet=demo.main_cabinet,
-                    doctor=_main_doctor(day, start, config.doctors),
+                    doctor=shift_doctor(day, start, config),
                     repeat_window=_in_window(start, config),
                     repeat_cabinet=False,
-                    busy=_busy(slot_id, demo.busy_share, seed),
+                    busy=False,
                 )
             )
             if demo.repeat_cabinet_hours.contains(start):
-                slot_id = f"{day:%Y%m%d}-{start:%H%M}-repeat"
                 rows.append(
                     Row(
-                        slot_id=slot_id,
+                        slot_id=f"{day:%Y%m%d}-{start:%H%M}-repeat",
                         day=day,
                         start=start,
                         end=end,
                         cabinet=demo.repeat_cabinet,
-                        doctor=_repeat_doctor(day, config.doctors),
+                        doctor=repeat_doctor(day, config),
                         repeat_window=False,
                         repeat_cabinet=True,
-                        busy=_busy(slot_id, demo.busy_share, seed),
+                        busy=False,
                     )
                 )
             moment += step
     rows.sort(key=lambda r: (r.day, r.start, r.repeat_cabinet))
-    return rows
+    return _mark_busy(rows, config, seed)
 
 
-def write_csv(rows: Iterable[Row], path: Path) -> None:
+def write_csv(rows: Iterable[Row], path: Path, mark: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as fh:
-        fh.write(HEADER_NOTE + "\n")
+        fh.write(HEADER_NOTE.format(fingerprint=mark or "—") + "\n")
         writer = csv.writer(fh)
         writer.writerow(COLUMNS)
         for r in rows:
@@ -139,6 +169,14 @@ def write_csv(rows: Iterable[Row], path: Path) -> None:
                     int(r.busy),
                 ]
             )
+
+
+def read_mark(path: Path) -> str | None:
+    """The configuration fingerprint written in the file's first line."""
+    with path.open(encoding="utf-8") as fh:
+        first = fh.readline().strip()
+    head, sep, mark = first.rpartition("конфигурация ")
+    return mark if sep and head.startswith("#") else None
 
 
 def read_csv(path: Path) -> list[Row]:
@@ -167,10 +205,13 @@ def ensure_horizon(
 ) -> bool:
     """Keep ``days_ahead`` days from today in the file: drop past days, add missing ones.
 
-    Existing rows are kept as they are, so slot ids stay stable. Returns True if the file
-    was written.
+    Existing rows are kept as they are, so slot ids stay stable. If the schedule settings
+    changed (doctors, shifts, busy share…), the file is rebuilt; slot ids are made from the
+    date and time, so bookings stay valid. Returns True if the file was written.
     """
-    rows = read_csv(path) if path.is_file() else []
+    mark = fingerprint(config, seed)
+    fresh = path.is_file() and read_mark(path) == mark
+    rows = read_csv(path) if fresh else []
     kept = [r for r in rows if r.day >= today]
     last_needed = today + timedelta(days=config.demo.days_ahead - 1)
     first_missing = max((r.day for r in kept), default=today - timedelta(days=1))
@@ -178,9 +219,9 @@ def ensure_horizon(
     added = []
     if first_missing <= last_needed:
         added = generate(first_missing, (last_needed - first_missing).days + 1, config, seed)
-    if not added and len(kept) == len(rows) and path.is_file():
+    if fresh and not added and len(kept) == len(rows):
         return False
-    write_csv([*kept, *added], path)
+    write_csv([*kept, *added], path, mark)
     return True
 
 
@@ -194,7 +235,7 @@ def main(argv: list[str] | None = None) -> None:
     config = get_clinic_data().schedule
     start = args.start or datetime.now(get_settings().tz).date()
     rows = generate(start, args.days or config.demo.days_ahead, config, args.seed)
-    write_csv(rows, args.out)
+    write_csv(rows, args.out, fingerprint(config, args.seed))
     busy = sum(r.busy for r in rows)
     print(f"{args.out}: {len(rows)} slots from {start}, busy {busy / len(rows):.0%}")
 

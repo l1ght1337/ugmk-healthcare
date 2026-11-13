@@ -88,7 +88,7 @@
   "outcomes": {
     "book_primary": {
       "type": "book",
-      "booking": {"visit": "primary", "service": "Полноценный приём травматолога", "slot_policy": "nearest", "price_key": "dressing_or_consultation"},
+      "booking": {"visit": "primary", "service": "Полноценный приём травматолога", "slot_policy": "nearest", "price_key": "primary_visit"},
       "source": "04-03, вопрос 3: согласны на хирургический шов"
     },
     "cosmetic_child": {

@@ -98,9 +98,10 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     assert "вывих, врач попробует его вправить" in chat.text
     assert "Пожалуйста, подождите минуту" in chat.text
     slots = [label for label in chat.labels() if label.startswith("Чт 12.11")]
-    assert slots and slots[0].startswith("Чт 12.11, 14:30 ·")  # not earlier than 13:00
+    assert slots and slots[0][10:15] >= "13:00"  # not earlier than an hour from now (12:00)
+    later = next(label for label in slots if label[10:15] >= "14:00")  # «за 2 часа» still ahead
 
-    await chat.press(slots[0])
+    await chat.press(later)
     assert texts.CONSENT in chat.text
     await chat.press(texts.CONSENT_YES)
     assert "фамилия, имя, отчество" in chat.text
@@ -121,7 +122,9 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
 
     # notifications: 14:30 today → no «за 24 часа»; «за 2 часа», then «Как прошёл приём?»
     await chat.demo_next()
-    assert chat.text.startswith("Скоро приём в травмпункте: в четверг, 12 ноября, в 14:30.")
+    assert chat.text.startswith(
+        f"Скоро приём в травмпункте: в четверг, 12 ноября, в {later[10:15]}"
+    )
     assert "завтра" not in chat.text and "Через 2 часа" not in chat.text
     assert "подземный паркинг" in chat.text
     assert chat.labels() == [texts.CONFIRM, texts.MOVE, texts.CANCEL]
@@ -129,14 +132,17 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     await chat.demo_next()
     assert chat.text == texts.AFTER_VISIT
     await chat.press(texts.AFTER_VISIT_OK)
-    assert texts.OFFER_CONTROL in chat.text
+    assert (
+        "Контрольный приём обычно назначают примерно через 10 дней, точный срок определяет врач"
+    ) in chat.text
 
     # control visit: 04-09 with «первично у нас» known → only «больничный?»
     await chat.press(texts.CONTROL_YES)
     assert chat.text == "Открывали больничный лист?"
     await chat.press("Нет")
     offered = [label for label in chat.labels() if label[:2] in texts.WEEKDAYS_SHORT]
-    assert offered
+    assert offered and all(label[3:8] >= "22.11" for label in offered)  # about +10 days
+    assert "Предлагаю время около 22 ноября" in chat.text and texts.OTHER_DAY in chat.labels()
     await chat.press(offered[0])  # patient, consent and phone are known: booked at once
     assert "записан на приём" in chat.text and texts.CONSENT not in chat.text
     await chat.press(texts.PAYMENT_SELF)
@@ -165,7 +171,7 @@ async def test_day_before_reminder_lists_documents(make_chat, schedule: MockSche
     await book_dislocation(chat)
     tomorrow = next(
         s
-        for s in await schedule.free_slots(NOW + timedelta(days=1), NOW + timedelta(days=2))
+        for s in await schedule.free_slots(NOW + timedelta(days=1, hours=1), NOW + timedelta(2))
         if not s.repeat_window and not s.repeat_cabinet
     )
     await chat.press(texts.PAYMENT_SELF)
@@ -370,10 +376,10 @@ async def test_returning_patient_is_picked_not_retyped(make_chat, db: Database) 
     assert len(await bookings(db)) == 2
 
 
-async def test_due_reminders_are_sent_once(make_chat, clock: Clock) -> None:
+async def test_due_reminders_are_sent_once(make_chat, clock: Clock, db: Database) -> None:
     chat = make_chat()
     await book_dislocation(chat)
-    clock.now = NOW.replace(hour=12, minute=31)  # 2 h before 14:30
+    clock.now = (await bookings(db))[0].end_at + timedelta(hours=3)  # «Как прошёл приём?»
     turns = await chat.due()
     assert len(turns) == 1 and turns[0].replies[0].chat_id == PATIENT.chat_id
     assert await chat.due() == []

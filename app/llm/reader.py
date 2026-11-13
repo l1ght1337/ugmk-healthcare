@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ComplaintReading:
-    intent: str | None = None  # complaint / question / admin / unscripted / other
+    intent: str | None = None  # complaint / question / admin / other
     scenario_id: str | None = None
     facts: dict[str, FactValue] = field(default_factory=dict)
     clarify: str | None = None

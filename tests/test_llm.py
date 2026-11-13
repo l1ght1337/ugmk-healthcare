@@ -102,7 +102,7 @@ async def test_extract_without_own_field_is_unclear(kb: KnowledgeBase) -> None:
     ("answer", "shown"),
     [
         ("Адрес травмпункта: ул. Шейнкмана, 113/2, вход через детское отделение.", True),
-        ("Приём стоит 1500 рублей.", False),  # a number that is not in kb/info
+        ("Приём стоит 987 рублей.", False),  # a number that is not in kb/info
         ("Позвоните по номеру [ТЕЛЕФОН].", False),
     ],
 )

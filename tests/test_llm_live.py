@@ -54,6 +54,7 @@ ROUTES = [
     ("Сын обжёг руку кипятком час назад", "burns",
      {"burn_location": "body", "burn_cause": "thermal"}),
     ("Ударился головой, тошнит", "head_trauma", {}),
+    ("Нужно снять гипс", "cast_removal", {}),
 ]  # fmt: skip
 
 
@@ -69,7 +70,6 @@ async def test_route(assistant: Assistant, text: str, scenario: str, facts: dict
     ("text", "intent"),
     [
         ("Сколько стоит приём травматолога?", "question"),
-        ("Нужно снять гипс", "unscripted"),
         ("Соедините, пожалуйста, с администратором", "admin"),
     ],
 )
@@ -89,11 +89,10 @@ async def test_answer_from_kb_info(assistant: Assistant, question: str, must_con
     assert result.answer and must_contain in result.answer.lower(), result
 
 
-async def test_price_is_not_invented(assistant: Assistant) -> None:
-    """Case 14: the price is unknown, so «уточнит администратор» and an offer to pass it on."""
+async def test_price_comes_from_config(assistant: Assistant) -> None:
+    """Case 14: prices of the first and repeat visit from config/prices.yaml (demo for now)."""
     result = await assistant.answer("Сколько стоит приём?")
-    assert result.offer_admin
-    assert result.answer is None or "администратор" in result.answer.lower()
+    assert result.answer and "2000" in result.answer, result
 
 
 async def test_unknown_question_is_not_answered(assistant: Assistant) -> None:

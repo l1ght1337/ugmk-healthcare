@@ -21,13 +21,29 @@ SCENARIO_IDS = sorted(load_kb().scenarios)
 
 def test_every_section_4_and_5_script_has_a_scenario(kb: KnowledgeBase) -> None:
     scripts = {p.stem for p in (KB_DIR / "text").glob("0[45]-*.md")}
-    assert scripts == {s.script for s in kb.scenarios.values()}
-    assert len(kb.scenarios) == 21
+    assert {s.script for s in kb.scenarios.values()} == scripts | {"02_obshchiy_blok"}
+    assert len(kb.scenarios) == 25
+
+
+def test_cast_requests_book_a_first_visit_without_questions(kb: KnowledgeBase, run) -> None:
+    """Clinic answer 13.11.2026: cast, cast removal, orthosis, scotchcast → first visit."""
+    casts = [s for s in kb.scenarios.values() if s.decision]
+    assert sorted(s.menu_label for s in casts) == [
+        "Наложение гипса", "Ортез", "Скотчкаст", "Снятие гипса",
+    ]  # fmt: skip
+    for sc in casts:
+        assert sc.script == "02_obshchiy_blok" and not sc.questions
+        w = run(sc.id, {})
+        assert w.asked == [] and w.step.kind == "book"
+        assert w.step.outcome.booking.visit == "primary"
+        infant = run(sc.id, {}, audience="child", age_months=4)
+        assert infant.step.scenario.id == "infant_under_6m"  # age check stays
 
 
 def test_kinds(kb: KnowledgeBase) -> None:
     booking = {s.number for s in kb.scenarios.values() if s.kind == "booking"}
-    assert booking == {"4.1", "4.2", "4.3", "4.5", "4.6", "4.7", "4.8", "4.9", "4.11", "4.12"}
+    assert booking == {"2.1", "2.2", "2.3", "2.4", "4.1", "4.2", "4.3", "4.5", "4.6", "4.7",
+                       "4.8", "4.9", "4.11", "4.12"}  # fmt: skip
 
 
 def test_places_and_addresses_are_quoted_from_scripts(kb: KnowledgeBase) -> None:
@@ -93,12 +109,17 @@ def test_repeat_visit_slot_rules(kb: KnowledgeBase) -> None:
     assert policy == {True: "near_repeat_window", False: "repeat_window"}
 
 
-def test_price_keys_exist_in_prices_yaml(kb: KnowledgeBase) -> None:
-    prices = get_clinic_data().prices
+def test_price_follows_the_visit(kb: KnowledgeBase) -> None:
+    """Clinic answer: only the first and the repeat visit have a price."""
+    from app.config import Prices
+
+    assert Prices.price_keys() == {"primary_visit", "repeat_visit"}
     for sc in kb.scenarios.values():
         for outcome in sc.outcomes.values():
             if outcome.booking:
-                assert outcome.booking.price_key in prices, (sc.id, outcome.booking.price_key)
+                key = outcome.booking.price_key
+                assert key == f"{outcome.booking.visit}_visit", (sc.id, key)
+                assert get_clinic_data().price_text(key), (sc.id, key)
 
 
 def test_notice_flags_exist_in_clinic_yaml(kb: KnowledgeBase) -> None:

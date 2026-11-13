@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.config import ClinicData, get_clinic_data
 from app.flow.loader import KB_DIR, KnowledgeBase
 from app.flow.schema import Scenario
 
@@ -34,12 +35,32 @@ def render_catalogue(kb: KnowledgeBase) -> str:
                     text += " Если пациент об этом сам не говорит — не указывай поле."
                 lines.append(text)
         lines.append("")
-    lines.append('# Запросы без сценария (intent = "unscripted")')
-    lines += [f"- {request}" for request in kb.common.unscripted_requests]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
 
 
-def render_info(info_dir: Path = KB_DIR / "info") -> str:
-    """kb/info/*.md in a fixed order — the only source for answers to questions."""
+PRICE_LINES = (
+    ("primary_visit", "Первичный приём травматолога-ортопеда"),
+    ("repeat_visit", "Повторный (контрольный) приём травматолога-ортопеда"),
+)
+
+
+def render_prices(clinic: ClinicData) -> str:
+    """Prices from config/prices.yaml, so answers and the booking card name the same sums."""
+    lines = ["# Стоимость приёма", "", "Источник: config/prices.yaml (ответ клиники 13.11.2026)."]
+    lines.append("")
+    for key, title in PRICE_LINES:
+        lines.append(f"- {title} — {clinic.price_text(key) or 'стоимость уточнит администратор'}.")
+    lines.append(
+        "- Остальные манипуляции (рентген, повязки, наложение швов, гипс, ортез, скотчкаст "
+        "и т. д.) оплачиваются отдельно; их стоимость уточнит администратор."
+    )
+    if clinic.prices.demo:
+        lines.append("- Цены демонстрационные: бот работает в тестовом режиме.")
+    return "\n".join(lines)
+
+
+def render_info(info_dir: Path = KB_DIR / "info", clinic: ClinicData | None = None) -> str:
+    """kb/info/*.md in a fixed order plus prices — the only source for answers to questions."""
     parts = [p.read_text(encoding="utf-8").strip() for p in sorted(info_dir.glob("*.md"))]
+    parts.append(render_prices(clinic or get_clinic_data()))
     return "\n\n".join(parts) + "\n"

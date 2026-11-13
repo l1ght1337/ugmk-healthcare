@@ -229,6 +229,11 @@ class Notice(_Model):
 class Scenario(_Model):
     id: str = Field(pattern=SNAKE)
     script: str = Field(description="Source file stem in kb/text/")
+    decision: str | None = Field(
+        default=None,
+        description="Clinic answer the scenario is built from when the export has no script "
+        "page for it; ``script`` then names the page that links to it (the 02 menu)",
+    )
     number: str
     title: str
     menu_label: str = Field(min_length=1, max_length=BUTTON_MAX, description="Menu button")
@@ -374,9 +379,6 @@ class CommonPhrases(_Model):
     parking_after_20: Phrase
     parking_day: Phrase
     parking_night: Phrase
-    unscripted_requests: tuple[str, ...] = Field(
-        description="Menu items of script 02 that have no script in the export"
-    )
     shared_fields: dict[str, SharedField] = Field(
         default={}, description="Scenario fields with this name must equal the shared spec"
     )

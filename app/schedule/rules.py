@@ -70,10 +70,14 @@ async def find_slots(
     config: ScheduleConfig,
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
+    not_before: datetime | None = None,
 ) -> list[Slot]:
-    """Slots to offer as buttons; ``offset`` pages through «другое время»."""
+    """Slots to offer as buttons; ``offset`` pages through «другое время».
+
+    ``not_before`` — the control visit: time from about 10 days after the first visit.
+    """
     horizon = now + timedelta(days=config.demo.days_ahead)
-    free = await provider.free_slots(now, horizon)
+    free = await provider.free_slots(max(now, not_before or now), horizon)
     ordered = order_slots(
         free,
         booking.slot_policy,

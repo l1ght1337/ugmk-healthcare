@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from app.bot import render
+from app.bot import render, texts
 from app.config import ClinicData
 from app.flow.engine import Place
 from app.flow.loader import KnowledgeBase
@@ -113,7 +113,8 @@ def test_confirmation(run, kb: KnowledgeBase, clinic: ClinicData, hour: int, nig
     assert "паспорт взрослого, сопровождающего ребёнка" in text
     assert "свидетельство о рождении ребёнка (с 14 лет — паспорт) и СНИЛС ребёнка" in text
     assert ("главные ворота" in text) is night
-    assert "демо" not in text
+    assert texts.DEMO_BOOKING not in text
+    assert "Стоимость консультации 2000 рублей (демо-цена)" in text
 
 
 def test_route_without_script_phrase_gets_a_lead(run, clinic: ClinicData) -> None:

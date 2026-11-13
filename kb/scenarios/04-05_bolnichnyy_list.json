@@ -69,7 +69,7 @@
   "outcomes": {
     "book_primary": {
       "type": "book",
-      "booking": {"visit": "primary", "service": "Первичный приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "booking": {"visit": "primary", "service": "Первичный приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "primary_visit"},
       "source": "04-05, вопрос «Когда была получена травма?» — в течение 7 дней"
     },
     "child_planned_explained": {

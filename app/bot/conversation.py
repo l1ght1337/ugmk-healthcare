@@ -15,7 +15,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel
@@ -39,6 +39,7 @@ from app.flow.loader import KnowledgeBase
 from app.flow.safety import find_emergency
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import FactValue, Question, Scenario
+from app.flow.words import days as days_word
 from app.flow.words import format_age
 from app.llm.assistant import Assistant
 from app.llm.masking import KnownPerson
@@ -129,6 +130,7 @@ class Session(BaseModel):
     handoff_reason: str | None = None
     handoff_context: str | None = None
     control_of: int | None = None
+    anchor: date | None = None  # control visit: offer time around this day
     reschedule_of: int | None = None
     booking_id: int | None = None
     visit_booking: int | None = None
@@ -357,10 +359,6 @@ class Conversation:
             await self._answer_question(c, text)
         elif reading.intent == "admin":
             await self._handoff(c, texts.ASK_ADMIN_REASON, text)
-        elif reading.intent == "unscripted":
-            c.say(texts.UNSCRIPTED)
-            reason = "Запрос без скрипта в выгрузке (гипс, снятие гипса, ортез, скотчкаст)"
-            await self._handoff(c, reason, text)
         else:
             c.say(texts.OTHER_INTENT, _menu())
 
@@ -557,6 +555,10 @@ class Conversation:
             c.s.slot_offset += SLOTS_PER_PAGE
             await self._offer_slots(c, wait=False)
             return
+        if value == "day":  # control visit: leave «about 10 days» and show the nearest time
+            c.s.anchor, c.s.slot_offset = None, 0
+            await self._offer_slots(c, wait=False)
+            return
         slot = await self.schedule.get(value)
         free = slot is not None and slot in await self.schedule.free_slots(
             slot.start, slot.start + timedelta(minutes=1)
@@ -727,19 +729,13 @@ class Conversation:
             await self._show_menu(c)
             return
         spec, scenario = found
-        slots = await find_slots(
-            self.schedule,
-            spec,
-            now=c.now,
-            config=self.clinic.schedule,
-            limit=SLOTS_PER_PAGE,
-            offset=c.s.slot_offset,
-        )
+        slots = await self._find(c, spec)
+        if not slots and c.s.anchor is not None:  # nothing around the control day
+            c.s.anchor, c.s.slot_offset = None, 0
+            slots = await self._find(c, spec)
         if not slots and c.s.slot_offset:
             c.s.slot_offset = 0
-            slots = await find_slots(
-                self.schedule, spec, now=c.now, config=self.clinic.schedule, limit=SLOTS_PER_PAGE
-            )
+            slots = await self._find(c, spec)
         if not slots:
             c.say(texts.NO_SLOTS)
             who = {"child": "Ребёнок", "adult": "Взрослый"}.get(
@@ -753,8 +749,27 @@ class Conversation:
             c.say(self.kb.common.wait.text)
         c.s.step = "slots"
         rows = [[Button(self._slot_label(s), f"s:{s.id}")] for s in slots]
-        rows += [[Button(texts.MORE_TIME, "s:more")], [Button(texts.MENU_ADMIN, "m:admin")]]
-        c.say(self.kb.common.offer.text, rows)
+        rows.append([Button(texts.MORE_TIME, "s:more")])
+        text = self.kb.common.offer.text
+        if c.s.anchor is not None:
+            text = texts.CONTROL_NEAR.format(date=render.format_date(c.s.anchor)) + "\n" + text
+            rows.append([Button(texts.OTHER_DAY, "s:day")])
+        rows.append([Button(texts.MENU_ADMIN, "m:admin")])
+        c.say(text, rows)
+
+    async def _find(self, c: Ctx, spec: BookingSpec) -> list[Slot]:
+        not_before = None
+        if c.s.anchor is not None:
+            not_before = datetime.combine(c.s.anchor, datetime.min.time(), tzinfo=self.settings.tz)
+        return await find_slots(
+            self.schedule,
+            spec,
+            now=c.now,
+            config=self.clinic.schedule,
+            limit=SLOTS_PER_PAGE,
+            offset=c.s.slot_offset,
+            not_before=not_before,
+        )
 
     def _slot_label(self, slot: Slot) -> str:
         start = self._local(slot.start)
@@ -1092,8 +1107,9 @@ class Conversation:
             self._control_prompt(c, booking)
 
     def _control_prompt(self, c: Ctx, booking: Booking) -> None:
+        after = days_word(self.clinic.clinic.control_visit_after_days)
         c.say(
-            texts.OFFER_CONTROL,
+            texts.OFFER_CONTROL.format(days=after),
             [
                 [Button(texts.CONTROL_YES, f"k:yes:{booking.id}")],
                 [Button(texts.CONTROL_NO, f"k:no:{booking.id}")],
@@ -1112,6 +1128,8 @@ class Conversation:
             return
         self._reset(c)
         c.s.control_of, c.s.patient_id = booking.id, patient.id
+        after = timedelta(days=self.clinic.clinic.control_visit_after_days)
+        c.s.anchor = self._local(booking.start_at).date() + after
         age = age_in_months(patient.birth_date, self._local(c.now).date())
         self.engine.set_patient(c.s.dialog, patient.audience, age)  # type: ignore[arg-type]
         step = self.engine.start(c.s.dialog, "repeat_visit", {"first_visit_here": True})

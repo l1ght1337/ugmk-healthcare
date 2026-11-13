@@ -123,16 +123,24 @@ class WorkingHours(_Data):
         return moment >= self.start or moment < self.end
 
 
+class Location(_Data):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
 class TraumaCenter(_Data):
     address: str
     entrance: str
     hours: str
     underground_parking_hours: WorkingHours
+    location: Location | None = None  # map point for Telegram sendVenue (TODO: verify)
 
 
 class Contacts(_Data):
     trauma_center: TraumaCenter
     call_center_phone: str | None
+    ambulance_line_phone: str | None  # the clinic's own ambulance line (TODO)
+    crisis_line_phone: str  # helpline for messages about suicide or self-harm (to confirm)
     admin_working_hours: WorkingHours
     privacy_policy_url: str | None
 
@@ -150,9 +158,27 @@ class Emergency(_Data):
         return value
 
 
+class Crisis(_Data):
+    """Words about suicide or self-harm; single words are allowed only if unambiguous."""
+
+    phrases: tuple[str, ...] = Field(min_length=1)
+
+
 class ClinicFlags(_Data):
     rabies_vaccine_available: bool
+    control_visit_after_days: int = Field(gt=0, le=60)
     emergency: Emergency
+    crisis: Crisis
+
+
+class BusyBand(WorkingHours):
+    share: float = Field(ge=0, lt=1)
+
+
+def _minutes_of_day(span: WorkingHours) -> list[int]:
+    start = span.start.hour * 60 + span.start.minute
+    end = span.end.hour * 60 + span.end.minute
+    return list(range(start, end)) if start < end else [*range(start, 1440), *range(0, end)]
 
 
 class DemoSchedule(_Data):
@@ -160,11 +186,26 @@ class DemoSchedule(_Data):
 
     slot_minutes: int = Field(gt=0, le=240)
     main_cabinet: str
+    day_shift: WorkingHours  # one doctor 8–20, the next one 20–8 (clinic, 13.11.2026)
     repeat_cabinet: str
     repeat_cabinet_hours: WorkingHours
-    busy_share: float = Field(ge=0, lt=1)
+    busy_by_hour: tuple[BusyBand, ...] = Field(min_length=1)
     days_ahead: int = Field(gt=0, le=60)
     min_lead_minutes: int = Field(ge=0)
+
+    @field_validator("busy_by_hour")
+    @classmethod
+    def _bands_cover_day(cls, value: tuple[BusyBand, ...]) -> tuple[BusyBand, ...]:
+        counts = [0] * 1440
+        for band in value:
+            for minute in _minutes_of_day(band):
+                counts[minute] += 1
+        if any(c != 1 for c in counts):
+            raise ValueError("busy_by_hour bands must cover the day exactly once")
+        return value
+
+    def busy_share(self, moment: time) -> float:
+        return next(b.share for b in self.busy_by_hour if b.contains(moment))
 
 
 class ScheduleConfig(_Data):
@@ -180,16 +221,30 @@ class ScheduleConfig(_Data):
         return value
 
 
+class Prices(_Data):
+    """config/prices.yaml: only the first and the repeat visit have a price (clinic, 13.11)."""
+
+    demo: bool  # demo values: the bot marks them «(демо-цена)»
+    primary_visit: int | None = Field(gt=0)
+    repeat_visit: int | None = Field(gt=0)
+
+    @classmethod
+    def price_keys(cls) -> frozenset[str]:
+        return frozenset(cls.model_fields) - {"demo"}
+
+
 class ClinicData(_Data):
-    prices: dict[str, int | None]
+    prices: Prices
     contacts: Contacts
     clinic: ClinicFlags
     schedule: ScheduleConfig
 
     def price_text(self, key: str) -> str | None:
         """Price in roubles for patient texts, or None if the clinic has not given it yet."""
-        value = self.prices.get(key)
-        return f"{value} рублей" if value is not None else None
+        value = getattr(self.prices, key, None) if key in Prices.price_keys() else None
+        if value is None:
+            return None
+        return f"{value} рублей (демо-цена)" if self.prices.demo else f"{value} рублей"
 
 
 def _read_yaml(path: Path) -> object:

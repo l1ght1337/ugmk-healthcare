@@ -99,7 +99,7 @@
     "book_primary": {
       "type": "book",
       "say": ["Доктор может перенаправить Вас к хирургу после того, как оценит степень ожога."],
-      "booking": {"visit": "primary", "service": "Первичный приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "booking": {"visit": "primary", "service": "Первичный приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "primary_visit"},
       "source": "04-06, вопрос «Обращались ли к врачу» — «Нет»: запиши, предупреди, что доктор может перенаправить к хирургу"
     },
     "face_child": {

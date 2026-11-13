@@ -50,7 +50,7 @@
     "book_primary": {
       "type": "book",
       "say": ["Доктор может перенаправить Вас в другое медицинское учреждение."],
-      "booking": {"visit": "primary", "service": "Приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "consultation"},
+      "booking": {"visit": "primary", "service": "Приём травматолога-ортопеда", "slot_policy": "nearest", "price_key": "primary_visit"},
       "source": "04-12, вопрос 1 «не знает, однако подозревает»: запиши, предупреди, что доктор может перенаправить"
     },
     "insists_child": {

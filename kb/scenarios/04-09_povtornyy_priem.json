@@ -41,12 +41,12 @@
   "outcomes": {
     "book_near_repeat_window": {
       "type": "book",
-      "booking": {"visit": "repeat", "service": "Повторный приём травматолога-ортопеда", "slot_policy": "near_repeat_window", "price_key": "consultation"},
+      "booking": {"visit": "repeat", "service": "Повторный приём травматолога-ортопеда", "slot_policy": "near_repeat_window", "price_key": "repeat_visit"},
       "source": "04-09, вопрос 2 «Да»: любое свободное время, близкое к исключительному событию «Повторный приём»"
     },
     "book_repeat_window": {
       "type": "book",
-      "booking": {"visit": "repeat", "service": "Повторный приём травматолога-ортопеда", "slot_policy": "repeat_window", "price_key": "consultation"},
+      "booking": {"visit": "repeat", "service": "Повторный приём травматолога-ортопеда", "slot_policy": "repeat_window", "price_key": "repeat_visit"},
       "source": "04-09, вопрос 2 «Нет»: строго в отведённое время «Повторный приём» (8:00–10:00, 16:00–18:00) или во второй кабинет для повторных приёмов (приём Травматолога 2)"
     },
     "child_planned_orthopedist": {

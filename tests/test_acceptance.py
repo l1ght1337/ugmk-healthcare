@@ -53,7 +53,7 @@ async def test_case_01_adult_dislocation_books_primary(
     assert "Иван Петрович записан на приём травматолога-ортопеда" in text
     assert "ул. Шейнкмана, 113/2, вход через детское отделение" in text
     assert "С собой возьмите паспорт. При первом обращении — ещё СНИЛС." in text
-    assert "Стоимость консультации уточнит администратор" in text
+    assert "Стоимость консультации 2000 рублей (демо-цена)" in text
     assert slot.doctor in text
     assert "демо" in text
 

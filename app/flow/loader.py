@@ -46,7 +46,7 @@ def load_kb(kb_dir: Path = KB_DIR) -> KnowledgeBase:
         except ValueError as exc:
             errors.append(f"{path.name}: {exc}")
             continue
-        if scenario.script != path.stem:
+        if not _file_matches(scenario, path.stem):
             errors.append(f"{path.name}: script {scenario.script!r} must match the file name")
         if scenario.id in scenarios:
             errors.append(f"{path.name}: duplicate scenario id {scenario.id!r}")
@@ -67,6 +67,13 @@ def load_kb(kb_dir: Path = KB_DIR) -> KnowledgeBase:
     if errors:
         raise KnowledgeBaseError("\n".join(errors))
     return KnowledgeBase(scenarios=scenarios, facilities=facilities, common=common)
+
+
+def _file_matches(scenario: Scenario, stem: str) -> bool:
+    """One file per script; a scenario built from a clinic answer is «<script number>-N_…»."""
+    if scenario.decision is None:
+        return stem == scenario.script
+    return stem.startswith(scenario.script.split("_")[0] + "-")
 
 
 @lru_cache(maxsize=1)
