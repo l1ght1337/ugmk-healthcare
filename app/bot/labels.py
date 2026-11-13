@@ -75,6 +75,14 @@ def render_labels(kb: KnowledgeBase) -> str:
                 texts.MENU_ADMIN,
             ],
         ),
+        _row(
+            "Первая кнопка на экране дня (у контрольного приёма — на экране времени суток)",
+            [texts.NEAREST.format(when="сегодня, 14:30")],
+        ),
+        _row(
+            "Время суток (только где есть свободное время)",
+            [texts.PERIOD_MORNING, texts.PERIOD_DAY, texts.PERIOD_EVENING, texts.PERIOD_NIGHT],
+        ),
         _row("Время (по четыре в ряд; сверху — врач смены)", ["13:30", "14:00", "14:30", "15:00"]),
         _row("Контрольный приём: время около +10 дней", [texts.OTHER_DAY]),
         _row("Карточка записи", [texts.MOVE, texts.CANCEL]),

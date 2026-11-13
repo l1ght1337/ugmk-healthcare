@@ -1,4 +1,7 @@
-"""Day and time screens for booking (part C): first a day, then a grid of times.
+"""Day and time screens for booking: a day, then the part of the day, then a grid of times.
+
+«Утро 8–12», «День 12–18», «Вечер 18–23», «Ночь 23–8» — only parts with free time are
+offered. «Ночь» of a calendar day is its 00:00–08:00 and 23:00–24:00.
 
 Pure functions over slots already filtered by the 04-09 rules (app/schedule/rules.py).
 """
@@ -6,7 +9,8 @@ Pure functions over slots already filtered by the 04-09 rules (app/schedule/rule
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, datetime
+from dataclasses import dataclass
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from app.bot import texts
@@ -14,6 +18,22 @@ from app.config import ScheduleConfig, WorkingHours
 from app.flow.schema import SlotPolicy
 from app.schedule.base import Slot
 from app.schedule.rules import window_distance
+
+
+@dataclass(frozen=True)
+class Period:
+    id: str
+    label: str
+    hours: WorkingHours
+
+
+PERIODS = (
+    Period("morning", texts.PERIOD_MORNING, WorkingHours(start=time(8), end=time(12))),
+    Period("day", texts.PERIOD_DAY, WorkingHours(start=time(12), end=time(18))),
+    Period("evening", texts.PERIOD_EVENING, WorkingHours(start=time(18), end=time(23))),
+    Period("night", texts.PERIOD_NIGHT, WorkingHours(start=time(23), end=time(8))),
+)
+PERIOD_IDS = frozenset(p.id for p in PERIODS)
 
 DAYS_PER_PAGE = 6
 NEAR_WINDOW_TIMES = 8  # sick leave open: «любое свободное время, близкое к» the windows
@@ -69,6 +89,34 @@ def times_of_day(
         shown = sorted(shown, key=lambda s: (window_distance(s, windows), s.start))
         shown = shown[:NEAR_WINDOW_TIMES]
     return sorted(shown, key=lambda s: s.start)
+
+
+def period_of(moment: time) -> Period:
+    return next(p for p in PERIODS if p.hours.contains(moment))
+
+
+def periods_with(slots: Sequence[Slot], tz: ZoneInfo) -> list[Period]:
+    """Parts of the day that have free time, in the order of the day (night last)."""
+    found = {period_of(local(s, tz).time()).id for s in slots}
+    return [p for p in PERIODS if p.id in found]
+
+
+def in_period(slots: Sequence[Slot], period: str | None, tz: ZoneInfo) -> list[Slot]:
+    if period is None:
+        return list(slots)
+    return [s for s in slots if period_of(local(s, tz).time()).id == period]
+
+
+def nearest_label(slot: Slot, today: date, tz: ZoneInfo) -> str:
+    """«Ближайшее: сегодня, 14:30» / «Ближайшее: сб, 14.11, 09:00»."""
+    start = local(slot, tz)
+    if start.date() == today:
+        when = f"{texts.TODAY.lower()}, {start:%H:%M}"
+    elif (start.date() - today).days == 1:
+        when = f"{texts.TOMORROW.lower()}, {start:%H:%M}"
+    else:
+        when = f"{texts.WEEKDAYS_SHORT[start.weekday()].lower()}, {start:%d.%m, %H:%M}"
+    return texts.NEAREST.format(when=when)
 
 
 def _shift_span(moment: datetime, config: ScheduleConfig) -> str:

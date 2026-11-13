@@ -131,6 +131,7 @@ StepName = Literal[
     "age",
     "question",
     "days",
+    "periods",
     "times",
     "consent",
     "patient",
@@ -154,6 +155,7 @@ STAGE_OF: dict[str, int] = {
     "age": 2,
     "question": 3,
     "days": 4,
+    "periods": 4,
     "times": 4,
     "consent": 5,
     "patient": 5,
@@ -175,6 +177,7 @@ class Session(BaseModel):
     pending_facts: dict[str, FactValue] = {}
     child_age: int | None = None
     day: date | None = None  # chosen day (time grid)
+    period: str | None = None  # «Утро 8–12» … «Ночь 23–8» on the chosen day
     day_from: date | None = None  # first day on the day picker page
     slot_id: str | None = None
     patient_id: int | None = None
@@ -202,6 +205,7 @@ def _screen_key(s: Session) -> tuple[object, ...]:
         d.facts.get("audience"),
         d.age_months,
         s.day,
+        s.period,
         s.day_from,
         s.slot_id,
         s.patient_id,
@@ -468,6 +472,7 @@ class Conversation:
         text: str,
         buttons: Sequence[Button] = (),
         *,
+        top: Sequence[Sequence[Button]] = (),
         rows: Sequence[Sequence[Button]] = (),
         columns: int | None = None,
         back: bool | None = None,
@@ -475,7 +480,8 @@ class Conversation:
         """A wizard screen: replaces the pressed message; short labels two in a row."""
         header = self._header(c)
         body = f"{header}\n\n{text}" if header else text
-        layout = grid(list(buttons), columns) if columns else pack(buttons)
+        layout = [list(r) for r in top]
+        layout += grid(list(buttons), columns) if columns else pack(buttons)
         layout += [list(r) for r in rows]
         if back is None:
             back = c.s.wizard or bool(c.s.history) or c.s.reschedule_of is not None
@@ -507,6 +513,8 @@ class Conversation:
             self._ask(c, render.ask_question(current))
         elif step == "days":
             await self._show_days(c)
+        elif step == "periods":
+            await self._show_periods(c)
         elif step == "times":
             await self._show_times(c)
         elif step == "consent":
@@ -568,7 +576,7 @@ class Conversation:
         }
         if step in handlers:
             await handlers[step](c, text)
-        elif step in ("days", "times"):
+        elif step in ("days", "periods", "times"):
             c.say(texts.PICK_DAY if step == "days" else texts.PICK_SLOT)
             await self._render_screen(c)
         elif step in ("child_confirm", "consent", "patient", "offer_admin"):
@@ -787,6 +795,7 @@ class Conversation:
             "ca": self._on_child_confirm,
             "q": self._on_question_button,
             "d": self._on_day,
+            "pr": self._on_period,
             "s": self._on_slot,
             "c": self._on_consent,
             "p": self._on_patient,
@@ -882,7 +891,7 @@ class Conversation:
         await self._show(c, self.engine.answer(dialog, buttons[int(index)].facts))
 
     async def _on_day(self, c: Ctx, value: str) -> None:
-        if c.s.step not in ("days", "times"):
+        if c.s.step not in ("days", "periods", "times"):
             c.say(texts.STALE)
             return
         kind, _, ref = value.partition(":")
@@ -894,13 +903,21 @@ class Conversation:
             c.s.day_from = start
             await self._show_days(c)
         elif (day := _parse_day(kind)) is not None:
-            c.s.day = day
-            await self._show_times(c)
+            c.s.day, c.s.period = day, None
+            await self._show_periods(c)
         else:
             c.say(texts.STALE)
 
+    async def _on_period(self, c: Ctx, value: str) -> None:
+        if c.s.step != "periods" or value not in slots_view.PERIOD_IDS:
+            c.say(texts.STALE)
+            return
+        c.s.period = value
+        await self._show_times(c)
+
     async def _on_slot(self, c: Ctx, value: str) -> None:
-        if c.s.step != "times":
+        """A time from the grid, or «Ближайшее: …» from the day or period screen."""
+        if c.s.step not in ("days", "periods", "times"):
             c.say(texts.STALE)
             return
         slot = await self.schedule.get(value)
@@ -909,7 +926,7 @@ class Conversation:
         )
         if slot is None or not free:
             c.say(texts.SLOT_TAKEN)
-            await self._show_times(c)
+            await self._render_screen(c)
             return
         c.s.slot_id = slot.id
         if c.s.reschedule_of is not None:
@@ -1096,10 +1113,17 @@ class Conversation:
             days = slots_view.days_with_slots(free[1], self.settings.tz) if free else []
             day = slots_view.nearest_day(days, c.s.anchor)
             if day is not None:
-                c.s.day = day
-                await self._show_times(c)
+                c.s.day, c.s.period = day, None
+                await self._show_periods(c)
                 return
         await self._show_days(c)
+
+    def _nearest(self, c: Ctx, slots: Sequence[Slot]) -> list[list[Button]]:
+        """«Ближайшее: сегодня, 14:30» — the first time by the 04-09 rules, one tap."""
+        if not slots:
+            return []
+        label = slots_view.nearest_label(slots[0], self._local(c.now).date(), self.settings.tz)
+        return [[Button(label, f"s:{slots[0].id}", "primary")]]
 
     async def _show_days(self, c: Ctx) -> None:
         free = await self._free(c)
@@ -1121,29 +1145,69 @@ class Conversation:
             nav.append(Button(texts.LATER, f"d:from:{later:%Y%m%d}"))
         rows = [nav] if nav else []
         rows.append([Button(texts.MENU_ADMIN, "m:admin")])  # no convenient day: a person helps
-        self._screen(c, texts.DAY_PICK, buttons, rows=rows, columns=DAY_COLUMNS)
+        top = self._nearest(c, free[1])
+        self._screen(c, texts.DAY_PICK, buttons, top=top, rows=rows, columns=DAY_COLUMNS)
 
-    async def _show_times(self, c: Ctx) -> None:
+    async def _day_times(self, c: Ctx) -> tuple[BookingSpec, list[Slot], list[Slot]] | None:
+        """(rules, all free slots, the day's times one per start) for the chosen day."""
         free = await self._free(c)
         if free is None or c.s.day is None:
+            return None
+        spec, slots = free
+        windows = self.clinic.schedule.repeat_windows
+        shown = slots_view.times_of_day(slots, c.s.day, spec.slot_policy, windows, self.settings.tz)
+        return spec, slots, shown
+
+    def _day_header(self, c: Ctx, shown: list[Slot], slots: list[Slot]) -> list[str]:
+        tz = self.settings.tz
+        assert c.s.day is not None
+        day_slots = [s for s in slots if slots_view.local(s, tz).date() == c.s.day]
+        doctors = slots_view.doctors_text(shown, day_slots, self.clinic.schedule, tz)
+        lines = [render.format_date(c.s.day).capitalize(), doctors]
+        if c.s.anchor is not None:
+            lines.insert(0, texts.CONTROL_NEAR.format(date=render.format_date(c.s.anchor)))
+        return lines
+
+    async def _show_periods(self, c: Ctx) -> None:
+        """«Утро 8–12» / «День 12–18» / «Вечер 18–23» / «Ночь 23–8» — only those with time."""
+        found = await self._day_times(c)
+        if found is None:
             await self._show_menu(c)
             return
-        spec, slots = free
-        tz = self.settings.tz
-        shown = slots_view.times_of_day(
-            slots, c.s.day, spec.slot_policy, self.clinic.schedule.repeat_windows, tz
-        )
+        _, slots, shown = found
         if not shown:
             c.say(texts.DAY_GONE)
             c.s.day = None
             await self._show_days(c)
             return
+        periods = slots_view.periods_with(shown, self.settings.tz)
+        if len(periods) == 1:  # one part of the day: straight to its times
+            c.s.period = periods[0].id
+            await self._show_times(c)
+            return
+        c.s.step, c.s.period = "periods", None
+        lines = [*self._day_header(c, shown, slots), "", texts.PERIOD_PICK]
+        buttons = [Button(p.label, f"pr:{p.id}") for p in periods]
+        rows = [[Button(texts.OTHER_DAY, "d:other")]] if c.s.anchor is not None else []
+        # «Ближайшее» belongs to the first screen of the choice: the day picker, or here for a
+        # control visit (no day picker; the 04-09 rules leave no night times)
+        top = self._nearest(c, [s for s in slots if s in shown]) if c.s.anchor else []
+        self._screen(c, "\n".join(lines), buttons, top=top, rows=rows)
+
+    async def _show_times(self, c: Ctx) -> None:
+        found = await self._day_times(c)
+        if found is None:
+            await self._show_menu(c)
+            return
+        _, slots, day_times = found
+        tz = self.settings.tz
+        shown = slots_view.in_period(day_times, c.s.period, tz)
+        if not shown:  # the part of the day filled up meanwhile
+            c.say(texts.DAY_GONE if not day_times else texts.SLOT_TAKEN)
+            await (self._show_periods(c) if day_times else self._show_days(c))
+            return
         c.s.step = "times"
-        day_slots = [s for s in slots if slots_view.local(s, tz).date() == c.s.day]
-        doctors = slots_view.doctors_text(shown, day_slots, self.clinic.schedule, tz)
-        lines = [render.format_date(c.s.day).capitalize(), doctors, "", texts.TIME_PICK]
-        if c.s.anchor is not None:
-            lines.insert(0, texts.CONTROL_NEAR.format(date=render.format_date(c.s.anchor)))
+        lines = [*self._day_header(c, shown, slots), "", texts.TIME_PICK]
         buttons = [Button(f"{slots_view.local(s, tz):%H:%M}", f"s:{s.id}") for s in shown]
         rows = [[Button(texts.OTHER_DAY, "d:other")]] if c.s.anchor is not None else []
         self._screen(c, "\n".join(lines), buttons, rows=rows, columns=TIME_COLUMNS)

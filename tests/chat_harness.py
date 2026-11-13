@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 
 from app.bot import texts
 from app.bot.conversation import AdminPost, Button, Conversation, Reply, Turn, UserRef
@@ -92,7 +92,14 @@ class Chat:
         return [b for b in self.buttons() if b.data[2:3].isdigit() and b.data.startswith("d:")]
 
     def times(self) -> list[Button]:
-        return [b for b in self.buttons() if b.data.startswith("s:")]
+        """The time grid (not «Ближайшее: …»)."""
+        return [b for b in self.buttons() if b.data.startswith("s:") and b.label[:1].isdigit()]
+
+    def periods(self) -> list[Button]:
+        return [b for b in self.buttons() if b.data.startswith("pr:")]
+
+    def nearest(self) -> Button:
+        return next(b for b in self.buttons() if b.label.startswith("Ближайшее:"))
 
     async def pick_day(self, label: str | None = None) -> Turn:
         days = self.days()
@@ -100,7 +107,24 @@ class Chat:
         chosen = next(b for b in days if label is None or b.label.startswith(label))
         return await self.data(chosen.data)
 
+    async def pick_period(self, at: str | None = None) -> Turn:
+        """The part of the day holding ``at`` (or a later one); None — the first offered."""
+        offered = self.periods()
+        assert offered, f"no period buttons in {self.labels()}"
+        if at is not None:
+            from app.bot.slots_view import PERIODS, period_of
+
+            want = period_of(time.fromisoformat(at)).id
+            order = [p.id for p in PERIODS]
+            for pid in order[order.index(want) :]:
+                found = [b for b in offered if b.data == f"pr:{pid}"]
+                if found:
+                    return await self.data(found[0].data)
+        return await self.data(offered[0].data)
+
     async def pick_time(self, not_before: str = "00:00") -> Turn:
+        if not self.times() and self.periods():
+            await self.pick_period(None if not_before == "00:00" else not_before)
         times = [b for b in self.times() if b.label >= not_before]
         assert times, f"no time from {not_before} in {self.labels()}"
         return await self.data(times[0].data)

@@ -68,8 +68,12 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     assert "вывих, врач попробует его вправить" in info.text and info.edit and not info.screen
     assert days.text.startswith("Шаг 4 из 5 · День и время") and days.screen and not days.edit
     assert chat.days()[0].label == "Сегодня, 12.11"
+    assert chat.labels()[0].startswith("Ближайшее: сегодня, 1")  # first, one tap to book
     await chat.pick_day("Сегодня")
     assert "12 ноября (четверг)" in chat.text and "смены:" in chat.text
+    assert texts.PERIOD_PICK in chat.text
+    assert [b.label for b in chat.periods()] == ["День 12–18", "Вечер 18–23", "Ночь 23–8"]
+    await chat.pick_period("13:00")
     times = [b.label for b in chat.times()]
     assert times and times[0] >= "13:00"  # not earlier than an hour from now (12:00)
     later = next(t for t in times if t >= "14:00")  # «за 2 часа» still ahead
@@ -125,7 +129,8 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     await chat.press("Нет")  # straight to the time grid of the day about 10 days later
     assert chat.text.startswith("Предлагаю время около 22 ноября (воскресенье).")
     assert "22 ноября (воскресенье)" in chat.text and texts.OTHER_DAY in chat.labels()
-    assert chat.times() and not chat.days()
+    assert chat.periods() and not chat.days()
+    assert chat.labels()[0].startswith("Ближайшее: вс, 22.11, ")
     await chat.press(texts.OTHER_DAY)
     assert chat.days()[0].label == "Чт, 19.11"  # a few days before the target
     await chat.pick_day("Вс, 22.11")

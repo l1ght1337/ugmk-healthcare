@@ -236,7 +236,12 @@ async def test_back_from_the_time_grid_to_the_days(make_chat) -> None:
         await chat.press(label)
     days = chat.replies[-1].text
     await chat.pick_day("Завтра")
+    periods = chat.text
+    assert chat.periods()
+    await chat.pick_period("08:00")
     assert chat.times()
+    await chat.press(texts.BACK)
+    assert chat.text == periods
     await chat.press(texts.BACK)
     assert chat.text == days
 
@@ -259,6 +264,7 @@ async def test_days_two_in_a_row_times_four_in_a_row(make_chat) -> None:
     await chat.press(texts.LATER)
     assert texts.EARLIER in chat.labels()
     await chat.pick_day()
+    await chat.pick_period()
     screen = chat.replies[-1]
     time_rows = [row for row in screen.buttons if row[0].data.startswith("s:")]
     assert time_rows and all(len(row) <= 4 for row in time_rows)
@@ -266,6 +272,80 @@ async def test_days_two_in_a_row_times_four_in_a_row(make_chat) -> None:
     assert labels == sorted(labels) and len(labels) == len(set(labels))
     assert all(len(label) == 5 and label[2] == ":" for label in labels)
     assert "Врач смены:" in screen.text or "Врачи смены:" in screen.text
+
+
+async def to_days(chat: Chat) -> None:
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await to_topic_after_book(chat)
+    for label in ("Для себя", "Бытовая травма", "В течение 7 дней", "Нет, не обращались"):
+        await chat.press(label)
+
+
+async def test_parts_of_the_day_only_with_free_time(make_chat, schedule) -> None:
+    chat = make_chat()
+    await to_days(chat)
+    await chat.pick_day("Завтра")
+    labels = [b.label for b in chat.periods()]
+    assert labels == ["Утро 8–12", "День 12–18", "Вечер 18–23", "Ночь 23–8"]
+    assert [len(row) for row in chat.replies[-1].buttons][:2] == [2, 2]  # two in a row
+    assert not any(b.label.startswith("Ближайшее") for b in chat.buttons())
+    await chat.pick_period("23:00")
+    night = [b.label for b in chat.times()]
+    assert night and all(t >= "23:00" or t < "08:00" for t in night)
+    assert night[0] < "08:00"  # the calendar day: its early hours first, then 23:00–24:00
+    await chat.press(texts.BACK)
+    await chat.pick_period("08:00")
+    assert all("08:00" <= b.label < "12:00" for b in chat.times())
+
+
+async def test_nearest_time_is_offered_first_and_books_in_one_tap(make_chat, db) -> None:
+    from sqlalchemy import select
+
+    from app.db.models import Booking
+
+    chat = make_chat()
+    await to_days(chat)
+    nearest = chat.nearest()
+    assert chat.labels()[0] == nearest.label and nearest.style == "primary"
+    assert nearest.label.startswith("Ближайшее: сегодня, ")
+    await chat.data(nearest.data)
+    assert texts.CONSENT in chat.text  # straight to the patient's data
+    await chat.press(texts.CONSENT_YES)
+    await chat.say("Петров Иван Сергеевич")
+    await chat.say("12.03.1985")
+    await chat.contact()
+    async with db() as s:
+        (booking,) = (await s.scalars(select(Booking))).all()
+    assert f"{booking.start_at.astimezone(chat.conversation.settings.tz):%H:%M}" in nearest.label
+
+
+async def test_one_part_of_the_day_goes_straight_to_times(make_chat, clock) -> None:
+    from tests.conftest import NOW
+
+    clock.now = NOW.replace(hour=22, minute=0)  # +1 h to travel: only the night is left
+    chat = make_chat()
+    await to_days(chat)
+    await chat.pick_day("Сегодня")
+    assert not chat.periods() and chat.times()
+    assert all(b.label >= "23:00" for b in chat.times())
+
+
+def test_nearest_label_names_the_day() -> None:
+    from datetime import date, datetime, timedelta
+
+    from app.bot.slots_view import nearest_label
+    from app.schedule.base import Slot
+    from tests.conftest import TZ
+
+    def at(day: int, hour: int) -> Slot:
+        start = datetime(2026, 11, day, hour, 30, tzinfo=TZ)
+        return Slot("x", start, start + timedelta(minutes=30), "Д", "К", False, False)
+
+    today = date(2026, 11, 12)
+    assert nearest_label(at(12, 14), today, TZ) == "Ближайшее: сегодня, 14:30"
+    assert nearest_label(at(13, 9), today, TZ) == "Ближайшее: завтра, 09:30"
+    assert nearest_label(at(14, 9), today, TZ) == "Ближайшее: сб, 14.11, 09:30"
 
 
 # --- labels that fit a phone ---------------------------------------------------------------
@@ -358,6 +438,33 @@ def test_venue_once_the_map_point_is_known(clinic) -> None:
     venue = render.venue(clinic.model_copy(update={"contacts": contacts}))
     assert venue is not None and venue.address.startswith("ул. Шейнкмана, 113/2")
     assert render.venue(clinic) is None
+
+
+async def test_booking_sends_the_map_point_when_configured(make_chat, clinic) -> None:
+    from app.config import Location
+    from tests.test_conversation import book_dislocation
+
+    center = clinic.contacts.trauma_center.model_copy(
+        update={"location": Location(latitude=56.123456, longitude=60.123456)}
+    )
+    chat = make_chat()
+    contacts = clinic.contacts.model_copy(update={"trauma_center": center})
+    chat.conversation.clinic = clinic.model_copy(update={"contacts": contacts})
+    await book_dislocation(chat)
+    kinds = ["card" if r.card else "venue" if r.venue else "text" for r in chat.replies]
+    assert kinds == ["text", "card", "venue", "text"]  # thanks, card, map, payment question
+    venue = chat.replies[2].venue
+    assert (venue.latitude, venue.longitude, venue.title) == (
+        56.123456, 60.123456, "Травмпункт «УГМК-Здоровье»",
+    )  # fmt: skip
+
+    bot = _Bot()
+    await Delivery(bot, None, None)(Turn([chat.replies[2]]), 1)  # type: ignore[arg-type]
+    assert bot.calls == [
+        ("venue", {"latitude": 56.123456, "longitude": 60.123456,
+                   "title": "Травмпункт «УГМК-Здоровье»",
+                   "address": "ул. Шейнкмана, 113/2, вход через детское отделение"})
+    ]  # fmt: skip
 
 
 # --- Telegram delivery with fallbacks --------------------------------------------------------
