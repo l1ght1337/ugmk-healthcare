@@ -11,15 +11,22 @@ Newer Bot API features, each with a plain fallback:
   with ``RICH_MESSAGES=false``, the same content as plain text;
 * answers streamed as a draft (``sendMessageDraft``, 9.3) — if the API refuses once, drafts
   are switched off and only «печатает…» (``sendChatAction``) is shown;
-* the trauma centre on a map (``sendVenue``) — only when its point is in config/contacts.yaml.
+* the trauma centre on a map (``sendVenue``) — only when its point is in config/contacts.yaml;
+* animations and photos from assets/ (``sendAnimation``, ``sendPhoto``) — uploaded once,
+  then sent by file_id (data/media_ids.json); a missing file or MEDIA_ENABLED=false — the
+  text alone;
+* the booking card pinned silently, unpinned on cancel; reactions 👍 and ❤ on the pressed
+  message — cosmetic, any refusal is ignored.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
@@ -28,6 +35,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand,
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputRichBlockFooter,
@@ -38,6 +46,7 @@ from aiogram.types import (
     InputRichMessage,
     KeyboardButton,
     Message,
+    ReactionTypeEmoji,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     RichTextBold,
@@ -49,11 +58,14 @@ from app.bot import texts
 from app.bot.access import ALLOW_PREFIX, APPROVED_NOTE, Access
 from app.bot.conversation import Button, Conversation, DraftSink, Reply, Turn, UserRef
 from app.bot.render import Card
-from app.config import ClinicData, Settings
+from app.config import PROJECT_ROOT, ClinicData, Settings
 
 log = logging.getLogger(__name__)
 
 CLOSE_PREFIX = "close:"
+ASSETS_DIR = PROJECT_ROOT / "assets"
+MEDIA_IDS = PROJECT_ROOT / "data" / "media_ids.json"
+CAPTION_MAX = 1024
 DRAFT_EVERY = 0.6  # seconds between draft updates
 DRAFT_MIN_GROWTH = 12  # characters
 Markup = InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | None
@@ -117,6 +129,50 @@ def user_ref(obj: Message | CallbackQuery) -> UserRef:
     return UserRef(id=user.id, chat_id=chat_id, username=user.username, display_name=name)
 
 
+class MediaStore:
+    """Files from assets/: uploaded once, then reused by Telegram file_id.
+
+    The id is kept with the file's size and modification time, so a replaced file is
+    uploaded again. Nothing is sent when MEDIA_ENABLED=false or the file is missing.
+    """
+
+    def __init__(
+        self, assets: Path = ASSETS_DIR, cache: Path = MEDIA_IDS, *, enabled: bool = True
+    ) -> None:
+        self.assets, self.cache, self.enabled = assets, cache, enabled
+        try:
+            self._ids: dict[str, dict[str, Any]] = json.loads(cache.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self._ids = {}
+
+    def _stamp(self, name: str) -> str | None:
+        path = self.assets / name
+        if not path.is_file():
+            return None
+        stat = path.stat()
+        return f"{stat.st_size}:{int(stat.st_mtime)}"
+
+    def available(self, name: str) -> bool:
+        return self.enabled and self._stamp(name) is not None
+
+    def file(self, name: str) -> str | FSInputFile:
+        known = self._ids.get(name)
+        if known and known.get("stamp") == self._stamp(name):
+            return str(known["file_id"])
+        return FSInputFile(self.assets / name)
+
+    def remember(self, name: str, file_id: str) -> None:
+        stamp = self._stamp(name)
+        if stamp is None or self._ids.get(name, {}).get("file_id") == file_id:
+            return
+        self._ids[name] = {"file_id": file_id, "stamp": stamp}
+        try:
+            self.cache.parent.mkdir(parents=True, exist_ok=True)
+            self.cache.write_text(json.dumps(self._ids, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            log.warning("could not save %s", self.cache, exc_info=True)
+
+
 class Delivery:
     """Sends a Turn: patient replies, then posts to the admin chat (remembering their ids).
 
@@ -132,11 +188,13 @@ class Delivery:
         admin_chat_id: int | None,
         *,
         rich_messages: bool = True,
+        media: MediaStore | None = None,
     ) -> None:
         self.bot = bot
         self.conversation = conversation
         self.admin_chat_id = admin_chat_id
         self.rich_messages = rich_messages
+        self.media = media or MediaStore(enabled=False)
         self._screens: dict[int, int] = {}  # chat → message id of the current screen
 
     async def __call__(
@@ -168,6 +226,21 @@ class Delivery:
             sent = await self._send(target, reply)
             if reply.screen and sent is not None:
                 self._screens[target] = sent.message_id
+            if reply.pin is not None and sent is not None:
+                await self._pin(target, sent.message_id, reply.pin)
+        target = chat_id if chat_id is not None else pressed.chat.id if pressed else None
+        if target is not None:
+            for message_id in turn.unpin:
+                await self._cosmetic(
+                    self.bot.unpin_chat_message(chat_id=target, message_id=message_id)
+                )
+        if turn.reaction and pressed is not None:
+            reaction = [ReactionTypeEmoji(emoji=turn.reaction)]
+            await self._cosmetic(
+                self.bot.set_message_reaction(
+                    chat_id=pressed.chat.id, message_id=pressed.message_id, reaction=reaction
+                )
+            )
         for post in turn.admin:
             if self.admin_chat_id is None:
                 log.error("ADMIN_CHAT_ID is not set; handoff %s not delivered", post.handoff_id)
@@ -191,7 +264,56 @@ class Delivery:
             if post.booking_id is not None:
                 await self.conversation.register_booking_card(post.booking_id, sent.message_id)
 
+    async def _cosmetic(self, call: Awaitable[Any]) -> None:
+        try:
+            await call
+        except TelegramAPIError:
+            log.debug("cosmetic Telegram call refused", exc_info=True)
+
+    async def _pin(self, chat_id: int, message_id: int, booking_id: int) -> None:
+        try:
+            await self.bot.pin_chat_message(
+                chat_id=chat_id, message_id=message_id, disable_notification=True
+            )
+        except TelegramAPIError:
+            log.debug("could not pin the booking card", exc_info=True)
+            return
+        await self.conversation.register_pinned_card(booking_id, message_id)
+
+    async def _send_media(self, chat_id: int, reply: Reply) -> Message | None:
+        assert reply.media is not None
+        name, caption = reply.media.name, reply.text or None
+        if caption and len(caption) > CAPTION_MAX:
+            caption = None
+        keyboard = markup(reply) if caption or not reply.text else None
+        try:
+            if reply.media.kind == "animation":
+                sent = await self.bot.send_animation(
+                    chat_id, animation=self.media.file(name), caption=caption,
+                    reply_markup=keyboard,
+                )  # fmt: skip
+                file_id = sent.animation.file_id if sent.animation else None
+            else:
+                sent = await self.bot.send_photo(
+                    chat_id, photo=self.media.file(name), caption=caption, reply_markup=keyboard
+                )
+                file_id = sent.photo[-1].file_id if sent.photo else None
+        except TelegramAPIError:
+            log.warning("could not send %s, sending the text alone", name, exc_info=True)
+            return None
+        if file_id:
+            self.media.remember(name, file_id)
+        if reply.text and caption is None:  # too long for a caption: the text follows
+            return await self.bot.send_message(chat_id, reply.text, reply_markup=markup(reply))
+        return sent
+
     async def _send(self, chat_id: int, reply: Reply) -> Message | None:
+        if reply.media is not None and self.media.available(reply.media.name):
+            sent = await self._send_media(chat_id, reply)
+            if sent is not None:
+                return sent
+        if reply.media_only or not (reply.text or reply.venue):
+            return None
         if reply.venue is not None:
             v = reply.venue
             return await self.bot.send_venue(

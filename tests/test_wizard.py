@@ -11,13 +11,13 @@ from aiogram.methods import SendMessage
 
 from app.bot import texts
 from app.bot.conversation import Button, Reply, Turn
-from app.bot.layout import SHORT, pack
+from app.bot.layout import SHORT, pack, width
 from app.bot.telegram import Delivery, Drafts, bot_commands, bot_descriptions, rich_card
 from app.config import Settings
 from app.flow import topics
 from app.flow.loader import KnowledgeBase
 from app.flow.schema import BUTTON_MAX
-from tests.chat_harness import Chat
+from tests.chat_harness import Chat, plain
 from tests.fake_deepseek import FakeDeepSeek
 
 LIMB_TOPICS = {
@@ -37,7 +37,7 @@ async def every_topic_label(chat: Chat) -> set[str]:
     while todo:
         chat.turn = todo.pop()
         for button in chat.buttons():
-            seen.add(button.label)
+            seen.add(plain(button.label))
             item = topics_item(chat, button.data)
             if button.data == "t:list" or (item is not None and item.menu is not None):
                 if button.data in visited:
@@ -318,7 +318,7 @@ async def test_nearest_time_is_offered_first_and_books_in_one_tap(make_chat, db)
     chat = make_chat()
     await to_days(chat)
     nearest = chat.nearest()
-    assert chat.labels()[0] == nearest.label and nearest.style == "primary"
+    assert chat.replies[-1].buttons[0][0] == nearest and nearest.style == "primary"
     assert nearest.label.startswith("Ближайшее: сегодня, ")
     await chat.data(nearest.data)
     assert texts.CONSENT in chat.text  # straight to the patient's data
@@ -402,7 +402,7 @@ async def test_no_two_column_row_has_a_long_label(make_chat, kb: KnowledgeBase) 
         for reply in turn.replies:
             for row in reply.buttons:
                 if len(row) > 1 and not row[0].data.startswith(("s:", "d:")):
-                    assert all(len(b.label) <= SHORT for b in row), [b.label for b in row]
+                    assert all(width(b.label) <= SHORT for b in row), [b.label for b in row]
 
 
 # --- colours --------------------------------------------------------------------------------
@@ -461,15 +461,16 @@ async def test_booking_sends_the_map_point_when_configured(make_chat, clinic) ->
     contacts = clinic.contacts.model_copy(update={"trauma_center": center})
     chat.conversation.clinic = clinic.model_copy(update={"contacts": contacts})
     await book_dislocation(chat)
-    kinds = ["card" if r.card else "venue" if r.venue else "text" for r in chat.replies]
+    replies = [r for r in chat.replies if not r.media_only]  # without the «booked» animation
+    kinds = ["card" if r.card else "venue" if r.venue else "text" for r in replies]
     assert kinds == ["text", "card", "venue", "text"]  # thanks, card, map, payment question
-    venue = chat.replies[2].venue
+    venue = replies[2].venue
     assert (venue.latitude, venue.longitude, venue.title) == (
         56.123456, 60.123456, "Травмпункт «УГМК-Здоровье»",
     )  # fmt: skip
 
     bot = _Bot()
-    await Delivery(bot, None, None)(Turn([chat.replies[2]]), 1)  # type: ignore[arg-type]
+    await Delivery(bot, None, None)(Turn([replies[2]]), 1)  # type: ignore[arg-type]
     assert bot.calls == [
         ("venue", {"latitude": 56.123456, "longitude": 60.123456,
                    "title": "Травмпункт «УГМК-Здоровье»",

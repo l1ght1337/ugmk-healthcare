@@ -15,38 +15,45 @@
           "id": "g_limb",
           "label": "Рука или нога",
           "menu": "limb_all",
-          "area": "limb"
+          "area": "limb",
+          "icon": "🦴"
         },
         {
           "id": "g_wound",
           "label": "Рана, ожог, укус",
-          "menu": "wounds"
+          "menu": "wounds",
+          "icon": "🩹"
         },
         {
           "id": "g_head",
           "label": "Голова, лицо, глаза, уши",
           "menu": "head",
-          "area": "head"
+          "area": "head",
+          "icon": "👁"
         },
         {
           "id": "g_trunk",
           "label": "Шея, спина, грудь, живот",
-          "menu": "trunk"
+          "menu": "trunk",
+          "icon": "🧍"
         },
         {
           "id": "g_treated",
           "label": "Уже лечусь у вас",
-          "menu": "treated"
+          "menu": "treated",
+          "icon": "🔁"
         },
         {
           "id": "g_infant",
           "label": "Ребёнок до 6 месяцев",
-          "scenario": "infant_under_6m"
+          "scenario": "infant_under_6m",
+          "icon": "👶"
         },
         {
           "id": "g_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     },
@@ -56,42 +63,50 @@
         {
           "id": "a_dislocation",
           "label": "Похоже на вывих",
-          "scenario": "dislocation"
+          "scenario": "dislocation",
+          "icon": "🦴"
         },
         {
           "id": "a_fracture",
           "label": "Похоже на перелом",
-          "scenario": "fracture"
+          "scenario": "fracture",
+          "icon": "🦴"
         },
         {
           "id": "a_ligament",
           "label": "Растяжение или разрыв связок",
-          "scenario": "ligament_rupture"
+          "scenario": "ligament_rupture",
+          "icon": "🦵"
         },
         {
           "id": "a_cast_apply",
           "label": "Наложить гипс",
-          "scenario": "cast_apply"
+          "scenario": "cast_apply",
+          "icon": "🩼"
         },
         {
           "id": "a_cast_remove",
           "label": "Снять гипс",
-          "scenario": "cast_removal"
+          "scenario": "cast_removal",
+          "icon": "🩼"
         },
         {
           "id": "a_orthosis",
           "label": "Ортез",
-          "scenario": "orthosis"
+          "scenario": "orthosis",
+          "icon": "🩼"
         },
         {
           "id": "a_scotchcast",
           "label": "Скотчкаст",
-          "scenario": "scotchcast"
+          "scenario": "scotchcast",
+          "icon": "🩼"
         },
         {
           "id": "a_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     },
@@ -101,37 +116,44 @@
         {
           "id": "w_cut",
           "label": "Порез, рана",
-          "scenario": "cut_sutures"
+          "scenario": "cut_sutures",
+          "icon": "🩹"
         },
         {
           "id": "w_burn",
           "label": "Ожог",
-          "scenario": "burns"
+          "scenario": "burns",
+          "icon": "🔥"
         },
         {
           "id": "w_bite",
           "label": "Укус животного",
-          "scenario": "animal_bite"
+          "scenario": "animal_bite",
+          "icon": "🐾"
         },
         {
           "id": "w_needle",
           "label": "Укол чужой иглой",
-          "scenario": "needle_injury"
+          "scenario": "needle_injury",
+          "icon": "💉"
         },
         {
           "id": "w_criminal",
           "label": "Нападение, побои, ДТП",
-          "scenario": "criminal_trauma"
+          "scenario": "criminal_trauma",
+          "icon": "🚨"
         },
         {
           "id": "w_pus",
           "label": "Нагноение, плохо заживает",
-          "scenario": "inflammation"
+          "scenario": "inflammation",
+          "icon": "🩺"
         },
         {
           "id": "w_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     },
@@ -141,42 +163,50 @@
         {
           "id": "h_hit",
           "label": "Ударился головой",
-          "scenario": "head_trauma"
+          "scenario": "head_trauma",
+          "icon": "🤕"
         },
         {
           "id": "h_eye",
           "label": "Травма глаза",
-          "scenario": "eye_trauma"
+          "scenario": "eye_trauma",
+          "icon": "👁"
         },
         {
           "id": "h_ent",
           "label": "Ухо, горло, нос",
-          "scenario": "ent_trauma"
+          "scenario": "ent_trauma",
+          "icon": "👂"
         },
         {
           "id": "h_cut",
           "label": "Порез, рана",
-          "scenario": "cut_sutures"
+          "scenario": "cut_sutures",
+          "icon": "🩹"
         },
         {
           "id": "h_burn",
           "label": "Ожог",
-          "scenario": "burns"
+          "scenario": "burns",
+          "icon": "🔥"
         },
         {
           "id": "h_bite",
           "label": "Укус животного",
-          "scenario": "animal_bite"
+          "scenario": "animal_bite",
+          "icon": "🐾"
         },
         {
           "id": "h_treated",
           "label": "Уже лечусь у вас",
-          "menu": "treated"
+          "menu": "treated",
+          "icon": "🔁"
         },
         {
           "id": "h_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     },
@@ -186,42 +216,50 @@
         {
           "id": "k_back",
           "label": "Потянул шею или спину",
-          "scenario": "neurology"
+          "scenario": "neurology",
+          "icon": "🧍"
         },
         {
           "id": "k_hit",
           "label": "Удар в грудь или живот",
-          "scenario": "chest_abdomen"
+          "scenario": "chest_abdomen",
+          "icon": "🫁"
         },
         {
           "id": "k_genital",
           "label": "Травма половых органов",
-          "scenario": "genital_trauma"
+          "scenario": "genital_trauma",
+          "icon": "🩺"
         },
         {
           "id": "k_cut",
           "label": "Порез, рана",
-          "scenario": "cut_sutures"
+          "scenario": "cut_sutures",
+          "icon": "🩹"
         },
         {
           "id": "k_burn",
           "label": "Ожог",
-          "scenario": "burns"
+          "scenario": "burns",
+          "icon": "🔥"
         },
         {
           "id": "k_bite",
           "label": "Укус животного",
-          "scenario": "animal_bite"
+          "scenario": "animal_bite",
+          "icon": "🐾"
         },
         {
           "id": "k_pus",
           "label": "Нагноение, плохо заживает",
-          "scenario": "inflammation"
+          "scenario": "inflammation",
+          "icon": "🩺"
         },
         {
           "id": "k_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     },
@@ -231,27 +269,32 @@
         {
           "id": "r_repeat",
           "label": "Повторный приём",
-          "scenario": "repeat_visit"
+          "scenario": "repeat_visit",
+          "icon": "🔁"
         },
         {
           "id": "r_dressing",
           "label": "Перевязка",
-          "scenario": "dressing"
+          "scenario": "dressing",
+          "icon": "🩹"
         },
         {
           "id": "r_sick_leave",
           "label": "Больничный",
-          "scenario": "sick_leave"
+          "scenario": "sick_leave",
+          "icon": "📄"
         },
         {
           "id": "r_puncture",
           "label": "Повторная пункция",
-          "scenario": "joint_puncture"
+          "scenario": "joint_puncture",
+          "icon": "💉"
         },
         {
           "id": "r_pins",
           "label": "Удаление спиц",
-          "scenario": "pin_removal"
+          "scenario": "pin_removal",
+          "icon": "🔩"
         }
       ]
     },
@@ -261,12 +304,14 @@
         {
           "id": "o_describe",
           "label": "Опишите своими словами",
-          "action": "describe"
+          "action": "describe",
+          "icon": "✍"
         },
         {
           "id": "o_admin",
           "label": "Позвать администратора",
-          "action": "admin"
+          "action": "admin",
+          "icon": "👤"
         }
       ]
     },
@@ -276,37 +321,44 @@
         {
           "id": "l_fall",
           "label": "Упал, ударился, подвернул",
-          "menu": "fall"
+          "menu": "fall",
+          "icon": "🤕"
         },
         {
           "id": "l_cut",
           "label": "Порез, рана",
-          "scenario": "cut_sutures"
+          "scenario": "cut_sutures",
+          "icon": "🩹"
         },
         {
           "id": "l_burn",
           "label": "Ожог",
-          "scenario": "burns"
+          "scenario": "burns",
+          "icon": "🔥"
         },
         {
           "id": "l_bite",
           "label": "Укус животного",
-          "scenario": "animal_bite"
+          "scenario": "animal_bite",
+          "icon": "🐾"
         },
         {
           "id": "l_casts",
           "label": "Гипс, ортез, скотчкаст",
-          "menu": "casts"
+          "menu": "casts",
+          "icon": "🩼"
         },
         {
           "id": "l_treated",
           "label": "Уже лечусь у вас",
-          "menu": "treated"
+          "menu": "treated",
+          "icon": "🔁"
         },
         {
           "id": "l_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     },
@@ -316,22 +368,26 @@
         {
           "id": "f_dislocation",
           "label": "Похоже на вывих",
-          "scenario": "dislocation"
+          "scenario": "dislocation",
+          "icon": "🦴"
         },
         {
           "id": "f_fracture",
           "label": "Похоже на перелом",
-          "scenario": "fracture"
+          "scenario": "fracture",
+          "icon": "🦴"
         },
         {
           "id": "f_ligament",
           "label": "Растяжение или разрыв связок",
-          "scenario": "ligament_rupture"
+          "scenario": "ligament_rupture",
+          "icon": "🦵"
         },
         {
           "id": "f_unsure",
           "label": "Не знаю",
-          "scenario": "dislocation"
+          "scenario": "dislocation",
+          "icon": "❔"
         }
       ]
     },
@@ -341,22 +397,26 @@
         {
           "id": "cast_apply",
           "label": "Наложить гипс",
-          "scenario": "cast_apply"
+          "scenario": "cast_apply",
+          "icon": "🩼"
         },
         {
           "id": "cast_remove",
           "label": "Снять гипс",
-          "scenario": "cast_removal"
+          "scenario": "cast_removal",
+          "icon": "🩼"
         },
         {
           "id": "cast_orthosis",
           "label": "Ортез",
-          "scenario": "orthosis"
+          "scenario": "orthosis",
+          "icon": "🩼"
         },
         {
           "id": "cast_scotchcast",
           "label": "Скотчкаст",
-          "scenario": "scotchcast"
+          "scenario": "scotchcast",
+          "icon": "🩼"
         }
       ]
     },
@@ -366,32 +426,38 @@
         {
           "id": "n_back",
           "label": "Потянул шею или спину",
-          "scenario": "neurology"
+          "scenario": "neurology",
+          "icon": "🧍"
         },
         {
           "id": "n_cut",
           "label": "Порез, рана",
-          "scenario": "cut_sutures"
+          "scenario": "cut_sutures",
+          "icon": "🩹"
         },
         {
           "id": "n_burn",
           "label": "Ожог",
-          "scenario": "burns"
+          "scenario": "burns",
+          "icon": "🔥"
         },
         {
           "id": "n_bite",
           "label": "Укус животного",
-          "scenario": "animal_bite"
+          "scenario": "animal_bite",
+          "icon": "🐾"
         },
         {
           "id": "n_treated",
           "label": "Уже лечусь у вас",
-          "menu": "treated"
+          "menu": "treated",
+          "icon": "🔁"
         },
         {
           "id": "n_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     },
@@ -401,37 +467,44 @@
         {
           "id": "c_hit",
           "label": "Удар в грудь или живот",
-          "scenario": "chest_abdomen"
+          "scenario": "chest_abdomen",
+          "icon": "🫁"
         },
         {
           "id": "c_cut",
           "label": "Порез, рана",
-          "scenario": "cut_sutures"
+          "scenario": "cut_sutures",
+          "icon": "🩹"
         },
         {
           "id": "c_burn",
           "label": "Ожог",
-          "scenario": "burns"
+          "scenario": "burns",
+          "icon": "🔥"
         },
         {
           "id": "c_bite",
           "label": "Укус животного",
-          "scenario": "animal_bite"
+          "scenario": "animal_bite",
+          "icon": "🐾"
         },
         {
           "id": "c_pus",
           "label": "Нагноение, плохо заживает",
-          "scenario": "inflammation"
+          "scenario": "inflammation",
+          "icon": "🩺"
         },
         {
           "id": "c_treated",
           "label": "Уже лечусь у вас",
-          "menu": "treated"
+          "menu": "treated",
+          "icon": "🔁"
         },
         {
           "id": "c_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     },
@@ -441,17 +514,20 @@
         {
           "id": "x_genital",
           "label": "Травма половых органов",
-          "scenario": "genital_trauma"
+          "scenario": "genital_trauma",
+          "icon": "🩺"
         },
         {
           "id": "x_treated",
           "label": "Уже лечусь у вас",
-          "menu": "treated"
+          "menu": "treated",
+          "icon": "🔁"
         },
         {
           "id": "x_other",
           "label": "Другое",
-          "menu": "other"
+          "menu": "other",
+          "icon": "❔"
         }
       ]
     }

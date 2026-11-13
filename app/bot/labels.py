@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 
 from app.bot import texts
+from app.bot.conversation import _menu
 from app.config import PROJECT_ROOT
 from app.flow.loader import KnowledgeBase, load_kb
 
@@ -49,14 +50,14 @@ def render_labels(kb: KnowledgeBase) -> str:
         "|---|---|---|",
     ]
     for name, menu in kb.topics.menus.items():
-        buttons = " · ".join(f"«{item.label}»" for item in menu.items)
+        buttons = " · ".join(f"«{item.caption}»" for item in menu.items)
         lines.append(f"| {name} | {menu.text} | {buttons} |")
     lines += [
         "",
         "## Остальные кнопки",
         "| Где | Кнопки |",
         "|---|---|",
-        _row("Главное меню", [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN]),
+        _row("Главное меню", [b.label for row in _menu() for b in row]),
         _row("После «Записаться в травмпункт»", [texts.TOPIC_LIST]),
         _row("Каждый экран записи (кроме первого вопроса после напоминания)", [texts.BACK]),
         _row("Для кого запись", [texts.AUDIENCE_SELF, texts.AUDIENCE_CHILD]),
@@ -86,6 +87,8 @@ def render_labels(kb: KnowledgeBase) -> str:
         _row("Время (по четыре в ряд; сверху — врач смены)", ["13:30", "14:00", "14:30", "15:00"]),
         _row("Контрольный приём: время около +10 дней", [texts.OTHER_DAY]),
         _row("Карточка записи", [texts.MOVE, texts.CANCEL]),
+        _row("Длинная фраза скрипта (коротко)", [texts.MORE]),
+        _row("Напоминание за 2 часа", [texts.HOW_TO_GET, texts.CONFIRM, texts.MOVE, texts.CANCEL]),
         _row("Согласие на обработку персональных данных", [texts.CONSENT_YES, texts.CONSENT_NO]),
         _row(
             "Кого записываем", ["Петров Иван, 12.03.1985 (сохранённый пациент)", texts.PATIENT_NEW]

@@ -7,6 +7,7 @@ grids with short labels.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Iterable, Sequence
 from typing import Protocol
 
@@ -20,12 +21,22 @@ class Labeled(Protocol):
     def label(self) -> str: ...
 
 
+def width(label: str) -> int:
+    """How wide a label is on screen: an emoji takes two letters, joiners take none."""
+    total = 0
+    for ch in label:
+        if ch in "\ufe0f\u200d" or unicodedata.category(ch) == "Mn":
+            continue
+        total += 2 if ord(ch) >= 0x1F000 or 0x2600 <= ord(ch) <= 0x27BF else 1
+    return total
+
+
 def pack[B: Labeled](buttons: Iterable[B], short: int = SHORT) -> list[list[B]]:
     """Two short buttons per row, a long one alone; the order is kept."""
     rows: list[list[B]] = []
     pending: B | None = None
     for button in buttons:
-        if len(button.label) > short:
+        if width(button.label) > short:
             if pending is not None:
                 rows.append([pending])
                 pending = None

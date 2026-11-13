@@ -7,7 +7,7 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from app.bot import texts
-from app.bot.conversation import Conversation
+from app.bot.conversation import BOOKED, ENTRANCE, Conversation
 from app.db.models import Booking, Handoff, Reminder
 from app.db.session import Database
 from app.schedule.mock import MockSchedule
@@ -61,10 +61,12 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")
     info, days = chat.replies
-    assert "вывих, врач попробует его вправить" in info.text and info.edit and not info.screen
+    assert info.text == "Можно записаться к травматологу-ортопеду: врач попробует вправить вывих."
+    assert [b.label for row in info.buttons for b in row] == [texts.MORE]  # the full phrase
+    assert info.edit and not info.screen
     assert days.text.startswith("Шаг 4 из 5 · День и время") and days.screen and not days.edit
     assert chat.days()[0].label == "Сегодня, 12.11"
-    assert chat.labels()[0].startswith("Ближайшее: сегодня, 1")  # first, one tap to book
+    assert days.buttons[0][0].label.startswith("Ближайшее: сегодня, 1")  # first, one tap
     await chat.pick_day("Сегодня")
     assert "12 ноября (четверг)" in chat.text and "смены:" in chat.text
     assert texts.PERIOD_PICK in chat.text
@@ -82,7 +84,9 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     await chat.say("12.03.1985")
     assert chat.replies[-1].ask_contact
     await chat.contact()
-    thanks, card, payment = chat.replies
+    thanks, booked, card, payment = chat.replies
+    assert (booked.media, booked.media_only, booked.text) == (BOOKED, True, "")
+    assert card.pin is not None
     assert thanks.remove_keyboard and card.card is not None
     for part in (
         "Запись в травмпункт",
@@ -110,7 +114,8 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     )
     assert "завтра" not in chat.text and "Через 2 часа" not in chat.text
     assert "подземный паркинг" in chat.text
-    assert chat.labels() == [texts.CONFIRM, texts.MOVE, texts.CANCEL]
+    assert chat.replies[0].media == ENTRANCE
+    assert chat.labels() == [texts.HOW_TO_GET, texts.MORE, texts.CONFIRM, texts.MOVE, texts.CANCEL]
     await chat.press(texts.CONFIRM)
     await chat.demo_next()
     assert chat.text == texts.AFTER_VISIT

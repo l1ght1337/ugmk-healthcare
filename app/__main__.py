@@ -10,7 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from app.bot.access import Access
 from app.bot.conversation import Conversation
-from app.bot.telegram import Delivery, Drafts, build_dispatcher, setup_profile
+from app.bot.telegram import Delivery, Drafts, MediaStore, build_dispatcher, setup_profile
 from app.config import get_clinic_data, get_settings
 from app.db.session import Database
 from app.flow.loader import get_kb
@@ -41,7 +41,11 @@ async def run() -> None:
         default=DefaultBotProperties(link_preview_is_disabled=True),
     )
     delivery = Delivery(
-        bot, conversation, settings.admin_chat_id, rich_messages=settings.rich_messages
+        bot,
+        conversation,
+        settings.admin_chat_id,
+        rich_messages=settings.rich_messages,
+        media=MediaStore(enabled=settings.media_enabled),
     )
     drafts = Drafts(bot, enabled=settings.stream_answers)
     dispatcher = build_dispatcher(settings, conversation, delivery, Access(settings, db), drafts)

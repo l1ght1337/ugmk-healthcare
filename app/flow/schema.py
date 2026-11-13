@@ -440,6 +440,12 @@ class MenuItem(_Model):
 
     id: str = Field(pattern=SNAKE, description="Unique across all menus (callback data)")
     label: str = Field(min_length=1, max_length=BUTTON_MAX)
+    icon: str | None = Field(default=None, max_length=4, description="Emoji before the label")
+
+    @property
+    def caption(self) -> str:
+        return f"{self.icon} {self.label}" if self.icon else self.label
+
     menu: str | None = None
     scenario: str | None = None
     action: Literal["describe", "admin"] | None = None
@@ -489,3 +495,25 @@ class TopicTree(_Model):
 
     def item(self, item_id: str) -> MenuItem | None:
         return next((i for m in self.menus.values() for i in m.items if i.id == item_id), None)
+
+
+SHORT_MAX = 90  # two lines on a phone
+
+
+class ShortPhrase(_Model):
+    """A long script phrase shown in short, with «Подробнее» for the full text."""
+
+    id: str = Field(pattern=SNAKE, max_length=20)
+    full: str = Field(min_length=SHORT_MAX + 1)
+    short: str = Field(min_length=1, max_length=SHORT_MAX)
+
+    @model_validator(mode="after")
+    def _same_ending(self) -> ShortPhrase:
+        if self.full.endswith(":") != self.short.endswith(":"):
+            raise ValueError(f"short {self.id!r}: a phrase before addresses must end with «:»")
+        return self
+
+
+class ShortPhrases(_Model):
+    note: str = ""
+    phrases: tuple[ShortPhrase, ...] = ()

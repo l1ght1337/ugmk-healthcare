@@ -58,6 +58,7 @@ MENU_BOOK = "Записаться в травмпункт"
 MENU_ASK = "Задать вопрос"
 MENU_MY = "Мои записи"
 MENU_ADMIN = "Позвать администратора"
+MENU_ICONS = {"book": "📝", "ask": "❓", "my": "📅", "admin": "👤"}  # main menu buttons
 MENU_BACK = "В меню"
 
 ASK_COMPLAINT = "С чем обращаетесь? Что произошло? Опишите своими словами или выберите из списка."
@@ -341,6 +342,9 @@ CARD_ADDRESS = "Адрес"
 CARD_BRING = "Что взять с собой"
 PAYMENT_QUESTION = "Оплачивать планируете самостоятельно или по страховке?"
 VENUE_TITLE = "Травмпункт «УГМК-Здоровье»"
+MORE = "Подробнее"
+HOW_TO_GET = "Как пройти"
+WAY = "{address}, {entrance}."
 
 # Bot profile (BotFather fields set at startup; the avatar and picture come from the customer).
 BOT_DESCRIPTION = (

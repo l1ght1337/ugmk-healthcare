@@ -50,6 +50,7 @@ class User(Base):
     phone: Mapped[str | None] = mapped_column(String(32))
     consent_at: Mapped[datetime | None]
     guardian_at: Mapped[datetime | None]  # «я законный представитель ребёнка»
+    welcomed_at: Mapped[datetime | None]  # the welcome animation was shown (first /start)
     session: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -103,6 +104,8 @@ class Booking(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # The booking's card in the admin chat (BOOKINGS_TO_ADMIN_CHAT): changes go as replies.
     admin_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    # The card pinned in the patient's chat: unpinned when the booking is cancelled or moved.
+    chat_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class Reminder(Base):

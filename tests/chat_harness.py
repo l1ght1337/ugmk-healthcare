@@ -12,6 +12,16 @@ PATIENT = UserRef(id=1001, chat_id=1001, username="tester", display_name="Тес
 ADMIN_CHAT = -1001234567890
 
 
+def _emoji(ch: str) -> bool:
+    return ord(ch) >= 0x1F000 or 0x2600 <= ord(ch) <= 0x27BF or ch in "\ufe0f\u200d"
+
+
+def plain(label: str) -> str:
+    """A label without its leading emoji icon («🦴 Рука или нога» → «Рука или нога»)."""
+    head, _, rest = label.partition(" ")
+    return rest if rest and head and all(_emoji(ch) for ch in head) else label
+
+
 def make_settings(**overrides: object) -> Settings:
     base = {"schedule_provider": "mock", "demo_mode": True, "admin_chat_id": ADMIN_CHAT}
     return Settings(_env_file=None, **(base | overrides))  # type: ignore[arg-type]
@@ -79,11 +89,12 @@ class Chat:
         return [b for r in self.turn.replies for row in r.buttons for b in row]
 
     def labels(self) -> list[str]:
-        return [b.label for b in self.buttons()]
+        """Button labels without the emoji icon in front («🦴 Рука или нога» → «Рука или нога»)."""
+        return [plain(b.label) for b in self.buttons()]
 
     def button(self, label: str) -> Button:
-        exact = [b for b in self.buttons() if b.label == label]
-        found = exact or [b for b in self.buttons() if b.label.startswith(label)]
+        exact = [b for b in self.buttons() if plain(b.label) == label or b.label == label]
+        found = exact or [b for b in self.buttons() if plain(b.label).startswith(label)]
         assert found, f"no button {label!r} in {self.labels()}"
         return found[0]
 

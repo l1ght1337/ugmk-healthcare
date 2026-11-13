@@ -32,6 +32,20 @@ def format_when(moment: datetime) -> str:
     return f"{texts.WEEKDAYS_ON[moment.weekday()]}, {day}, в {moment:%H:%M}"
 
 
+def shorten(text: str, kb: KnowledgeBase) -> tuple[str, list[str]]:
+    """Long script phrases (kb/scenarios/_short.json) in short; ids for «Подробнее»."""
+    ids = []
+    for phrase in kb.shorts.phrases:
+        if phrase.full in text:
+            text = text.replace(phrase.full, phrase.short)
+            ids.append(phrase.id)
+    return text, ids
+
+
+def full_phrase(kb: KnowledgeBase, phrase_id: str) -> str | None:
+    return next((p.full for p in kb.shorts.phrases if p.id == phrase_id), None)
+
+
 def format_time(moment: time | datetime) -> str:
     return f"{moment:%H:%M}"
 

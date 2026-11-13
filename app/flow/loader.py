@@ -8,14 +8,14 @@ routed to), ``_common.json`` (phrases shared by all booking scripts) and ``_menu
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import TypeAdapter
 
 from app.config import PROJECT_ROOT
-from app.flow.schema import CommonPhrases, Facility, Scenario, TopicTree
+from app.flow.schema import CommonPhrases, Facility, Scenario, ShortPhrases, TopicTree
 
 KB_DIR = PROJECT_ROOT / "kb"
 
@@ -30,6 +30,18 @@ class KnowledgeBase:
     facilities: dict[str, Facility]
     common: CommonPhrases
     topics: TopicTree
+    shorts: ShortPhrases = field(default_factory=ShortPhrases)
+
+    def patient_phrases(self) -> set[str]:
+        """Script phrases the patient reads: questions, outcomes, notices, common phrases."""
+        found = {q.ask for sc in self.scenarios.values() for q in sc.questions}
+        found |= {
+            line for sc in self.scenarios.values() for o in sc.outcomes.values() for line in o.say
+        }
+        found |= {n.text for sc in self.scenarios.values() for n in sc.notices}
+        common = self.common.model_dump()
+        found |= {v["text"] for v in common.values() if isinstance(v, dict) and "text" in v}
+        return found
 
     def scenario(self, scenario_id: str) -> Scenario:
         return self.scenarios[scenario_id]
@@ -66,13 +78,26 @@ def load_kb(kb_dir: Path = KB_DIR) -> KnowledgeBase:
     topics = TopicTree.model_validate_json(
         (scenario_dir / "_menu.json").read_text(encoding="utf-8")
     )
+    shorts_path = scenario_dir / "_short.json"
+    shorts = (
+        ShortPhrases.model_validate_json(shorts_path.read_text(encoding="utf-8"))
+        if shorts_path.is_file()
+        else ShortPhrases()
+    )
 
     errors += _cross_check(scenarios, facilities)
     errors += _check_shared_fields(scenarios, common)
     errors += _check_topics(scenarios, topics)
+    kb = KnowledgeBase(scenarios, facilities, common, topics, shorts)
+    phrases = kb.patient_phrases()
+    ids = [p.id for p in shorts.phrases]
+    if len(set(ids)) != len(ids):
+        errors.append("_short.json: duplicate ids")
+    errors += [f"_short.json: {p.id}: the full text is not a script phrase"
+               for p in shorts.phrases if p.full not in phrases]  # fmt: skip
     if errors:
         raise KnowledgeBaseError("\n".join(errors))
-    return KnowledgeBase(scenarios=scenarios, facilities=facilities, common=common, topics=topics)
+    return kb
 
 
 def _file_matches(scenario: Scenario, stem: str) -> bool:

@@ -61,6 +61,7 @@ def fingerprint(config: ScheduleConfig, seed: str = DEFAULT_SEED) -> str:
     """Changes when anything that shapes the rows changes (not the horizon length)."""
     data = config.model_dump(mode="json")
     data["demo"].pop("days_ahead")
+    data.pop("doctor_photos", None)  # photos do not change the slots
     raw = json.dumps([data, seed], sort_keys=True, ensure_ascii=False)
     return hashlib.sha1(raw.encode()).hexdigest()[:10]
 

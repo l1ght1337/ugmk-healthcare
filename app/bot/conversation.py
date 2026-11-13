@@ -97,6 +97,21 @@ class Button:
 
 
 @dataclass(frozen=True)
+class Media:
+    """An animation or photo from assets/; if the file is missing, the text goes alone."""
+
+    kind: Literal["animation", "photo"]
+    name: str  # file in assets/, e.g. «welcome.mp4»
+
+
+WELCOME = Media("animation", "welcome.mp4")
+BOOKED = Media("animation", "booked.mp4")
+REMINDER = Media("animation", "reminder.mp4")
+FEEDBACK = Media("photo", "feedback.png")
+ENTRANCE = Media("photo", "entrance.jpg")
+
+
+@dataclass(frozen=True)
 class Reply:
     text: str
     buttons: tuple[tuple[Button, ...], ...] = ()
@@ -107,6 +122,9 @@ class Reply:
     screen: bool = False  # a wizard screen: the previous one loses its buttons
     card: Card | None = None  # sent as a rich message if possible; ``text`` is the fallback
     venue: Venue | None = None  # a map point (sendVenue); ``text`` is the address
+    media: Media | None = None  # ``text`` becomes the caption (MEDIA_ENABLED)
+    media_only: bool = False  # nothing at all if the media cannot be sent
+    pin: int | None = None  # booking id: pin this message silently and remember it
 
 
 @dataclass(frozen=True)
@@ -123,6 +141,8 @@ class AdminPost:
 class Turn:
     replies: list[Reply] = field(default_factory=list)
     admin: list[AdminPost] = field(default_factory=list)
+    reaction: str | None = None  # an emoji on the pressed message (👍 confirmed, ❤ rated 5)
+    unpin: list[int] = field(default_factory=list)  # messages to unpin in the patient's chat
 
 
 StepName = Literal[
@@ -256,11 +276,12 @@ def _home() -> list[Button]:
 
 
 def _menu() -> list[list[Button]]:
+    icons = texts.MENU_ICONS
     return [
-        [Button(texts.MENU_BOOK, "m:book", style="primary")],
-        [Button(texts.MENU_ASK, "m:ask")],
-        [Button(texts.MENU_MY, "m:my")],
-        [Button(texts.MENU_ADMIN, "m:admin")],
+        [Button(f"{icons['book']} {texts.MENU_BOOK}", "m:book", style="primary")],
+        [Button(f"{icons['ask']} {texts.MENU_ASK}", "m:ask")],
+        [Button(f"{icons['my']} {texts.MENU_MY}", "m:my")],
+        [Button(f"{icons['admin']} {texts.MENU_ADMIN}", "m:admin")],
     ]
 
 
@@ -360,6 +381,13 @@ class Conversation:
             handoff.status, handoff.closed_at, handoff.closed_by = "closed", self.clock(), by[:128]
             await db.commit()
             return True
+
+    async def register_pinned_card(self, booking_id: int, message_id: int) -> None:
+        async with self.db() as db:
+            booking = await db.get(Booking, booking_id)
+            if booking is not None:
+                booking.chat_message_id = message_id
+                await db.commit()
 
     async def register_booking_card(self, booking_id: int, message_id: int) -> None:
         async with self.db() as db:
@@ -511,7 +539,10 @@ class Conversation:
         )
         if self.settings.is_demo_booking:
             text += "\n\n" + texts.DEMO_GREETING
-        c.say(text, _menu())
+        first = c.user.welcomed_at is None  # the welcome animation — at the first /start only
+        if first:
+            c.user.welcomed_at = c.now
+        c.say(text, _menu(), media=WELCOME if first else None)
 
     async def _show_menu(self, c: Ctx) -> None:
         self._reset(c)
@@ -606,7 +637,7 @@ class Conversation:
         """Topic buttons about what happened, only those that fit the body area."""
         c.s.step, c.s.menu = "topic", menu_id
         items = topics.visible(self.kb, menu_id, c.s.area)
-        buttons = [Button(item.label, f"t:{item.id}") for item in items]
+        buttons = [Button(item.caption, f"t:{item.id}") for item in items]
         self._screen(c, self.kb.topics.menus[menu_id].text, buttons)
 
     # --- text --------------------------------------------------------------------------
@@ -889,6 +920,8 @@ class Conversation:
             "rate": self._on_rate,
             "ar": self._on_admin_reply_button,
             "fg": self._on_forget,
+            "more": self._on_more,
+            "way": self._on_way,
         }.get(head)
         if handler is None:
             c.say(texts.STALE)
@@ -1104,7 +1137,17 @@ class Conversation:
         c.s.step = "question"
         qid = c.s.dialog.question_id
         buttons = [Button(ch.label, f"q:{qid}:{i}") for i, ch in enumerate(prompt.choices)]
-        self._screen(c, prompt.text, buttons, rows=[_home()] if stuck else [])
+        text, more = self._shorten(prompt.text)
+        self._screen(c, text, buttons, rows=[*more, *([_home()] if stuck else [])])
+
+    def _shorten(self, text: str) -> tuple[str, list[list[Button]]]:
+        """A long script phrase in two lines, with «Подробнее» for the whole of it."""
+        text, ids = render.shorten(text, self.kb)
+        return text, [[Button(texts.MORE, f"more:{phrase}")] for phrase in ids]
+
+    async def _on_more(self, c: Ctx, phrase_id: str) -> None:
+        full = render.full_phrase(self.kb, phrase_id)
+        c.say(full or texts.STALE)  # below, the screen stays as it is
 
     def _ask_admin_buttons(self, label: str = texts.ASK_ADMIN_QUESTION) -> list[list[Button]]:
         return [[Button(label, "h:yes", "primary")], _home()]
@@ -1133,15 +1176,15 @@ class Conversation:
             self._final(c, texts.FLOW_BROKEN, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
             return
         local = self._local(c.now)
-        text = render.outcome_message(done, self.clinic, local)
+        text, more = self._shorten(render.outcome_message(done, self.clinic, local))
         if done.kind == "book":
             if text:  # script phrases before the time stay in the chat
-                c.say(text, edit=c.first())
+                c.say(text, more, edit=c.first())
             c.s.day = c.s.day_from = None
             await self._offer_time(c)
         elif done.kind == "handoff":
             if text:
-                c.say(text, edit=c.first())
+                c.say(text, more, edit=c.first())
             reason = done.outcome.handoff_reason or "Нужна помощь администратора"
             await self._handoff(c, reason, why=done.outcome.patient_reason)
         elif done.offer_admin:
@@ -1152,13 +1195,14 @@ class Conversation:
                 c,
                 text,
                 [
+                    *more,
                     [Button(texts.HANDOFF_YES, "h:yes", "primary")],
                     [Button(texts.HANDOFF_NO, "h:no")],
                 ],
             )
         else:
             c.s.step = "idle"
-            self._final(c, f"{text}\n\n{self.kb.common.more_help.text}", _menu())
+            self._final(c, f"{text}\n\n{self.kb.common.more_help.text}", [*more, *_menu()])
 
     async def _repeat_buttons(self, c: Ctx) -> None:
         if c.s.step == "offer_admin":
@@ -1411,6 +1455,10 @@ class Conversation:
             text = await self._admin_booking(c, booking)
             c.turn.admin.append(AdminPost(text, booking_id=booking.id))
         c.say(self.kb.common.identify_thanks.text, remove_keyboard=True)
+        c.say("", media=BOOKED, media_only=True)
+        if photo := self.clinic.schedule.doctor_photos.get(slot.doctor):
+            caption = f"{texts.CARD_DOCTOR}: {slot.doctor}"
+            c.say(caption, media=Media("photo", photo), media_only=True)
         card = render.booking_card(
             self.kb,
             done,
@@ -1427,7 +1475,7 @@ class Conversation:
                 Button(texts.CANCEL, f"b:cancel:{booking.id}", "danger"),
             ]
         ]
-        c.say(card.plain(), actions, card=card)
+        c.say(card.plain(), actions, card=card, pin=booking.id)
         if (place := render.venue(self.clinic)) is not None:
             c.say(place.address, venue=place)
         self._reset(c)
@@ -1478,6 +1526,11 @@ class Conversation:
             payment=texts.PAYMENT_KIND.get(booking.payment, booking.payment),
             telegram=f"{telegram.strip() or '—'} (id {c.user.id})",
         )
+
+    def _unpin(self, c: Ctx, booking: Booking) -> None:
+        if booking.chat_message_id:
+            c.turn.unpin.append(booking.chat_message_id)
+            booking.chat_message_id = None
 
     def _booking_note(self, c: Ctx, booking: Booking, text: str) -> None:
         """A change to a booking, as a reply to its card in the admin chat."""
@@ -1563,6 +1616,7 @@ class Conversation:
             booking.status = "cancelled"
             await self._cancel_reminders(c, booking)
             self._booking_note(c, booking, texts.ADMIN_CANCELLED)
+            self._unpin(c, booking)
             self._reset(c)
             c.say(texts.CANCELLED, _menu())
         else:
@@ -1586,6 +1640,7 @@ class Conversation:
         self._plan_reminders(c, booking)
         when = render.format_day_time(self._local(slot.start))
         self._booking_note(c, booking, texts.ADMIN_MOVED.format(when=when, doctor=slot.doctor))
+        self._unpin(c, booking)  # the pinned card shows the old time
         self._reset(c)
         start = self._local(slot.start)
         text = texts.MOVED.format(
@@ -1621,7 +1676,7 @@ class Conversation:
                 when=render.format_when(start), patient=patient.full_name, doctor=b.doctor
             )
             docs = render.documents(self.kb, patient.audience)  # type: ignore[arg-type]
-            return Reply(f"{text}\n\n{docs}", actions, chat_id=chat_id)
+            return Reply(f"{text}\n\n{docs}", actions, chat_id=chat_id, media=REMINDER)
         if kind == TWO_HOURS:
             center = self.clinic.contacts.trauma_center
             text = texts.REMINDER_TWO_HOURS.format(
@@ -1629,7 +1684,12 @@ class Conversation:
             )
             day = center.underground_parking_hours.contains(start.time())
             parking = common.parking_day.text if day else common.parking_night.text
-            return Reply(f"{text}\n\n{parking}", actions, chat_id=chat_id)
+            short, more = self._shorten(parking)
+            way = ((Button(texts.HOW_TO_GET, f"way:{b.id}", "primary"),),)
+            extra = tuple(tuple(row) for row in more)
+            return Reply(
+                f"{text}\n\n{short}", way + extra + actions, chat_id=chat_id, media=ENTRANCE
+            )
         if kind == AFTER_VISIT and b.cycle >= 2:
             return Reply(
                 texts.FEELING,
@@ -1638,6 +1698,7 @@ class Conversation:
                     (Button(texts.AFTER_VISIT_QUESTION, f"v:q:{b.id}"),),
                 ),
                 chat_id=chat_id,
+                media=FEEDBACK,
             )
         return Reply(
             texts.AFTER_VISIT,
@@ -1646,7 +1707,22 @@ class Conversation:
                 (Button(texts.AFTER_VISIT_QUESTION, f"v:q:{b.id}"),),
             ),
             chat_id=chat_id,
+            media=FEEDBACK,
         )
+
+    async def _on_way(self, c: Ctx, value: str) -> None:
+        """«Как пройти» under the 2-hour reminder: the map point, or the address and parking."""
+        booking = await self._user_booking(c, value)
+        center = self.clinic.contacts.trauma_center
+        if (place := render.venue(self.clinic)) is not None:
+            c.say(place.address, venue=place)
+            return
+        text = texts.WAY.format(address=center.address, entrance=center.entrance)
+        if booking is not None:
+            day = center.underground_parking_hours.contains(self._local(booking.start_at).time())
+            common = self.kb.common
+            text += "\n\n" + (common.parking_day.text if day else common.parking_night.text)
+        c.say(text)
 
     async def _demo_next(self, c: Ctx) -> None:
         if not self.settings.demo_mode:
@@ -1676,6 +1752,7 @@ class Conversation:
             c.say(texts.BOOKING_GONE)
             return
         booking.confirmed_at = c.now
+        c.turn.reaction = "👍"
         c.say(texts.CONFIRMED)
 
     async def _on_visit(self, c: Ctx, value: str) -> None:
@@ -1748,6 +1825,8 @@ class Conversation:
         if booking is not None and score.isdigit() and 1 <= int(score) <= 5:
             booking.rating = int(score)
             self._booking_note(c, booking, texts.ADMIN_RATING.format(score=score))
+            if score == "5":
+                c.turn.reaction = "❤"
         self._reset(c)
         c.say(f"{texts.RATED} {self.kb.common.more_help.text}", _menu())
 
