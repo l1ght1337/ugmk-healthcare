@@ -106,7 +106,12 @@ async def test_route_kinds(assistant: Assistant, text: str, kind: str, area: str
 
 async def test_asking_for_a_human(assistant: Assistant) -> None:
     result = await assistant.route("Соедините, пожалуйста, с администратором")
-    assert (result.kind, result.wants_admin) == ("clinic_question", True), result
+    assert (result.kind, result.action) == ("menu_action", "admin"), result
+
+
+async def test_menu_action_beyond_the_word_list(assistant: Assistant) -> None:
+    result = await assistant.route("что у меня там запланировано на следующей неделе?")
+    assert (result.kind, result.action) == ("menu_action", "my_bookings"), result
 
 
 @pytest.mark.parametrize(

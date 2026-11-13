@@ -34,6 +34,7 @@ from app.db.models import AdminMessage, Booking, Handoff, Patient, Reminder, Use
 from app.db.session import Database
 from app.flow import topics
 from app.flow.age import find_child_age, parse_age_months
+from app.flow.commands import find_command
 from app.flow.engine import (
     FALLBACK_OUTCOME,
     AskPatient,
@@ -163,6 +164,9 @@ STAGE_OF: dict[str, int] = {
     "birth": 5,
 }
 WIZARD_STEPS = frozenset(STAGE_OF)
+# Steps where the text is data (age, name, phone…): «отмени запись» there is not a command.
+DATA_STEPS = frozenset({"age", "name", "birth", "contact", "admin_reply", "visit_question"})
+MENU_ITEM = {"book": "book", "my_bookings": "my", "ask": "ask", "admin": "admin"}
 
 
 class Session(BaseModel):
@@ -563,6 +567,9 @@ class Conversation:
             c.say(render.emergency_message(self.clinic), _menu())
             return
         step = c.s.step
+        if step not in DATA_STEPS and (action := find_command(text)) is not None:
+            await self._on_menu(c, MENU_ITEM[action])  # the same screen as the menu button
+            return
         handlers: dict[str, Callable[[Ctx, str], Awaitable[None]]] = {
             "age": self._on_age,
             "question": self._on_answer_text,
@@ -612,10 +619,9 @@ class Conversation:
         elif reading.kind == "complaint":
             area = reading.area or topics.guess_area(text) or c.s.area
             self._topics_for(c, area, reading.candidates, reading.clarify or texts.ASK_COMPLAINT)
-        elif reading.kind == "clinic_question" and reading.wants_admin:
-            self._reset(c)
-            c.say(texts.WANTS_ADMIN, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
-        elif reading.kind == "clinic_question":
+        elif reading.kind == "menu_action" and reading.action in MENU_ITEM:
+            await self._on_menu(c, MENU_ITEM[reading.action])
+        elif reading.kind == "clinic_question":  # «У меня нет этой информации» only here
             await self._answer_question(c, text)
         elif reading.kind == "other_medical":
             self._reset(c)

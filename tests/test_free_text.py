@@ -150,16 +150,6 @@ async def test_other_medical_is_not_for_the_trauma_centre(make_chat, kb, db) -> 
     assert chat.admin == [] and await handoffs(db) == []
 
 
-async def test_asking_for_a_human_shows_the_button_only(make_chat, kb, db: Database) -> None:
-    fake = FakeDeepSeek({"type": "clinic_question", "wants_admin": True})
-    chat = make_chat(assistant=fake.assistant(kb))
-    await chat.start()
-    await chat.say("соедините с оператором")
-    assert chat.text == texts.WANTS_ADMIN
-    assert chat.labels() == [texts.MENU_ADMIN, texts.MENU_HOME]
-    assert chat.admin == [] and await handoffs(db) == []
-
-
 async def test_question_without_llm_offers_the_button(make_chat, db: Database) -> None:
     chat = make_chat()
     await chat.start()

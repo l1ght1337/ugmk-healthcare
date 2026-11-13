@@ -23,8 +23,8 @@ log = logging.getLogger(__name__)
 class TextReading:
     """A free text, classified (app/llm/assistant.py, RouteResult)."""
 
-    kind: str | None = None  # complaint / clinic_question / other_medical / offtopic / crisis
-    wants_admin: bool = False
+    kind: str | None = None  # complaint / menu_action / clinic_question / other_medical / …
+    action: str | None = None  # menu_action: book / my_bookings / ask / admin
     area: str | None = None
     scenario_id: str | None = None
     candidates: list[str] = field(default_factory=list)
@@ -58,7 +58,7 @@ async def read_text(
     except LLMUnavailable as exc:
         log.warning("route unavailable: %s", exc)
         return TextReading(unavailable=True)
-    return TextReading(r.kind, r.wants_admin, r.area, r.scenario, r.candidates, r.facts, r.clarify)
+    return TextReading(r.kind, r.action, r.area, r.scenario, r.candidates, r.facts, r.clarify)
 
 
 async def read_answer(

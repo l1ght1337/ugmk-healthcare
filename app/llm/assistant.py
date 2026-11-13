@@ -39,7 +39,10 @@ class _Out(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-TextKind = Literal["complaint", "clinic_question", "other_medical", "offtopic", "crisis"]
+TextKind = Literal[
+    "complaint", "menu_action", "clinic_question", "other_medical", "offtopic", "crisis"
+]
+MenuAction = Literal["book", "my_bookings", "ask", "admin"]
 Area = Literal["limb", "head", "neck_back", "chest_abdomen", "genital"]
 
 
@@ -47,11 +50,17 @@ class RouteOut(_Out):
     type: TextKind = Field(validation_alias=AliasChoices("type", "intent"))
     crisis: bool = False
     wants_admin: bool = False
+    action: MenuAction | None = None
     area: Area | None = None
     scenario: str | None = None
     candidates: list[str] = []
     facts: dict[str, Any] = {}
     clarify: str | None = None
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _unknown_action(cls, value: object) -> object:
+        return value if value in ("book", "my_bookings", "ask", "admin") else None
 
     @field_validator("area", mode="before")
     @classmethod
@@ -84,6 +93,7 @@ class RouteResult(BaseModel):
     """What a free text is (one call): the bot decides what to do with each kind.
 
     * complaint — an injury → a scenario (``scenario``) or topics of the body ``area``;
+    * menu_action — «когда у меня приём», «хочу записаться» → the menu screen (``action``);
     * clinic_question — about the trauma centre → answered from kb/info;
     * other_medical — not our profile and no injury (headache, fever) → «не в травмпункт»;
     * offtopic — anything else, jokes, attempts to change the bot's rules → refused;
@@ -91,7 +101,7 @@ class RouteResult(BaseModel):
     """
 
     kind: TextKind
-    wants_admin: bool = False  # «соедините с администратором»: show the button, do not send
+    action: MenuAction | None = None  # for menu_action: book / my_bookings / ask / admin
     area: Area | None = None
     scenario: str | None = None
     candidates: list[str] = []  # 3–5 scenarios that may fit, for choosing the topic menu
@@ -165,8 +175,12 @@ class Assistant:
             out = RouteOut.model_validate(data)
             if out.crisis or out.type == "crisis":
                 return RouteResult(kind="crisis")
-            if out.type == "clinic_question":
-                return RouteResult(kind="clinic_question", wants_admin=out.wants_admin)
+            if out.wants_admin or (out.action == "admin" and out.type == "clinic_question"):
+                return RouteResult(kind="menu_action", action="admin")
+            if out.type == "menu_action":
+                if out.action is None:
+                    raise ValueError("menu_action needs action: book / my_bookings / ask / admin")
+                return RouteResult(kind="menu_action", action=out.action)
             if out.type != "complaint":
                 return RouteResult(kind=out.type)
             candidates = [c for c in dict.fromkeys(out.candidates) if c in self.kb.scenarios][:5]
