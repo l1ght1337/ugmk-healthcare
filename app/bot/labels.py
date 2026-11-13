@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 
-from app.bot import render, texts
+from app.bot import texts
 from app.config import PROJECT_ROOT
 from app.flow.loader import KnowledgeBase, load_kb
 
@@ -24,8 +24,11 @@ def render_labels(kb: KnowledgeBase) -> str:
         "# Подписи кнопок бота",
         "",
         "Файл собирается командой `uv run python -m app.bot.labels --write` из `kb/scenarios/` "
-        "(поле `label` у вариантов ответа, `yes_label` / `no_label`, `choices`, `menu_label`) "
-        "и `app/bot/texts.py`. Подпись кнопки — не длиннее 40 символов.",
+        "(поле `label` у вариантов ответа, `yes_label` / `no_label`, `choices`, `_menu.json`) "
+        "и `app/bot/texts.py`. Подпись кнопки — не длиннее 40 символов; до 18 символов кнопки "
+        "стоят по две в ряд, длиннее — по одной, чтобы подпись не обрезалась на телефоне. "
+        "Цвета (Bot API 9.4): синий — главное действие, зелёный — подтверждение, красный — "
+        "отмена и удаление; в старых версиях Telegram кнопки обычные.",
         "",
         "## Вопросы сценариев",
         "| Сценарий | Вопрос | Кнопки |",
@@ -38,33 +41,49 @@ def render_labels(kb: KnowledgeBase) -> str:
             lines.append(f"| {sc.number} {sc.title} | {q.ask} | {buttons} |")
     lines += [
         "",
-        "## Меню тем (если жалобу не удалось разобрать)",
-        " · ".join(f"«{c.label}»" for c in render.topic_menu(kb).choices),
+        "## Темы (что случилось, а не диагнозы)",
+        "Когда область тела известна из жалобы, темы других областей не показываются. "
+        "Пять групп — только по кнопке «Выбрать из списка», пока жалобы нет.",
+        "",
+        "| Меню | Текст | Кнопки |",
+        "|---|---|---|",
+    ]
+    for name, menu in kb.topics.menus.items():
+        buttons = " · ".join(f"«{item.label}»" for item in menu.items)
+        lines.append(f"| {name} | {menu.text} | {buttons} |")
+    lines += [
         "",
         "## Остальные кнопки",
         "| Где | Кнопки |",
         "|---|---|",
         _row("Главное меню", [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN]),
         _row("После «Записаться в травмпункт»", [texts.TOPIC_LIST]),
+        _row("Каждый экран записи (кроме первого вопроса после напоминания)", [texts.BACK]),
         _row("Для кого запись", [texts.AUDIENCE_SELF, texts.AUDIENCE_CHILD]),
         _row(
             "Ребёнок и возраст названы в жалобе",
             [texts.CHILD_YES.format(age="8 лет"), texts.CHILD_NO],
         ),
         _row(
-            "Свободное время",
+            "День приёма (по две в ряд)",
             [
-                "Пт 13.11, 14:30 · Гусев А. В. (день, время, врач)",
-                texts.MORE_TIME,
+                "Сегодня, 12.11",
+                "Завтра, 13.11",
+                "Сб, 14.11",
+                texts.EARLIER,
+                texts.LATER,
                 texts.MENU_ADMIN,
             ],
         ),
+        _row("Время (по четыре в ряд; сверху — врач смены)", ["13:30", "14:00", "14:30", "15:00"]),
+        _row("Контрольный приём: время около +10 дней", [texts.OTHER_DAY]),
+        _row("Карточка записи", [texts.MOVE, texts.CANCEL]),
         _row("Согласие на обработку персональных данных", [texts.CONSENT_YES, texts.CONSENT_NO]),
         _row(
             "Кого записываем", ["Петров Иван, 12.03.1985 (сохранённый пациент)", texts.PATIENT_NEW]
         ),
         _row("Телефон (клавиатура Telegram)", [texts.CONTACT_BUTTON]),
-        _row("После подтверждения записи", [texts.PAYMENT_SELF, texts.PAYMENT_INSURANCE]),
+        _row("После карточки записи: оплата", [texts.PAYMENT_SELF, texts.PAYMENT_INSURANCE]),
         _row(
             "Маршрут с вариантом «передать администратору»", [texts.HANDOFF_YES, texts.HANDOFF_NO]
         ),

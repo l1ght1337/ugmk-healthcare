@@ -137,6 +137,6 @@ def test_dispatcher_wires_patient_and_admin_routers(kb, clinic, schedule, tmp_pa
     names = [r.name for r in dp.sub_routers]
     assert names == ["admin", "patients"]
     patients = dp.sub_routers[1]
-    assert len(patients.message.handlers) == 8 and len(patients.callback_query.handlers) == 1
+    assert len(patients.message.handlers) == 9 and len(patients.callback_query.handlers) == 1
     admin = dp.sub_routers[0]
     assert len(admin.message.handlers) == 1 and len(admin.callback_query.handlers) == 2

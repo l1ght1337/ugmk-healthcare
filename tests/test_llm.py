@@ -186,3 +186,12 @@ async def test_event_dates_reach_deepseek_as_relative_time(kb: KnowledgeBase) ->
     sc = kb.scenario("dislocation")
     await assistant.extract(sc, sc.question("when"), "упал 10 ноября")
     assert "упал 2 дня назад" in fake.requests[0]["messages"][-1]["content"]
+
+
+async def test_route_tolerates_odd_area_and_candidates(kb: KnowledgeBase) -> None:
+    fake = FakeDeepSeek(
+        {"type": "complaint", "area": "leg", "candidates": "dislocation", "scenario": None}
+    )
+    result = await fake.assistant(kb).route("болит нога")
+    assert (result.kind, result.area, result.candidates) == ("complaint", None, [])
+    assert len(fake.requests) == 1  # no retry for a value that only narrows the menu

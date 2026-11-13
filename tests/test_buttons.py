@@ -53,8 +53,14 @@ def test_fallback_prompts(engine: Engine, kb: KnowledgeBase) -> None:
     picked = render.ask_question(step, pick=True)
     assert picked.text.startswith(texts.PICK_BUTTON) and picked.choices
     assert render.ask_question(step, "Что именно обожгли?").text == "Что именно обожгли?"
-    menu = render.topic_menu(kb)
-    assert {c.facts["scenario"] for c in menu.choices} == set(kb.scenarios)
+
+
+def test_topic_tree_reaches_the_bookable_scenarios(kb: KnowledgeBase) -> None:
+    from app.flow.topics import scenarios_under
+
+    reachable = scenarios_under(kb, kb.topics.root, None)
+    by_text_only = {"criminal_trauma", "infant_under_6m"}  # via questions, age and free text
+    assert reachable | by_text_only | scenarios_under(kb, "torso", "torso") == set(kb.scenarios)
 
 
 def _question(**overrides: object) -> dict:

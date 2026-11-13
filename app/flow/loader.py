@@ -1,7 +1,8 @@
 """Load and cross-check the knowledge base (kb/scenarios/*.json).
 
 Files starting with ``_`` are shared data: ``_facilities.json`` (places patients are
-routed to) and ``_common.json`` (phrases shared by all booking scripts).
+routed to), ``_common.json`` (phrases shared by all booking scripts) and ``_menu.json``
+(topic buttons by body area).
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from app.config import PROJECT_ROOT
-from app.flow.schema import CommonPhrases, Facility, Scenario
+from app.flow.schema import CommonPhrases, Facility, Scenario, TopicTree
 
 KB_DIR = PROJECT_ROOT / "kb"
 
@@ -28,6 +29,7 @@ class KnowledgeBase:
     scenarios: dict[str, Scenario]
     facilities: dict[str, Facility]
     common: CommonPhrases
+    topics: TopicTree
 
     def scenario(self, scenario_id: str) -> Scenario:
         return self.scenarios[scenario_id]
@@ -61,12 +63,16 @@ def load_kb(kb_dir: Path = KB_DIR) -> KnowledgeBase:
     common = CommonPhrases.model_validate_json(
         (scenario_dir / "_common.json").read_text(encoding="utf-8")
     )
+    topics = TopicTree.model_validate_json(
+        (scenario_dir / "_menu.json").read_text(encoding="utf-8")
+    )
 
     errors += _cross_check(scenarios, facilities)
     errors += _check_shared_fields(scenarios, common)
+    errors += _check_topics(scenarios, topics)
     if errors:
         raise KnowledgeBaseError("\n".join(errors))
-    return KnowledgeBase(scenarios=scenarios, facilities=facilities, common=common)
+    return KnowledgeBase(scenarios=scenarios, facilities=facilities, common=common, topics=topics)
 
 
 def _file_matches(scenario: Scenario, stem: str) -> bool:
@@ -100,6 +106,31 @@ def _cross_check(scenarios: dict[str, Scenario], facilities: dict[str, Facility]
             for dest in outcome.destinations:
                 if dest.facility not in facilities:
                     errors.append(f"{sc.id}.{name}: unknown facility {dest.facility!r}")
+    return errors
+
+
+def _check_topics(scenarios: dict[str, Scenario], topics: TopicTree) -> list[str]:
+    errors: list[str] = []
+    for menu in topics.menus.values():
+        for item in menu.items:
+            target = scenarios.get(item.scenario) if item.scenario else None
+            if item.scenario and target is None:
+                errors.append(f"_menu.json: {item.id} → unknown scenario {item.scenario!r}")
+            elif target is not None:
+                fields = target.fields()
+                for key, value in item.facts.items():
+                    if key not in fields or not fields[key].accepts(value):
+                        errors.append(f"_menu.json: {item.id}: bad fact {key}={value!r}")
+    for area, by_scenario in topics.area_facts.items():
+        for sid, facts in by_scenario.items():
+            target = scenarios.get(sid)
+            if target is None or not target.fits(area):
+                errors.append(f"_menu.json: area_facts {area}/{sid} does not fit")
+                continue
+            fields = target.fields()
+            for key, value in facts.items():
+                if key not in fields or not fields[key].accepts(value):
+                    errors.append(f"_menu.json: area_facts {area}/{sid}: bad {key}={value!r}")
     return errors
 
 

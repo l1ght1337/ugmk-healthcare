@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from app.bot import texts
 from app.bot.conversation import AdminPost, Button, Conversation, Reply, Turn, UserRef
 from app.config import Settings
 
@@ -85,3 +86,42 @@ class Chat:
         found = exact or [b for b in self.buttons() if b.label.startswith(label)]
         assert found, f"no button {label!r} in {self.labels()}"
         return found[0]
+
+    # the day picker and the time grid
+    def days(self) -> list[Button]:
+        return [b for b in self.buttons() if b.data[2:3].isdigit() and b.data.startswith("d:")]
+
+    def times(self) -> list[Button]:
+        return [b for b in self.buttons() if b.data.startswith("s:")]
+
+    async def pick_day(self, label: str | None = None) -> Turn:
+        days = self.days()
+        assert days, f"no day buttons in {self.labels()}"
+        chosen = next(b for b in days if label is None or b.label.startswith(label))
+        return await self.data(chosen.data)
+
+    async def pick_time(self, not_before: str = "00:00") -> Turn:
+        times = [b for b in self.times() if b.label >= not_before]
+        assert times, f"no time from {not_before} in {self.labels()}"
+        return await self.data(times[0].data)
+
+    async def pick_slot(self, day: str | None = None, not_before: str = "00:00") -> Turn:
+        """First a day (if the day picker is shown), then the first time."""
+        if self.days():
+            await self.pick_day(day)
+        return await self.pick_time(not_before)
+
+
+TOPICS = {
+    "Перелом": ("Рука или нога", "Упал, ударился, подвернул", "Похоже на перелом"),
+    "Ожог": ("Рана, ожог, укус", "Ожог"),
+    "Повторный приём": ("Уже лечусь у вас", "Повторный приём"),
+}
+
+
+async def to_topic(chat: Chat, topic: str) -> None:
+    """«Записаться» → «Выбрать из списка» → the five groups → … → the topic."""
+    await chat.press(texts.MENU_BOOK)
+    await chat.press(texts.TOPIC_LIST)
+    for label in TOPICS[topic]:
+        await chat.press(label)

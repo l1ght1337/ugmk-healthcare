@@ -1,60 +1,112 @@
-"""Telegram layer (aiogram 3): updates → Conversation, Turn → messages.
+"""Telegram layer (aiogram 3.31, Bot API 10.3): updates → Conversation, Turn → messages.
 
 * private chats: patients; only ALLOWED_USER_IDS while the test is closed;
 * ADMIN_CHAT_ID: administrators answer by replying to the bot's message (the bot gets
   replies to its own messages even with privacy mode on) and the answer goes to the patient.
+
+Newer Bot API features, each with a plain fallback:
+* button colours (``style``, 9.4) — older apps show ordinary buttons; if the API refuses,
+  the message goes again without colours;
+* the booking card as a rich message (``sendRichMessage``, 10.x) — on any API error, and
+  with ``RICH_MESSAGES=false``, the same content as plain text;
+* answers streamed as a draft (``sendMessageDraft``, 9.3) — if the API refuses once, drafts
+  are switched off and only «печатает…» (``sendChatAction``) is shown;
+* the trauma centre on a map (``sendVenue``) — only when its point is in config/contacts.yaml.
 """
 
 from __future__ import annotations
 
 import logging
+import random
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputRichBlockFooter,
+    InputRichBlockList,
+    InputRichBlockListItem,
+    InputRichBlockParagraph,
+    InputRichBlockSectionHeading,
+    InputRichMessage,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    RichTextBold,
     TelegramObject,
 )
+from aiogram.utils.chat_action import ChatActionSender
 
 from app.bot import texts
 from app.bot.access import ALLOW_PREFIX, APPROVED_NOTE, Access
-from app.bot.conversation import Button, Conversation, Reply, Turn, UserRef
-from app.config import Settings
+from app.bot.conversation import Button, Conversation, DraftSink, Reply, Turn, UserRef
+from app.bot.render import Card
+from app.config import ClinicData, Settings
 
 log = logging.getLogger(__name__)
 
 CLOSE_PREFIX = "close:"
+DRAFT_EVERY = 0.6  # seconds between draft updates
+DRAFT_MIN_GROWTH = 12  # characters
 Markup = InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | None
 
 
-def inline(buttons: tuple[tuple[Button, ...], ...]) -> InlineKeyboardMarkup:
+def inline(buttons: tuple[tuple[Button, ...], ...], *, styles: bool = True) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=b.label, callback_data=b.data, style=b.style) for b in row]
+        [
+            InlineKeyboardButton(
+                text=b.label, callback_data=b.data, style=b.style if styles else None
+            )
+            for b in row
+        ]
         for row in buttons
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def markup(reply: Reply) -> Markup:
+def markup(reply: Reply, *, styles: bool = True) -> Markup:
     if reply.ask_contact:
         button = KeyboardButton(text=texts.CONTACT_BUTTON, request_contact=True)
         return ReplyKeyboardMarkup(
             keyboard=[[button]], resize_keyboard=True, one_time_keyboard=True
         )
     if reply.buttons:
-        return inline(reply.buttons)
+        return inline(reply.buttons, styles=styles)
     if reply.remove_keyboard:
         return ReplyKeyboardRemove()
     return None
+
+
+def rich_card(card: Card) -> InputRichMessage:
+    """The booking card as rich blocks: heading, fields, «Что взять с собой» list, notes."""
+    blocks: list[Any] = [
+        InputRichBlockSectionHeading(text=card.title, size=3),
+        InputRichBlockParagraph(text=card.lead),
+    ]
+    blocks += [
+        InputRichBlockParagraph(text=[RichTextBold(text=f"{name}: "), value])
+        for name, value in card.fields
+    ]
+    blocks += [InputRichBlockParagraph(text=p) for p in card.paragraphs]
+    blocks.append(InputRichBlockSectionHeading(text=card.list_title, size=4))
+    blocks.append(
+        InputRichBlockList(
+            items=[
+                InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=item)])
+                for item in card.items
+            ]
+        )
+    )
+    blocks += [InputRichBlockFooter(text=note) for note in card.notes]
+    return InputRichMessage(blocks=blocks)
 
 
 def user_ref(obj: Message | CallbackQuery) -> UserRef:
@@ -66,20 +118,56 @@ def user_ref(obj: Message | CallbackQuery) -> UserRef:
 
 
 class Delivery:
-    """Sends a Turn: patient replies, then posts to the admin chat (remembering their ids)."""
+    """Sends a Turn: patient replies, then posts to the admin chat (remembering their ids).
 
-    def __init__(self, bot: Bot, conversation: Conversation, admin_chat_id: int | None) -> None:
+    A pressed button's message is replaced by the next wizard screen (``Reply.edit``);
+    otherwise it shows what was chosen and loses its buttons. When a new screen is sent
+    below, the previous screen loses its buttons, so old steps cannot be pressed.
+    """
+
+    def __init__(
+        self,
+        bot: Bot,
+        conversation: Conversation,
+        admin_chat_id: int | None,
+        *,
+        rich_messages: bool = True,
+    ) -> None:
         self.bot = bot
         self.conversation = conversation
         self.admin_chat_id = admin_chat_id
+        self.rich_messages = rich_messages
+        self._screens: dict[int, int] = {}  # chat → message id of the current screen
 
-    async def __call__(self, turn: Turn, chat_id: int | None = None) -> None:
-        for reply in turn.replies:
+    async def __call__(
+        self,
+        turn: Turn,
+        chat_id: int | None = None,
+        *,
+        pressed: Message | None = None,
+        label: str | None = None,
+    ) -> None:
+        replies = list(turn.replies)
+        if pressed is not None:
+            first = replies[0] if replies else None
+            if first is not None and first.edit and await self._replace(pressed, first):
+                replies = replies[1:]
+                if first.screen:
+                    self._screens[pressed.chat.id] = pressed.message_id
+                else:
+                    self._screens.pop(pressed.chat.id, None)
+            else:
+                await self._mark_pressed(pressed, label)
+        for reply in replies:
             target = reply.chat_id or chat_id
             if target is None:
                 log.error("reply without a chat: %.40s", reply.text)
                 continue
-            await self.bot.send_message(target, reply.text, reply_markup=markup(reply))
+            if reply.screen or reply.card or reply.ask_contact:
+                await self._strip_screen(target)
+            sent = await self._send(target, reply)
+            if reply.screen and sent is not None:
+                self._screens[target] = sent.message_id
         for post in turn.admin:
             if self.admin_chat_id is None:
                 log.error("ADMIN_CHAT_ID is not set; handoff %s not delivered", post.handoff_id)
@@ -92,6 +180,99 @@ class Delivery:
             )
             if post.handoff_id is not None:
                 await self.conversation.register_admin_message(sent.message_id, post.handoff_id)
+
+    async def _send(self, chat_id: int, reply: Reply) -> Message | None:
+        if reply.venue is not None:
+            v = reply.venue
+            return await self.bot.send_venue(
+                chat_id,
+                latitude=v.latitude,
+                longitude=v.longitude,
+                title=v.title,
+                address=v.address,
+            )
+        if reply.card is not None and self.rich_messages:
+            try:
+                return await self.bot.send_rich_message(
+                    chat_id, rich_message=rich_card(reply.card), reply_markup=markup(reply)
+                )
+            except TelegramAPIError:
+                log.warning("rich message refused, sending the card as text", exc_info=True)
+        try:
+            return await self.bot.send_message(chat_id, reply.text, reply_markup=markup(reply))
+        except TelegramBadRequest:
+            if not any(b.style for row in reply.buttons for b in row):
+                raise
+            log.warning("buttons with colours refused, sending plain ones", exc_info=True)
+            plain = markup(reply, styles=False)
+            return await self.bot.send_message(chat_id, reply.text, reply_markup=plain)
+
+    async def _replace(self, message: Message, reply: Reply) -> bool:
+        """The wizard's next screen in place of the pressed message."""
+        if message.text is None:  # a card or a venue cannot become a text screen
+            return False
+        try:
+            await message.edit_text(reply.text, reply_markup=markup(reply))
+        except TelegramBadRequest:
+            try:
+                await message.edit_text(reply.text, reply_markup=markup(reply, styles=False))
+            except TelegramBadRequest:
+                log.debug("could not replace the pressed message", exc_info=True)
+                return False
+        return True
+
+    async def _mark_pressed(self, message: Message, label: str | None) -> None:
+        """Show what was chosen and drop the buttons, so they cannot be pressed twice."""
+        try:
+            if message.text is not None:
+                suffix = f"\n\n— {label}" if label else ""
+                await message.edit_text(message.text + suffix, reply_markup=None)
+            else:  # a rich card: keep it, only remove the buttons
+                await message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:  # editing is cosmetic (old or unchanged message)
+            log.debug("could not edit the message with buttons", exc_info=True)
+        self._screens.pop(message.chat.id, None)
+
+    async def _strip_screen(self, chat_id: int) -> None:
+        message_id = self._screens.pop(chat_id, None)
+        if message_id is None:
+            return
+        try:
+            await self.bot.edit_message_reply_markup(
+                chat_id=chat_id, message_id=message_id, reply_markup=None
+            )
+        except TelegramBadRequest:
+            log.debug("could not remove buttons of an old screen", exc_info=True)
+
+
+class Drafts:
+    """A live draft of an answer (sendMessageDraft); off for good after the first refusal."""
+
+    def __init__(self, bot: Bot, enabled: bool = True) -> None:
+        self.bot = bot
+        self.enabled = enabled
+
+    def sink(self, chat_id: int) -> DraftSink | None:
+        if not self.enabled:
+            return None
+        draft_id = random.randint(1, 2**31 - 1)
+        sent_at, sent_len = 0.0, 0
+
+        async def send(text: str) -> None:
+            nonlocal sent_at, sent_len
+            now = time.monotonic()
+            if not self.enabled or now - sent_at < DRAFT_EVERY:
+                return
+            if len(text) - sent_len < DRAFT_MIN_GROWTH:
+                return
+            sent_at, sent_len = now, len(text)
+            try:
+                await self.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
+            except TelegramAPIError:
+                log.warning("sendMessageDraft refused: drafts are off, «печатает…» stays")
+                self.enabled = False
+
+        return send
 
 
 class AllowedUsers(BaseMiddleware):
@@ -127,8 +308,44 @@ def _pressed_label(callback: CallbackQuery) -> str | None:
     return None
 
 
+def bot_commands(settings: Settings) -> list[BotCommand]:
+    commands = [BotCommand(command=c, description=d) for c, d in texts.COMMANDS]
+    if settings.demo_mode:
+        command, description = texts.DEMO_COMMAND
+        commands.append(BotCommand(command=command, description=description))
+    return commands
+
+
+def bot_descriptions(settings: Settings, clinic: ClinicData) -> tuple[str, str]:
+    """The bot's description (empty chat) and short description (profile, ≤ 120 characters)."""
+    description = texts.BOT_DESCRIPTION.format(address=clinic.contacts.trauma_center.address)
+    short = texts.BOT_SHORT_DESCRIPTION
+    if settings.is_demo_booking:
+        description += "\n\n" + texts.BOT_DEMO_NOTE
+        short = f"{texts.BOT_DEMO_NOTE} {short}"
+    return description[:512], short[:120]
+
+
+async def setup_profile(bot: Bot, settings: Settings, clinic: ClinicData) -> None:
+    """Commands in the menu, description and short description. Avatar — by the customer."""
+    description, short = bot_descriptions(settings, clinic)
+    for name, call in (
+        ("commands", bot.set_my_commands(bot_commands(settings))),
+        ("description", bot.set_my_description(description=description)),
+        ("short description", bot.set_my_short_description(short_description=short)),
+    ):
+        try:
+            await call
+        except TelegramAPIError:
+            log.warning("could not set the bot %s", name, exc_info=True)
+
+
 def build_dispatcher(
-    settings: Settings, conversation: Conversation, delivery: Delivery, access: Access
+    settings: Settings,
+    conversation: Conversation,
+    delivery: Delivery,
+    access: Access,
+    drafts: Drafts | None = None,
 ) -> Dispatcher:
     dp = Dispatcher()
     admin = Router(name="admin")
@@ -198,6 +415,11 @@ def build_dispatcher(
     async def menu(message: Message) -> None:
         await delivery(await conversation.menu(user_ref(message)), message.chat.id)
 
+    @patients.message(Command("book", "ask", "my"))
+    async def menu_command(message: Message) -> None:
+        item = (message.text or "").split()[0].lstrip("/").split("@")[0]
+        await delivery(await conversation.command(user_ref(message), item), message.chat.id)
+
     @patients.message(Command("admin"))
     async def call_admin(message: Message) -> None:
         await delivery(await conversation.call_admin(user_ref(message)), message.chat.id)
@@ -219,9 +441,13 @@ def build_dispatcher(
         await delivery(turn, message.chat.id)
 
     @patients.message(F.text)
-    async def text(message: Message) -> None:
+    async def text(message: Message, bot: Bot) -> None:
         assert message.text is not None
-        await delivery(await conversation.text(user_ref(message), message.text), message.chat.id)
+        chat_id = message.chat.id
+        draft = drafts.sink(chat_id) if drafts is not None else None
+        async with ChatActionSender.typing(bot=bot, chat_id=chat_id):  # «печатает…»
+            turn = await conversation.text(user_ref(message), message.text, draft=draft)
+        await delivery(turn, chat_id)
 
     @patients.message()
     async def other(message: Message) -> None:
@@ -231,15 +457,9 @@ def build_dispatcher(
     async def button(callback: CallbackQuery) -> None:
         await callback.answer()
         message = callback.message
-        label = _pressed_label(callback)
-        if isinstance(message, Message):
-            try:  # show what was chosen and drop the buttons, so they cannot be pressed twice
-                suffix = f"\n\n— {label}" if label else ""
-                await message.edit_text((message.text or "") + suffix, reply_markup=None)
-            except TelegramBadRequest:  # editing is cosmetic (old or unchanged message)
-                log.debug("could not edit the message with buttons", exc_info=True)
+        pressed = message if isinstance(message, Message) else None
         turn = await conversation.button(user_ref(callback), callback.data or "")
-        await delivery(turn, callback.from_user.id)
+        await delivery(turn, callback.from_user.id, pressed=pressed, label=_pressed_label(callback))
 
     dp.include_router(admin)
     dp.include_router(patients)

@@ -6,6 +6,10 @@ administrators' chat. The Telegram layer (app/bot/telegram.py) only translates.
 
 Branches come from the engine; the LLM only reads free text (app/llm/reader.py) and the
 bot falls back to buttons when it cannot. Per-user state lives in ``users.session``.
+
+Booking is a wizard in one message (part C): a pressed button replaces the message with
+the next screen («Шаг N из 5», «Назад»); the topic buttons follow what the patient said
+(body area); the time is chosen as a day, then a grid of times with the doctor on duty.
 """
 
 from __future__ import annotations
@@ -13,19 +17,22 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot import render, texts
+from app.bot import render, slots_view, texts
+from app.bot.layout import DAY_COLUMNS, TIME_COLUMNS, grid, pack
+from app.bot.render import Card, Venue
 from app.config import ClinicData, Settings
 from app.db.models import AdminMessage, Booking, Handoff, Patient, Reminder, User, utcnow
 from app.db.session import Database
+from app.flow import topics
 from app.flow.age import find_child_age, parse_age_months
 from app.flow.engine import (
     FALLBACK_OUTCOME,
@@ -54,13 +61,16 @@ from app.llm.masking import KnownPerson
 from app.llm.reader import read_answer, read_question, read_text
 from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, plan
 from app.schedule.base import ScheduleProvider, Slot, SlotUnavailable
-from app.schedule.rules import find_slots
+from app.schedule.rules import all_slots
 
 log = logging.getLogger(__name__)
 
-SLOTS_PER_PAGE = 4
 HANDOFF_IDLE = timedelta(days=1)  # an open request with no activity for a day is closed
 CRISIS_THREAD = timedelta(minutes=30)  # later crisis messages go under the same note
+MAX_HISTORY = 12  # «Назад» steps kept per user
+CONTROL_DAYS_BEFORE = 3  # «Другой день» for a control visit starts a little before the target
+
+DraftSink = Callable[[str], Awaitable[None]]
 
 
 # --- what goes in and out ----------------------------------------------------------------
@@ -91,6 +101,10 @@ class Reply:
     ask_contact: bool = False  # «Поделиться контактом» keyboard
     remove_keyboard: bool = False
     chat_id: int | None = None  # None: the chat of the user being served
+    edit: bool = False  # replace the message whose button was pressed (wizard screens)
+    screen: bool = False  # a wizard screen: the previous one loses its buttons
+    card: Card | None = None  # sent as a rich message if possible; ``text`` is the fallback
+    venue: Venue | None = None  # a map point (sendVenue); ``text`` is the address
 
 
 @dataclass(frozen=True)
@@ -110,11 +124,14 @@ class Turn:
 StepName = Literal[
     "idle",
     "complaint",
+    "topic",
+    "describe",
     "child_confirm",
     "audience",
     "age",
     "question",
-    "slots",
+    "days",
+    "times",
     "consent",
     "patient",
     "name",
@@ -127,17 +144,38 @@ StepName = Literal[
     "visit_question",
 ]
 
+# Wizard screens: «Назад» works between them. Stage numbers for «Шаг N из 5».
+STAGE_OF: dict[str, int] = {
+    "complaint": 1,
+    "topic": 1,
+    "describe": 1,
+    "child_confirm": 2,
+    "audience": 2,
+    "age": 2,
+    "question": 3,
+    "days": 4,
+    "times": 4,
+    "consent": 5,
+    "patient": 5,
+    "name": 5,
+    "birth": 5,
+}
+WIZARD_STEPS = frozenset(STAGE_OF)
+
 
 class Session(BaseModel):
     """Per-user dialog state, stored as JSON in users.session."""
 
     step: StepName = "idle"
     dialog: DialogState = DialogState()
+    wizard: bool = False  # booking started from «Записаться» or a complaint: «Шаг N из 5»
+    menu: str | None = None  # topic menu on screen
+    area: str | None = None  # body area from the complaint: limb / head / torso
     pending_scenario: str | None = None
     pending_facts: dict[str, FactValue] = {}
     child_age: int | None = None
-    area: str | None = None  # body area from the complaint: limb / head / torso
-    slot_offset: int = 0
+    day: date | None = None  # chosen day (time grid)
+    day_from: date | None = None  # first day on the day picker page
     slot_id: str | None = None
     patient_id: int | None = None
     draft_name: list[str | None] | None = None
@@ -151,6 +189,24 @@ class Session(BaseModel):
     visit_booking: int | None = None
     reply_handoff: int | None = None
     consent_child: bool = False  # the consent shown includes «законный представитель»
+    history: list[dict[str, Any]] = []  # earlier wizard screens, for «Назад»
+
+
+def _screen_key(s: Session) -> tuple[object, ...]:
+    d = s.dialog
+    return (
+        s.step,
+        s.menu,
+        d.scenario_id,
+        d.question_id,
+        d.facts.get("audience"),
+        d.age_months,
+        s.day,
+        s.day_from,
+        s.slot_id,
+        s.patient_id,
+        s.draft_name is not None,
+    )
 
 
 @dataclass
@@ -161,10 +217,17 @@ class Ctx:
     turn: Turn
     now: datetime  # UTC
     deleted: bool = False  # /forget removed the user row
+    via_button: bool = False  # the input was a pressed button: its message can be replaced
+    back: bool = False  # «Назад» restored an earlier screen
+    draft: DraftSink | None = None  # streams a partial answer (Telegram sendMessageDraft)
 
-    def say(self, text: str, buttons: list[list[Button]] | None = None, **kw: object) -> None:
+    def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
-        self.turn.replies.append(Reply(text, rows, **kw))  # type: ignore[arg-type]
+        self.turn.replies.append(Reply(text, rows, **kw))
+
+    def first(self) -> bool:
+        """Nothing sent yet in this turn: the reply may replace the pressed message."""
+        return self.via_button and not self.turn.replies
 
 
 def _answer_label(question: Question, facts: dict[str, FactValue]) -> str | None:
@@ -181,11 +244,18 @@ def _home() -> list[Button]:
 
 def _menu() -> list[list[Button]]:
     return [
-        [Button(texts.MENU_BOOK, "m:book")],
+        [Button(texts.MENU_BOOK, "m:book", style="primary")],
         [Button(texts.MENU_ASK, "m:ask")],
         [Button(texts.MENU_MY, "m:my")],
         [Button(texts.MENU_ADMIN, "m:admin")],
     ]
+
+
+def _parse_day(value: str) -> date | None:
+    try:
+        return datetime.strptime(value, "%Y%m%d").date()
+    except ValueError:
+        return None
 
 
 class Conversation:
@@ -215,11 +285,11 @@ class Conversation:
     async def start(self, user: UserRef) -> Turn:
         return await self._run(user, self._greet)
 
-    async def text(self, user: UserRef, text: str) -> Turn:
-        return await self._run(user, lambda c: self._on_text(c, text.strip()))
+    async def text(self, user: UserRef, text: str, draft: DraftSink | None = None) -> Turn:
+        return await self._run(user, lambda c: self._on_text(c, text.strip()), draft=draft)
 
     async def button(self, user: UserRef, data: str) -> Turn:
-        return await self._run(user, lambda c: self._on_button(c, data))
+        return await self._run(user, lambda c: self._on_button(c, data), via_button=True)
 
     async def contact(self, user: UserRef, phone: str, owner_id: int | None) -> Turn:
         return await self._run(user, lambda c: self._on_contact(c, phone, owner_id))
@@ -229,6 +299,10 @@ class Conversation:
 
     async def menu(self, user: UserRef) -> Turn:
         return await self._run(user, self._show_menu)
+
+    async def command(self, user: UserRef, item: str) -> Turn:
+        """/book, /ask, /my — the same as the main menu buttons."""
+        return await self._run(user, lambda c: self._on_menu(c, item))
 
     async def demo_next(self, user: UserRef) -> Turn:
         return await self._run(user, self._demo_next)
@@ -289,6 +363,14 @@ class Conversation:
             await db.commit()
         return [t for t in turns if t.replies]
 
+    def top_up_schedule(self) -> None:
+        """The mock schedule grows by a day each day (called by the scheduler)."""
+        top_up = getattr(self.schedule, "top_up", None)
+        if top_up is not None and top_up(self._local(self.clock()).date()):
+            log.info(
+                "demo schedule topped up to %s days ahead", self.clinic.schedule.demo.days_ahead
+            )
+
     async def restore_schedule(self) -> None:
         """After a restart: slots booked through the bot stay taken in the mock schedule."""
         restore = getattr(self.schedule, "restore", None)
@@ -300,7 +382,14 @@ class Conversation:
 
     # --- plumbing ----------------------------------------------------------------------
 
-    async def _run(self, user: UserRef, handler: Callable[[Ctx], Awaitable[None]]) -> Turn:
+    async def _run(
+        self,
+        user: UserRef,
+        handler: Callable[[Ctx], Awaitable[None]],
+        *,
+        via_button: bool = False,
+        draft: DraftSink | None = None,
+    ) -> Turn:
         async with self._locks[user.id], self.db() as db:
             row = await db.get(User, user.id)
             if row is None:
@@ -308,12 +397,29 @@ class Conversation:
                 db.add(row)
             row.chat_id, row.username = user.chat_id, user.username
             row.display_name = user.display_name
-            ctx = Ctx(db, row, Session.model_validate(row.session or {}), Turn(), self.clock())
+            session = Session.model_validate(row.session or {})
+            ctx = Ctx(db, row, session, Turn(), self.clock(), via_button=via_button, draft=draft)
+            before = session.model_dump(mode="json")
+            before_key = _screen_key(session)
             await handler(ctx)
             if not ctx.deleted:
+                self._remember_screen(ctx, before, before_key)
                 row.session = ctx.s.model_dump(mode="json")
             await db.commit()
             return ctx.turn
+
+    def _remember_screen(self, c: Ctx, before: dict[str, Any], before_key: tuple) -> None:
+        """Keep the previous wizard screen for «Назад» when the screen changed."""
+        if c.back:
+            return
+        if c.s.step not in WIZARD_STEPS:
+            c.s.history = []
+            return
+        earlier = before.pop("history", [])
+        if before["step"] in WIZARD_STEPS and _screen_key(c.s) != before_key:
+            c.s.history = [*earlier, before][-MAX_HISTORY:]
+        else:
+            c.s.history = earlier
 
     def _local(self, moment: datetime) -> datetime:
         return moment.astimezone(self.settings.tz)
@@ -345,7 +451,95 @@ class Conversation:
 
     async def _show_menu(self, c: Ctx) -> None:
         self._reset(c)
-        c.say(self.kb.common.more_help.text, _menu())
+        c.say(self.kb.common.more_help.text, _menu(), edit=c.first())
+
+    # --- screens -----------------------------------------------------------------------
+
+    def _header(self, c: Ctx) -> str | None:
+        """«Шаг 2 из 5 · Для кого запись» while booking from «Записаться» or a complaint."""
+        stage = STAGE_OF.get(c.s.step)
+        if not c.s.wizard or stage is None or c.s.resume == "handoff":
+            return None
+        return texts.STEP.format(n=stage, total=len(texts.STAGES), name=texts.STAGES[stage - 1])
+
+    def _screen(
+        self,
+        c: Ctx,
+        text: str,
+        buttons: Sequence[Button] = (),
+        *,
+        rows: Sequence[Sequence[Button]] = (),
+        columns: int | None = None,
+        back: bool | None = None,
+    ) -> None:
+        """A wizard screen: replaces the pressed message; short labels two in a row."""
+        header = self._header(c)
+        body = f"{header}\n\n{text}" if header else text
+        layout = grid(list(buttons), columns) if columns else pack(buttons)
+        layout += [list(r) for r in rows]
+        if back is None:
+            back = c.s.wizard or bool(c.s.history) or c.s.reschedule_of is not None
+        if back:
+            layout.append([Button(texts.BACK, "w:back")])
+        c.say(body, layout, edit=c.first(), screen=True)
+
+    def _final(self, c: Ctx, text: str, rows: Sequence[Sequence[Button]] = ()) -> None:
+        """The last message of a wizard (a route, an answer): it replaces the pressed one."""
+        c.say(text, rows, edit=c.first())
+
+    async def _render_screen(self, c: Ctx) -> None:
+        """Show the screen of the current step again («Назад», or text instead of a button)."""
+        step = c.s.step
+        if step == "complaint":
+            self._complaint_screen(c)
+        elif step == "topic":
+            self._menu_screen(c, c.s.menu or topics.start_menu(self.kb, c.s.area))
+        elif step == "describe":
+            self._screen(c, texts.DESCRIBE)
+        elif step == "child_confirm":
+            self._child_confirm(c)
+        elif step in ("audience", "age"):
+            await self._show(c, AskPatient(step))  # type: ignore[arg-type]
+        elif step == "question" and c.s.dialog.scenario_id and c.s.dialog.question_id:
+            scenario = self.kb.scenario(c.s.dialog.scenario_id)
+            c.s.dialog.asks = 1
+            current = AskQuestion(scenario, scenario.question(c.s.dialog.question_id))
+            self._ask(c, render.ask_question(current))
+        elif step == "days":
+            await self._show_days(c)
+        elif step == "times":
+            await self._show_times(c)
+        elif step == "consent":
+            self._consent_prompt(c, c.s.resume or "identify")
+        elif step == "patient":
+            await self._identify(c)
+        elif step == "name":
+            self._ask_name(c)
+        elif step == "birth":
+            self._ask_birth(c)
+        else:
+            await self._show_menu(c)
+
+    async def _on_back(self, c: Ctx, _: str) -> None:
+        if not c.s.history:
+            await self._show_menu(c)
+            return
+        *rest, snapshot = c.s.history
+        c.s = Session.model_validate(snapshot)
+        c.s.history = rest
+        c.back = True
+        await self._render_screen(c)
+
+    def _complaint_screen(self, c: Ctx) -> None:
+        c.s.step = "complaint"
+        self._screen(c, texts.ASK_COMPLAINT, [Button(texts.TOPIC_LIST, "t:list", "primary")])
+
+    def _menu_screen(self, c: Ctx, menu_id: str) -> None:
+        """Topic buttons about what happened, only those that fit the body area."""
+        c.s.step, c.s.menu = "topic", menu_id
+        items = topics.visible(self.kb, menu_id, c.s.area)
+        buttons = [Button(item.label, f"t:{item.id}") for item in items]
+        self._screen(c, self.kb.topics.menus[menu_id].text, buttons)
 
     # --- text --------------------------------------------------------------------------
 
@@ -374,13 +568,13 @@ class Conversation:
         }
         if step in handlers:
             await handlers[step](c, text)
-        elif step == "slots":
-            c.say(texts.PICK_SLOT)
-            await self._offer_slots(c, wait=False)
+        elif step in ("days", "times"):
+            c.say(texts.PICK_DAY if step == "days" else texts.PICK_SLOT)
+            await self._render_screen(c)
         elif step in ("child_confirm", "consent", "patient", "offer_admin"):
             c.say(texts.PICK_BUTTON_SHORT)
             await self._repeat_buttons(c)
-        else:  # idle / complaint
+        else:  # idle / complaint / topic / describe
             await self._on_free_text(c, text)
 
     async def _on_free_text(self, c: Ctx, text: str) -> None:
@@ -395,19 +589,20 @@ class Conversation:
                 c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
                 c.s.step = "offer_admin"
                 c.say(texts.INFO_DOWN, self._ask_admin_buttons())
-            else:
-                c.s.step = "complaint"
-                self._topic_menu(c, render.texts.PICK_TOPIC)
+            else:  # no LLM: the word list narrows the topics
+                area = topics.guess_area(text) or c.s.area
+                self._topics_for(c, area, topics.guess_candidates(text), texts.PICK_TOPIC)
             return
         if reading.kind == "crisis":
             await self._crisis(c, text)
         elif reading.kind == "complaint" and reading.scenario_id:
+            area = reading.area or c.s.area  # «Опишите своими словами» after «Рука или нога»
+            fits = self.kb.scenario(reading.scenario_id).fits(area)
+            c.s.area = area if fits else reading.area
             await self._begin(c, reading.scenario_id, reading.facts, find_child_age(text))
-            c.s.area = reading.area
         elif reading.kind == "complaint":
-            self._reset(c)
-            c.s.step, c.s.area = "complaint", reading.area
-            c.say(reading.clarify or texts.ASK_COMPLAINT, [[Button(texts.TOPIC_LIST, "t:list")]])
+            area = reading.area or topics.guess_area(text) or c.s.area
+            self._topics_for(c, area, reading.candidates, reading.clarify or texts.ASK_COMPLAINT)
         elif reading.kind == "clinic_question" and reading.wants_admin:
             self._reset(c)
             c.say(texts.WANTS_ADMIN, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
@@ -419,6 +614,17 @@ class Conversation:
         else:  # offtopic: the request is not carried out
             self._reset(c)
             c.say(texts.OFFTOPIC, _menu())
+
+    def _topics_for(self, c: Ctx, area: str | None, candidates: list[str], ask: str) -> None:
+        """A complaint without a clear scenario: the narrowest fitting topic menu."""
+        self._reset(c)
+        c.s.wizard, c.s.area = True, area
+        menu = topics.best_menu(self.kb, area, candidates)
+        if menu is not None:
+            self._menu_screen(c, menu)
+            return
+        c.s.step = "complaint"
+        self._screen(c, ask, [Button(texts.TOPIC_LIST, "t:list", "primary")])
 
     async def _crisis(self, c: Ctx, text: str) -> None:
         """Suicide or self-harm: a calm answer with a helpline, a separate note to the admins."""
@@ -473,9 +679,9 @@ class Conversation:
     async def _on_audience_text(self, c: Ctx, text: str) -> None:
         lowered = text.lower()
         if any(w in lowered for w in ("реб", "сын", "доч", "дет")):
-            await self._on_button(c, "a:child")
+            await self._on_audience(c, "child")
         elif any(w in lowered for w in ("себ", "я ", "взросл")) or lowered == "я":
-            await self._on_button(c, "a:adult")
+            await self._on_audience(c, "adult")
         else:
             c.say(texts.PICK_BUTTON_SHORT)
             await self._repeat_buttons(c)
@@ -508,8 +714,11 @@ class Conversation:
             c.say(texts.ASK_NAME_AGAIN)
             return
         c.s.draft_name = list(name)
+        self._ask_birth(c)
+
+    def _ask_birth(self, c: Ctx) -> None:
         c.s.step = "birth"
-        c.say(texts.ASK_BIRTH)
+        self._screen(c, texts.ASK_BIRTH)
 
     async def _on_birth(self, c: Ctx, text: str) -> None:
         birth = parse_birth_date(text, self._local(c.now).date())
@@ -559,9 +768,9 @@ class Conversation:
     async def _on_payment_text(self, c: Ctx, text: str) -> None:
         lowered = text.lower()
         if "страх" in lowered or "дмс" in lowered or "омс" in lowered:
-            await self._on_button(c, "pay:ins")
+            await self._on_payment(c, "ins")
         elif "сам" in lowered or "налич" in lowered or "карт" in lowered:
-            await self._on_button(c, "pay:self")
+            await self._on_payment(c, "self")
         else:
             c.s.step = "idle"
             await self._on_free_text(c, text)
@@ -572,10 +781,12 @@ class Conversation:
         head, _, rest = data.partition(":")
         handler = {
             "m": self._on_menu,
+            "w": self._on_back,
             "t": self._on_topic,
             "a": self._on_audience,
             "ca": self._on_child_confirm,
             "q": self._on_question_button,
+            "d": self._on_day,
             "s": self._on_slot,
             "c": self._on_consent,
             "p": self._on_patient,
@@ -597,8 +808,8 @@ class Conversation:
     async def _on_menu(self, c: Ctx, item: str) -> None:
         if item == "book":
             self._reset(c)
-            c.s.step = "complaint"
-            c.say(texts.ASK_COMPLAINT, [[Button(texts.TOPIC_LIST, "t:list")]])
+            c.s.wizard = True
+            self._complaint_screen(c)
         elif item == "ask":
             self._reset(c)
             c.s.step = "info"
@@ -611,13 +822,29 @@ class Conversation:
             await self._show_menu(c)
 
     async def _on_topic(self, c: Ctx, value: str) -> None:
-        if value == "list":
-            c.s.step = "complaint"
-            self._topic_menu(c, texts.PICK_TOPIC)
-        elif value in self.kb.scenarios:
+        if value == "list":  # «Выбрать из списка»: the area's topics, or the five groups
+            c.s.wizard = True
+            self._menu_screen(c, topics.start_menu(self.kb, c.s.area))
+            return
+        if value in self.kb.scenarios:  # a button from an older message
             await self._begin(c, value, {}, None)
-        else:
+            return
+        item = self.kb.topics.item(value)
+        if item is None:
             c.say(texts.STALE)
+            return
+        c.s.wizard = True
+        if item.area is not None:
+            c.s.area = item.area
+        if item.menu is not None:
+            self._menu_screen(c, item.menu)
+        elif item.scenario is not None:
+            await self._begin(c, item.scenario, dict(item.facts), None)
+        elif item.action == "describe":
+            c.s.step = "describe"
+            self._screen(c, texts.DESCRIBE)
+        else:
+            await self._handoff(c, texts.ASK_ADMIN_REASON)
 
     async def _on_audience(self, c: Ctx, value: str) -> None:
         if c.s.step != "audience" or value not in ("adult", "child"):
@@ -644,23 +871,37 @@ class Conversation:
         if c.s.step != "question" or dialog.scenario_id is None or dialog.question_id is None:
             c.say(texts.STALE)
             return
-        buttons = self.kb.scenario(dialog.scenario_id).question(dialog.question_id).buttons()
-        if not value.isdigit() or int(value) >= len(buttons):
+        question_id, _, index = value.rpartition(":")
+        if question_id and question_id != dialog.question_id:  # a button of an earlier question
             c.say(texts.STALE)
             return
-        await self._show(c, self.engine.answer(dialog, buttons[int(value)].facts))
+        buttons = self.kb.scenario(dialog.scenario_id).question(dialog.question_id).buttons()
+        if not index.isdigit() or int(index) >= len(buttons):
+            c.say(texts.STALE)
+            return
+        await self._show(c, self.engine.answer(dialog, buttons[int(index)].facts))
+
+    async def _on_day(self, c: Ctx, value: str) -> None:
+        if c.s.step not in ("days", "times"):
+            c.say(texts.STALE)
+            return
+        kind, _, ref = value.partition(":")
+        if kind == "from":  # «‹ Раньше» / «Позже ›»
+            c.s.day_from = _parse_day(ref)
+            await self._show_days(c)
+        elif kind == "other":  # «Другой день» from the time grid
+            start = c.s.anchor - timedelta(days=CONTROL_DAYS_BEFORE) if c.s.anchor else None
+            c.s.day_from = start
+            await self._show_days(c)
+        elif (day := _parse_day(kind)) is not None:
+            c.s.day = day
+            await self._show_times(c)
+        else:
+            c.say(texts.STALE)
 
     async def _on_slot(self, c: Ctx, value: str) -> None:
-        if c.s.step != "slots":
+        if c.s.step != "times":
             c.say(texts.STALE)
-            return
-        if value == "more":
-            c.s.slot_offset += SLOTS_PER_PAGE
-            await self._offer_slots(c, wait=False)
-            return
-        if value == "day":  # control visit: leave «about 10 days» and show the nearest time
-            c.s.anchor, c.s.slot_offset = None, 0
-            await self._offer_slots(c, wait=False)
             return
         slot = await self.schedule.get(value)
         free = slot is not None and slot in await self.schedule.free_slots(
@@ -668,8 +909,7 @@ class Conversation:
         )
         if slot is None or not free:
             c.say(texts.SLOT_TAKEN)
-            c.s.slot_offset = 0
-            await self._offer_slots(c, wait=False)
+            await self._show_times(c)
             return
         c.s.slot_id = slot.id
         if c.s.reschedule_of is not None:
@@ -728,7 +968,11 @@ class Conversation:
     async def _begin(
         self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], child_age: int | None
     ) -> None:
+        """Start a scenario of the wizard; the body area may already answer a question."""
+        area = c.s.area
         self._reset(c)
+        c.s.wizard, c.s.area = True, area
+        facts = {**topics.area_facts(self.kb, scenario_id, area), **facts}
         if child_age is not None:
             c.s.step = "child_confirm"
             c.s.pending_scenario, c.s.pending_facts, c.s.child_age = scenario_id, facts, child_age
@@ -738,20 +982,18 @@ class Conversation:
 
     def _child_confirm(self, c: Ctx) -> None:
         age = format_age(c.s.child_age or 0)
-        c.say(
+        self._screen(
+            c,
             texts.CHILD_CONFIRM.format(age=age),
-            [
-                [Button(texts.CHILD_YES.format(age=age), "ca:yes")],
-                [Button(texts.CHILD_NO, "ca:no")],
-            ],
+            [Button(texts.CHILD_YES.format(age=age), "ca:yes"), Button(texts.CHILD_NO, "ca:no")],
         )
 
     async def _show(self, c: Ctx, step: Step) -> None:
         if isinstance(step, AskPatient):
             c.s.step = "audience" if step.need == "audience" else "age"
             prompt = render.ask_patient(step)
-            buttons = [[Button(ch.label, f"a:{ch.facts['audience']}")] for ch in prompt.choices]
-            c.say(prompt.text, buttons)
+            buttons = [Button(ch.label, f"a:{ch.facts['audience']}") for ch in prompt.choices]
+            self._screen(c, prompt.text, buttons)
         elif isinstance(step, AskQuestion):
             self._ask(c, render.ask_question(step, pick=step.stuck), stuck=step.stuck)
         else:
@@ -760,61 +1002,58 @@ class Conversation:
     def _ask(self, c: Ctx, prompt: render.Prompt, *, stuck: bool = False) -> None:
         """A scenario question; ``stuck`` (three unclear answers) adds «В главное меню»."""
         c.s.step = "question"
-        rows = [[Button(ch.label, f"q:{i}")] for i, ch in enumerate(prompt.choices)]
-        if stuck:
-            rows.append(_home())
-        c.say(prompt.text, rows)
+        qid = c.s.dialog.question_id
+        buttons = [Button(ch.label, f"q:{qid}:{i}") for i, ch in enumerate(prompt.choices)]
+        self._screen(c, prompt.text, buttons, rows=[_home()] if stuck else [])
 
     def _ask_admin_buttons(self) -> list[list[Button]]:
-        return [[Button(texts.ASK_ADMIN_QUESTION, "h:yes")], _home()]
+        return [[Button(texts.ASK_ADMIN_QUESTION, "h:yes", "primary")], _home()]
 
     async def _done(self, c: Ctx, done: Done) -> None:
         if done.outcome_id == FALLBACK_OUTCOME:  # a knowledge-base gap: no automatic handoff
             c.s.step = "idle"
             c.s.handoff_reason = done.outcome.handoff_reason
-            c.say(texts.FLOW_BROKEN, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
+            self._final(c, texts.FLOW_BROKEN, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
             return
         local = self._local(c.now)
         text = render.outcome_message(done, self.clinic, local, include_handoff=False)
         if done.kind == "book":
-            if text:
-                c.say(text)
-            c.s.slot_offset = 0
-            await self._offer_slots(c, wait=True)
+            if text:  # script phrases before the time stay in the chat
+                c.say(text, edit=c.first())
+            c.s.day = c.s.day_from = None
+            await self._offer_time(c)
         elif done.kind == "handoff":
             if text:
-                c.say(text)
+                c.say(text, edit=c.first())
             await self._handoff(c, done.outcome.handoff_reason or "Нужна помощь администратора")
         elif done.offer_admin:
             c.s.step = "offer_admin"
             c.s.handoff_reason = done.outcome.handoff_reason
-            c.say(text, [[Button(texts.HANDOFF_YES, "h:yes")], [Button(texts.HANDOFF_NO, "h:no")]])
+            self._final(
+                c,
+                text,
+                [
+                    [Button(texts.HANDOFF_YES, "h:yes", "primary")],
+                    [Button(texts.HANDOFF_NO, "h:no")],
+                ],
+            )
         else:
             c.s.step = "idle"
-            c.say(f"{text}\n\n{self.kb.common.more_help.text}", _menu())
-
-    def _topic_menu(self, c: Ctx, text: str) -> None:
-        menu = render.topic_menu(self.kb)
-        labels = [Button(ch.label, f"t:{ch.facts['scenario']}") for ch in menu.choices]
-        c.say(text, [labels[i : i + 2] for i in range(0, len(labels), 2)])
+            self._final(c, f"{text}\n\n{self.kb.common.more_help.text}", _menu())
 
     async def _repeat_buttons(self, c: Ctx) -> None:
-        step = c.s.step
-        if step == "child_confirm":
-            self._child_confirm(c)
-        elif step == "consent":
-            self._consent_prompt(c, c.s.resume or "identify")
-        elif step == "patient":
-            await self._identify(c)
-        elif step == "offer_admin":
+        if c.s.step == "offer_admin":
             c.say(
                 texts.OFFER_HANDOFF,
-                [[Button(texts.HANDOFF_YES, "h:yes")], [Button(texts.HANDOFF_NO, "h:no")]],
+                [
+                    [Button(texts.HANDOFF_YES, "h:yes", "primary")],
+                    [Button(texts.HANDOFF_NO, "h:no")],
+                ],
             )
-        elif step == "audience":
-            await self._show(c, AskPatient("audience"))
+        else:
+            await self._render_screen(c)
 
-    # --- slots and booking ---------------------------------------------------------------
+    # --- day and time ------------------------------------------------------------------
 
     def _dialog_done(self, c: Ctx) -> Done | None:
         d = c.s.dialog
@@ -838,55 +1077,78 @@ class Conversation:
             return None
         return done.outcome.booking, done.scenario
 
-    async def _offer_slots(self, c: Ctx, *, wait: bool) -> None:
+    async def _free(self, c: Ctx) -> tuple[BookingSpec, list[Slot]] | None:
         found = await self._booking_spec(c)
         if found is None:
+            return None
+        spec, _ = found
+        slots = await all_slots(self.schedule, spec, now=c.now, config=self.clinic.schedule)
+        return spec, slots
+
+    def _no_slots(self, c: Ctx) -> None:
+        c.s.step = "idle"
+        self._final(c, texts.NO_SLOTS, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
+
+    async def _offer_time(self, c: Ctx) -> None:
+        """First a day; a control visit opens straight on the time around +10 days."""
+        if c.s.anchor is not None:
+            free = await self._free(c)
+            days = slots_view.days_with_slots(free[1], self.settings.tz) if free else []
+            day = slots_view.nearest_day(days, c.s.anchor)
+            if day is not None:
+                c.s.day = day
+                await self._show_times(c)
+                return
+        await self._show_days(c)
+
+    async def _show_days(self, c: Ctx) -> None:
+        free = await self._free(c)
+        if free is None:
             await self._show_menu(c)
             return
-        spec, _ = found
-        slots = await self._find(c, spec)
-        if not slots and c.s.anchor is not None:  # nothing around the control day
-            c.s.anchor, c.s.slot_offset = None, 0
-            slots = await self._find(c, spec)
-        if not slots and c.s.slot_offset:
-            c.s.slot_offset = 0
-            slots = await self._find(c, spec)
-        if not slots:
-            c.s.step = "idle"
-            c.say(texts.NO_SLOTS, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
+        days = slots_view.days_with_slots(free[1], self.settings.tz)
+        if not days:
+            self._no_slots(c)
             return
-        if wait:
-            c.say(self.kb.common.wait.text)
-        c.s.step = "slots"
-        rows = [[Button(self._slot_label(s), f"s:{s.id}")] for s in slots]
-        rows.append([Button(texts.MORE_TIME, "s:more")])
-        text = self.kb.common.offer.text
-        if c.s.anchor is not None:
-            text = texts.CONTROL_NEAR.format(date=render.format_date(c.s.anchor)) + "\n" + text
-            rows.append([Button(texts.OTHER_DAY, "s:day")])
-        rows.append([Button(texts.MENU_ADMIN, "m:admin")])
-        c.say(text, rows)
+        c.s.step = "days"
+        page = slots_view.page_of_days(days, c.s.day_from)
+        today = self._local(c.now).date()
+        buttons = [Button(render.day_label(d, today), f"d:{d:%Y%m%d}") for d in page]
+        nav = []
+        if (earlier := slots_view.earlier_page_start(days, page)) is not None:
+            nav.append(Button(texts.EARLIER, f"d:from:{earlier:%Y%m%d}"))
+        if (later := slots_view.later_page_start(days, page)) is not None:
+            nav.append(Button(texts.LATER, f"d:from:{later:%Y%m%d}"))
+        rows = [nav] if nav else []
+        rows.append([Button(texts.MENU_ADMIN, "m:admin")])  # no convenient day: a person helps
+        self._screen(c, texts.DAY_PICK, buttons, rows=rows, columns=DAY_COLUMNS)
 
-    async def _find(self, c: Ctx, spec: BookingSpec) -> list[Slot]:
-        not_before = None
-        if c.s.anchor is not None:
-            not_before = datetime.combine(c.s.anchor, datetime.min.time(), tzinfo=self.settings.tz)
-        return await find_slots(
-            self.schedule,
-            spec,
-            now=c.now,
-            config=self.clinic.schedule,
-            limit=SLOTS_PER_PAGE,
-            offset=c.s.slot_offset,
-            not_before=not_before,
+    async def _show_times(self, c: Ctx) -> None:
+        free = await self._free(c)
+        if free is None or c.s.day is None:
+            await self._show_menu(c)
+            return
+        spec, slots = free
+        tz = self.settings.tz
+        shown = slots_view.times_of_day(
+            slots, c.s.day, spec.slot_policy, self.clinic.schedule.repeat_windows, tz
         )
+        if not shown:
+            c.say(texts.DAY_GONE)
+            c.s.day = None
+            await self._show_days(c)
+            return
+        c.s.step = "times"
+        day_slots = [s for s in slots if slots_view.local(s, tz).date() == c.s.day]
+        doctors = slots_view.doctors_text(shown, day_slots, self.clinic.schedule, tz)
+        lines = [render.format_date(c.s.day).capitalize(), doctors, "", texts.TIME_PICK]
+        if c.s.anchor is not None:
+            lines.insert(0, texts.CONTROL_NEAR.format(date=render.format_date(c.s.anchor)))
+        buttons = [Button(f"{slots_view.local(s, tz):%H:%M}", f"s:{s.id}") for s in shown]
+        rows = [[Button(texts.OTHER_DAY, "d:other")]] if c.s.anchor is not None else []
+        self._screen(c, "\n".join(lines), buttons, rows=rows, columns=TIME_COLUMNS)
 
-    def _slot_label(self, slot: Slot) -> str:
-        start = self._local(slot.start)
-        last, *initials = slot.doctor.split()
-        doctor = f"{last} {' '.join(f'{n[0]}.' for n in initials)}".strip()
-        day = f"{texts.WEEKDAYS_SHORT[start.weekday()]} {start:%d.%m}"
-        return f"{day}, {start:%H:%M} · {doctor}"
+    # --- identification and booking ----------------------------------------------------
 
     def _needs_consent(self, c: Ctx) -> bool:
         """Consent once per user; for a child also «я законный представитель ребёнка»."""
@@ -905,11 +1167,12 @@ class Conversation:
         if url:
             text += "\n" + texts.CONSENT_POLICY.format(url=url)
         text += "\n\n" + texts.CONSENT_WITHDRAW
-        c.say(text, [[Button(texts.CONSENT_YES, "c:yes")], [Button(texts.CONSENT_NO, "c:no")]])
+        buttons = [Button(texts.CONSENT_YES, "c:yes", "success"), Button(texts.CONSENT_NO, "c:no")]
+        self._screen(c, text, buttons)
 
     def _ask_name(self, c: Ctx) -> None:
         c.s.step = "name"
-        c.say(f"{self.kb.common.identify.text}\n{texts.ASK_NAME}")
+        self._screen(c, f"{self.kb.common.identify.text}\n{texts.ASK_NAME}")
 
     async def _identify(self, c: Ctx) -> None:
         """Script step 4: consent → patient (name, birth date) → phone → booking."""
@@ -930,11 +1193,11 @@ class Conversation:
                 self._ask_name(c)
                 return
             c.s.step = "patient"
-            rows = [
-                [Button(f"{p.short_name}, {p.birth_date:%d.%m.%Y}", f"p:{p.id}")] for p in saved
+            buttons = [
+                Button(f"{p.short_name}, {p.birth_date:%d.%m.%Y}", f"p:{p.id}") for p in saved
             ]
-            rows.append([Button(texts.PATIENT_NEW, "p:new")])
-            c.say(texts.PATIENT_PICK, rows)
+            buttons.append(Button(texts.PATIENT_NEW, "p:new"))
+            self._screen(c, texts.PATIENT_PICK, buttons)
             return
         if c.user.phone is None:
             c.s.resume, c.s.step = "identify", "contact"
@@ -954,8 +1217,7 @@ class Conversation:
             slot = await self.schedule.book(c.s.slot_id)
         except SlotUnavailable:
             c.say(texts.SLOT_TAKEN)
-            c.s.slot_offset = 0
-            await self._offer_slots(c, wait=False)
+            await self._show_times(c)
             return
         parent = await c.db.get(Booking, c.s.control_of) if c.s.control_of else None
         booking = Booking(
@@ -980,23 +1242,34 @@ class Conversation:
         await c.db.flush()
         self._plan_reminders(c, booking)
         c.say(self.kb.common.identify_thanks.text, remove_keyboard=True)
-        text = render.booking_confirmation(
+        card = render.booking_card(
             self.kb,
             done,
             slot,
             first_name=patient.first_name,
             patronymic=patient.patronymic,
-            audience=patient.audience,
+            audience=patient.audience,  # type: ignore[arg-type]
             clinic=self.clinic,
             demo=self.settings.is_demo_booking,
-        )  # type: ignore[arg-type]
+        )
+        actions = [
+            [
+                Button(texts.MOVE, f"b:move:{booking.id}"),
+                Button(texts.CANCEL, f"b:cancel:{booking.id}", "danger"),
+            ]
+        ]
+        c.say(card.plain(), actions, card=card)
+        if (place := render.venue(self.clinic)) is not None:
+            c.say(place.address, venue=place)
         self._reset(c)
         c.s.step, c.s.booking_id = "payment", booking.id
         c.say(
-            text,
+            render.payment_question(done),
             [
-                [Button(texts.PAYMENT_SELF, "pay:self")],
-                [Button(texts.PAYMENT_INSURANCE, "pay:ins")],
+                [
+                    Button(texts.PAYMENT_SELF, "pay:self"),
+                    Button(texts.PAYMENT_INSURANCE, "pay:ins"),
+                ]
             ],
         )
 
@@ -1045,7 +1318,12 @@ class Conversation:
                     patient=patient.full_name if patient else "—",
                     doctor=b.doctor,
                 ),
-                [[Button(texts.MOVE, f"b:move:{b.id}"), Button(texts.CANCEL, f"b:cancel:{b.id}")]],
+                [
+                    [
+                        Button(texts.MOVE, f"b:move:{b.id}"),
+                        Button(texts.CANCEL, f"b:cancel:{b.id}", "danger"),
+                    ]
+                ],
             )
 
     async def _on_booking_action(self, c: Ctx, value: str) -> None:
@@ -1056,16 +1334,16 @@ class Conversation:
             return
         start = self._local(booking.start_at)
         when = {"date": render.format_date(start.date()), "time": f"{start:%H:%M}"}
-        if action == "move":
+        if action == "move":  # the card or the reminder stays; the day picker comes below
             self._reset(c)
             c.s.reschedule_of = booking.id
             c.say(texts.MOVE_PICK)
-            await self._offer_slots(c, wait=False)
+            await self._show_days(c)
         elif action == "cancel":
             c.say(
                 texts.CANCEL_ASK.format(**when),
                 [
-                    [Button(texts.CANCEL_YES, f"b:drop:{booking.id}")],
+                    [Button(texts.CANCEL_YES, f"b:drop:{booking.id}", "danger")],
                     [Button(texts.CANCEL_KEEP, f"b:keep:{booking.id}")],
                 ],
             )
@@ -1087,7 +1365,7 @@ class Conversation:
             await self.schedule.book(slot.id)
         except SlotUnavailable:
             c.say(texts.SLOT_TAKEN)
-            await self._offer_slots(c, wait=False)
+            await self._show_times(c)
             return
         await self.schedule.release(booking.slot_id)
         await self._cancel_reminders(c, booking)
@@ -1117,8 +1395,11 @@ class Conversation:
     def _reminder_reply(self, kind: str, b: Booking, patient: Patient, chat_id: int) -> Reply:
         start = self._local(b.start_at)
         actions = (
-            (Button(texts.CONFIRM, f"r:ok:{b.id}"),),
-            (Button(texts.MOVE, f"b:move:{b.id}"), Button(texts.CANCEL, f"b:cancel:{b.id}")),
+            (Button(texts.CONFIRM, f"r:ok:{b.id}", "success"),),
+            (
+                Button(texts.MOVE, f"b:move:{b.id}"),
+                Button(texts.CANCEL, f"b:cancel:{b.id}", "danger"),
+            ),
         )
         common = self.kb.common
         if kind == DAY_BEFORE:
@@ -1221,7 +1502,7 @@ class Conversation:
         c.say(
             texts.OFFER_CONTROL.format(days=after),
             [
-                [Button(texts.CONTROL_YES, f"k:yes:{booking.id}")],
+                [Button(texts.CONTROL_YES, f"k:yes:{booking.id}", "primary")],
                 [Button(texts.CONTROL_NO, f"k:no:{booking.id}")],
             ],
         )
@@ -1257,7 +1538,8 @@ class Conversation:
 
     async def _answer_question(self, c: Ctx, text: str) -> None:
         """A question about the trauma centre, from kb/info; an administrator only by button."""
-        reading = await read_question(self.assistant, text, await self._known(c))
+        known = await self._known(c)
+        reading = await read_question(self.assistant, text, known, on_partial=c.draft)
         self._reset(c)
         if reading.answer and not reading.offer_admin:
             c.say(f"{reading.answer}\n\n{self.kb.common.more_help.text}", _menu())
@@ -1443,7 +1725,7 @@ class Conversation:
         self._reset(c)
         c.say(
             texts.FORGET_ASK,
-            [[Button(texts.FORGET_YES, "fg:yes")], [Button(texts.FORGET_NO, "fg:no")]],
+            [[Button(texts.FORGET_YES, "fg:yes", "danger")], [Button(texts.FORGET_NO, "fg:no")]],
         )
 
     async def _on_forget(self, c: Ctx, value: str) -> None:

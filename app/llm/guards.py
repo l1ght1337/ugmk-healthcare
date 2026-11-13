@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.flow.loader import digits
 from app.llm.masking import PLACEHOLDERS
 
@@ -21,6 +23,14 @@ def safe_clarify(text: str | None, template: str) -> str | None:
     if len(text) > MAX_CLARIFY_CHARS or _suspicious(text) or digits(text) - digits(template):
         return None
     return text
+
+
+def grounded_prefix(partial: str, reference: str) -> bool:
+    """A streamed piece of an answer may be shown: only complete numbers are checked."""
+    if any(p in partial for p in PLACEHOLDERS) or "http" in partial.lower():
+        return False
+    complete = set(re.findall(r"\d+(?=\D)", partial))
+    return complete <= digits(reference)
 
 
 def grounded(answer: str, reference: str) -> bool:

@@ -6,6 +6,7 @@
   "title": "Снятие гипса",
   "menu_label": "Снятие гипса",
   "kind": "booking",
+  "body_areas": ["limb"],
   "router_hint": "Снятие гипса (пункт меню общего блока «Снятие гипса»)",
   "entry": [
     {

@@ -5,6 +5,7 @@
   "title": "Удаление спиц, металлофиксаторов",
   "menu_label": "Удаление спиц, металлофиксаторов",
   "kind": "routing",
+  "body_areas": ["limb"],
   "router_hint": "Удаление металлофиксаторов, спиц (пункт меню общего блока)",
   "entry": [
     {"when": {"audience": "child"}, "outcome": "child_surgeon"},

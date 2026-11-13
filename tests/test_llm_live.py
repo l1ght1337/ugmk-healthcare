@@ -145,3 +145,14 @@ async def test_event_date_is_understood_as_relative(
     text = f"упал {day.day} {MONTHS_GENITIVE[day.month - 1]}"
     result = await assistant.extract(sc, sc.question("when"), text)
     assert result.facts.get("injury_age") == "within_7_days", (text, result)
+
+
+async def test_candidates_for_a_twisted_ankle(assistant: Assistant, kb: KnowledgeBase) -> None:
+    """Part C: «подвернул ногу» → the arm-or-leg area and the «упал, подвернул» topics."""
+    from app.flow.topics import best_menu
+
+    result = await assistant.route("подвернул ногу")
+    assert (result.kind, result.area) == ("complaint", "limb"), result
+    if result.scenario is None:
+        assert 3 <= len(result.candidates) <= 5, result
+        assert best_menu(kb, result.area, result.candidates) in ("fall", "limb"), result

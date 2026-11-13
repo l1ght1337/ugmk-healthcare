@@ -44,6 +44,8 @@ class FakeDeepSeek:
         if isinstance(reply, int):
             return httpx2.Response(reply, json={"error": {"message": "fake error"}})
         content = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
+        if self.requests[-1].get("stream"):
+            return self._stream(content)
         return httpx2.Response(
             200,
             json={
@@ -60,6 +62,23 @@ class FakeDeepSeek:
                 ],
                 "usage": USAGE,
             },
+        )
+
+    @staticmethod
+    def _stream(content: str, piece: int = 9) -> httpx2.Response:
+        """Server-sent events as DeepSeek streams them; usage comes in the last chunk."""
+        head = {"id": "fake", "object": "chat.completion.chunk", "created": 0,
+                "model": "deepseek-chat"}  # fmt: skip
+        events = []
+        for i in range(0, len(content), piece):
+            delta = {"content": content[i : i + piece]}
+            choice = {"index": 0, "delta": delta, "finish_reason": None}
+            events.append({**head, "choices": [choice]})
+        events.append({**head, "choices": [], "usage": USAGE})
+        body = "".join(f"data: {json.dumps(e, ensure_ascii=False)}\n\n" for e in events)
+        body += "data: [DONE]\n\n"
+        return httpx2.Response(
+            200, content=body.encode(), headers={"content-type": "text/event-stream"}
         )
 
     def client(self, timeout: float = 10.0) -> DeepSeekClient:

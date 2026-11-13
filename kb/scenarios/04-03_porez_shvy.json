@@ -5,6 +5,7 @@
   "title": "Порез, рассечение, наложение швов",
   "menu_label": "Порез, рассечение, швы",
   "kind": "booking",
+  "body_areas": ["any"],
   "router_hint": "Порез, рассечение, наложение швов (пункт меню общего блока)",
   "entry": [{"next": "wound_location"}],
   "questions": [

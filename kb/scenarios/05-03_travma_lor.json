@@ -5,6 +5,7 @@
   "title": "Травмы ЛОР-органов",
   "menu_label": "Травма уха, горла, носа",
   "kind": "routing",
+  "body_areas": ["head"],
   "router_hint": "Травма ЛОР-органов (ухо, горло, нос), инородные тела в ЛОР-органах",
   "entry": [
     {"when": {"audience": "child"}, "outcome": "child"},

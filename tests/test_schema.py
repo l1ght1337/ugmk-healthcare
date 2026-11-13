@@ -21,6 +21,7 @@ def scenario(**overrides: object) -> dict:
         "title": "Demo",
         "menu_label": "Демо",
         "kind": "booking",
+        "body_areas": ["limb"],
         "router_hint": "demo",
         "entry": [{"next": "q1"}],
         "questions": [

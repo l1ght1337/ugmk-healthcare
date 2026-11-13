@@ -5,6 +5,7 @@
   "title": "Ожоги",
   "menu_label": "Ожог",
   "kind": "booking",
+  "body_areas": ["any"],
   "router_hint": "Ожоги (пункт меню общего блока)",
   "entry": [{"next": "burn_location"}],
   "questions": [

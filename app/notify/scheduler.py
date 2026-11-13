@@ -32,6 +32,10 @@ def start_scheduler(
                 await deliver(turn)
         except Exception:
             log.exception("sending notifications failed; will retry on the next tick")
+        try:
+            conversation.top_up_schedule()  # cheap: rewrites the CSV only when a day passed
+        except Exception:
+            log.exception("topping up the demo schedule failed")
 
     scheduler.add_job(
         tick, "interval", seconds=every_seconds, id="reminders", max_instances=1, coalesce=True

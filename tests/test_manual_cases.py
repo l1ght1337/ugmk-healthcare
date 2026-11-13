@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from app.bot import texts
 from app.bot.conversation import Conversation
 from app.config import ClinicData, Settings
 from app.db.session import Database
@@ -37,7 +36,7 @@ async def _do(chat: Chat, step: Step) -> None:
     elif step.do == "press":
         await chat.press(step.value)
     elif step.do == "slot":
-        await chat.press(next(lbl for lbl in chat.labels() if lbl[:2] in texts.WEEKDAYS_SHORT))
+        await chat.pick_slot()
     elif step.do == "contact":
         await chat.contact()
     elif step.do == "forget":

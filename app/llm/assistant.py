@@ -10,20 +10,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+import re
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.config import get_settings
 from app.flow.loader import KnowledgeBase
 from app.flow.schema import FactValue, Question, Scenario
 from app.llm.catalogue import render_catalogue, render_info
 from app.llm.client import DeepSeekClient, LLMUnavailable
-from app.llm.guards import grounded, safe_clarify
+from app.llm.guards import grounded, grounded_prefix, safe_clarify
 from app.llm.masking import KnownPerson, mask
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -48,8 +49,22 @@ class RouteOut(_Out):
     wants_admin: bool = False
     area: Area | None = None
     scenario: str | None = None
+    candidates: list[str] = []
     facts: dict[str, Any] = {}
     clarify: str | None = None
+
+    @field_validator("area", mode="before")
+    @classmethod
+    def _unknown_area(cls, value: object) -> object:
+        """«leg», «hand», "" — not worth a retry: the topic menu simply is not narrowed."""
+        return value if value in ("limb", "head", "torso") else None
+
+    @field_validator("candidates", mode="before")
+    @classmethod
+    def _candidate_list(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return []
+        return [v for v in value if isinstance(v, str)]
 
 
 class ExtractOut(_Out):
@@ -79,6 +94,7 @@ class RouteResult(BaseModel):
     wants_admin: bool = False  # «соедините с администратором»: show the button, do not send
     area: Area | None = None
     scenario: str | None = None
+    candidates: list[str] = []  # 3–5 scenarios that may fit, for choosing the topic menu
     facts: dict[str, FactValue] = {}
     clarify: str | None = None
 
@@ -153,16 +169,24 @@ class Assistant:
                 return RouteResult(kind="clinic_question", wants_admin=out.wants_admin)
             if out.type != "complaint":
                 return RouteResult(kind=out.type)
+            candidates = [c for c in dict.fromkeys(out.candidates) if c in self.kb.scenarios][:5]
             if out.scenario is None:
                 clarify = safe_clarify(out.clarify, ROUTE_CLARIFY)
-                return RouteResult(kind="complaint", area=out.area, clarify=clarify)
+                return RouteResult(
+                    kind="complaint", area=out.area, candidates=candidates, clarify=clarify
+                )
             if out.scenario not in self.kb.scenarios:
                 raise ValueError(f"unknown scenario {out.scenario!r}; use an id from the catalogue")
             scenario = self.kb.scenario(out.scenario)
+            area = out.area
+            if not scenario.fits(area):  # the scenario is the stronger signal
+                own = [a for a in scenario.body_areas if a != "any"]
+                area = own[0] if len(own) == 1 else None
             return RouteResult(
                 kind="complaint",
-                area=out.area,
+                area=area,
                 scenario=scenario.id,
+                candidates=candidates,
                 facts=_valid_facts(scenario, out.facts),
             )
 
@@ -199,9 +223,19 @@ class Assistant:
             task="extract", system=self.dialog_system, user=user, parse=parse, max_tokens=300
         )
 
-    async def answer(self, text: str, known: KnownPerson | None = None) -> AnswerResult:
-        """Answer a question about the trauma centre from kb/info only."""
+    async def answer(
+        self,
+        text: str,
+        known: KnownPerson | None = None,
+        on_partial: Callable[[str], Awaitable[None]] | None = None,
+    ) -> AnswerResult:
+        """Answer a question about the trauma centre from kb/info only.
+
+        ``on_partial`` gets the answer while it is generated (a Telegram draft); a piece with
+        a number that is not in kb/info stops the stream, and the final answer is checked again.
+        """
         user = _json({"task": "answer", "question": self._mask(text, known)})
+        on_text = self._partial_answers(on_partial) if on_partial else None
 
         def parse(data: dict[str, Any]) -> AnswerResult:
             out = AnswerOut.model_validate(data)
@@ -217,7 +251,60 @@ class Assistant:
             parse=parse,
             temperature=0.2,
             max_tokens=500,
+            on_text=on_text,
         )
+
+    def _partial_answers(
+        self, on_partial: Callable[[str], Awaitable[None]]
+    ) -> Callable[[str], Awaitable[None]]:
+        shown = {"text": "", "stopped": False}
+
+        async def on_text(raw: str) -> None:
+            if shown["stopped"]:
+                return
+            piece = partial_answer(raw)
+            if not piece or piece == shown["text"]:
+                return
+            if not grounded_prefix(piece, self._info):
+                shown["stopped"] = True
+                return
+            shown["text"] = piece
+            await on_partial(piece)
+
+        return on_text
+
+
+_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "n": "\n", "t": "\t", "r": "", "b": "", "f": ""}
+
+
+def partial_answer(raw: str) -> str | None:
+    """The «answer» string of a JSON object that is still being generated, if found = true."""
+    found = re.search(r'"found"\s*:\s*(true|false)', raw)
+    start = re.search(r'"answer"\s*:\s*"', raw)
+    if not found or found.group(1) != "true" or not start:
+        return None
+    out: list[str] = []
+    i = start.end()
+    while i < len(raw):
+        ch = raw[i]
+        if ch == '"':
+            break
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        if i + 1 >= len(raw):
+            break
+        code = raw[i + 1]
+        if code == "u":
+            if i + 6 > len(raw):
+                break
+            out.append(chr(int(raw[i + 2 : i + 6], 16)))
+            i += 6
+        else:
+            out.append(_ESCAPES.get(code, code))
+            i += 2
+    return "".join(out)
 
 
 def _json(payload: dict[str, Any]) -> str:

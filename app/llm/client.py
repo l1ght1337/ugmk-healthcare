@@ -5,15 +5,19 @@
   so a slow or broken API never blocks the patient — the caller shows buttons instead;
 * the retry after an invalid answer appends to the same messages, keeping the cached
   prompt prefix (system prompt first, then the request) unchanged;
-* token usage, including DeepSeek cache hits, is recorded for every attempt.
+* token usage, including DeepSeek cache hits, is recorded for every attempt;
+* ``on_text`` streams the first attempt (the raw JSON so far) for a live draft in Telegram;
+  the answer is still validated as a whole before the patient gets the message.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from types import SimpleNamespace
 from typing import Any, TypeVar
 
 import httpx2
@@ -23,6 +27,8 @@ from openai import AsyncOpenAI
 from app.llm.usage import Usage, UsageRecorder, log_usage
 
 T = TypeVar("T")
+log = logging.getLogger(__name__)
+TextSink = Callable[[str], Awaitable[None]]
 
 RETRY_NOTE = (
     "Ответ не прошёл проверку: {error}. Верни только JSON-объект в формате, описанном для этой "
@@ -66,6 +72,7 @@ class DeepSeekClient:
         parse: Callable[[dict[str, Any]], T],
         temperature: float = 0.0,
         max_tokens: int = 400,
+        on_text: TextSink | None = None,
     ) -> T:
         """Ask for a JSON object and turn it into ``T`` with ``parse`` (may raise ValueError)."""
         messages: list[dict[str, str]] = [
@@ -77,7 +84,10 @@ class DeepSeekClient:
             async with asyncio.timeout(self.timeout):
                 while True:
                     attempt += 1
-                    content = await self._call(task, messages, attempt, temperature, max_tokens)
+                    stream = on_text if attempt == 1 else None
+                    content = await self._call(
+                        task, messages, attempt, temperature, max_tokens, stream
+                    )
                     try:
                         data = json.loads(content)
                         if not isinstance(data, dict):
@@ -102,9 +112,12 @@ class DeepSeekClient:
         attempt: int,
         temperature: float,
         max_tokens: int,
+        on_text: TextSink | None = None,
     ) -> str:
         started = time.monotonic()
         try:
+            if on_text is not None:
+                return await self._stream(task, messages, attempt, temperature, max_tokens, on_text)
             response = await self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,  # type: ignore[arg-type]
@@ -122,6 +135,40 @@ class DeepSeekClient:
         if not response.choices:
             return ""
         return response.choices[0].message.content or ""
+
+    async def _stream(
+        self,
+        task: str,
+        messages: list[dict[str, str]],
+        attempt: int,
+        temperature: float,
+        max_tokens: int,
+        on_text: TextSink,
+    ) -> str:
+        started = time.monotonic()
+        stream = await self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,  # type: ignore[arg-type]
+            response_format={"type": "json_object"},
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        parts: list[str] = []
+        last: Any = SimpleNamespace(usage=None)
+        async for chunk in stream:
+            if getattr(chunk, "usage", None) is not None:
+                last = chunk
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                parts.append(delta)
+                try:
+                    await on_text("".join(parts))
+                except Exception:  # a failed draft must not break the answer
+                    log.warning("streaming a draft failed", exc_info=True)
+        self._record(_usage(task, self.model, attempt, last, _ms(started)))
+        return "".join(parts)
 
     def _record(self, usage: Usage) -> None:
         for recorder in self.recorders:

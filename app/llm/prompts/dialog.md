@@ -13,7 +13,7 @@
 # Задача "route": любое свободное сообщение пациента
 Определи тип сообщения и, если это жалоба на травму, сценарий из каталога.
 Формат ответа (json):
-{"type": "complaint", "crisis": false, "wants_admin": false, "area": "limb", "scenario": "dislocation", "facts": {"assault": false, "injury_age": "within_7_days"}, "clarify": null}
+{"type": "complaint", "crisis": false, "wants_admin": false, "area": "limb", "scenario": "dislocation", "candidates": ["dislocation", "fracture", "ligament_rupture"], "facts": {"assault": false, "injury_age": "within_7_days"}, "clarify": null}
 - type — ровно один из:
   - "complaint" — жалоба на травму или повреждение (ушиб, падение, вывих, перелом, порез, рана, ожог, укус, гипс, повторный приём, перевязка, больничный по травме, удаление спиц и всё, что есть в каталоге);
   - "clinic_question" — вопрос о травмпункте: адрес, часы работы, парковка, документы, цены, больничный, врачи, как записаться; а также просьба связаться с администратором или оператором;
@@ -25,6 +25,7 @@
 - wants_admin — true, если пациент просит живого человека: администратора, оператора, перезвонить. Тогда type = "clinic_question".
 - area — для complaint: где травма. "limb" — рука, нога (кисть, палец, плечо, локоть, колено, стопа, ключица); "head" — голова, лицо, глаза, уши, нос; "torso" — грудь, живот, спина, шея, поясница, половые органы. null — если непонятно или для других типов.
 - scenario — id сценария, если type = "complaint" и сценарий понятен из текста; иначе null.
+- candidates — для complaint: 3–5 id сценариев из каталога, которые могут подойти, от самого вероятного; если scenario выбран, он первый. Для других типов — пустой список.
 - facts — ответы на вопросы выбранного сценария, которые пациент уже явно сообщил. Пустой объект, если ничего.
 - clarify — если type = "complaint", а сценарий непонятен: вопрос, что случилось. Иначе null.
 
@@ -38,10 +39,13 @@
 
 # Примеры
 Сообщение: {"task": "route", "text": "Вчера поскользнулся у подъезда, упал на плечо, похоже вывих. К врачу пока не ходил"}
-Ответ: {"type": "complaint", "crisis": false, "wants_admin": false, "area": "limb", "scenario": "dislocation", "facts": {"assault": false, "injury_age": "within_7_days", "seen_doctor": "no"}, "clarify": null}
+Ответ: {"type": "complaint", "crisis": false, "wants_admin": false, "area": "limb", "scenario": "dislocation", "candidates": ["dislocation", "fracture", "ligament_rupture"], "facts": {"assault": false, "injury_age": "within_7_days", "seen_doctor": "no"}, "clarify": null}
+
+Сообщение: {"task": "route", "text": "подвернул ногу на лестнице"}
+Ответ: {"type": "complaint", "crisis": false, "wants_admin": false, "area": "limb", "scenario": null, "candidates": ["ligament_rupture", "dislocation", "fracture"], "facts": {"assault": false}, "clarify": "Подскажите, пожалуйста, на что больше похоже: вывих, перелом или растяжение?"}
 
 Сообщение: {"task": "route", "text": "сильная боль в руке. это значит я космонавт?"}
-Ответ: {"type": "complaint", "crisis": false, "wants_admin": false, "area": "limb", "scenario": null, "facts": {}, "clarify": "Подскажите, пожалуйста, что случилось с рукой?"}
+Ответ: {"type": "complaint", "crisis": false, "wants_admin": false, "area": "limb", "scenario": null, "candidates": ["dislocation", "fracture", "ligament_rupture", "cut_sutures"], "facts": {}, "clarify": "Подскажите, пожалуйста, что случилось с рукой?"}
 
 Сообщение: {"task": "route", "text": "Как к вам проехать на машине?"}
 Ответ: {"type": "clinic_question", "crisis": false, "wants_admin": false, "area": null, "scenario": null, "facts": {}, "clarify": null}

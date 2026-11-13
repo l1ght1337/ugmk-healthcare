@@ -5,6 +5,7 @@
   "title": "Травма головы, сотрясение",
   "menu_label": "Травма головы, сотрясение",
   "kind": "routing",
+  "body_areas": ["head"],
   "router_hint": "Травма головы, сотрясение, контузия",
   "entry": [
     {"when": {"audience": "child"}, "outcome": "child"},

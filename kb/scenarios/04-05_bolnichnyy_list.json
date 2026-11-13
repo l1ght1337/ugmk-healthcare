@@ -5,6 +5,7 @@
   "title": "Больничный лист в травмпункте",
   "menu_label": "Больничный лист",
   "kind": "booking",
+  "body_areas": ["any"],
   "router_hint": "Открыть больничный лист в травмпункте (пункт меню общего блока)",
   "entry": [{"next": "had_injury"}],
   "questions": [

@@ -5,6 +5,7 @@
   "title": "Повторная пункция суставов",
   "menu_label": "Повторная пункция сустава",
   "kind": "booking",
+  "body_areas": ["limb"],
   "router_hint": "Повторная пункция суставов (пункт меню общего блока)",
   "entry": [{"next": "puncture_before"}],
   "questions": [

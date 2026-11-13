@@ -5,6 +5,7 @@
   "title": "Укус животного",
   "menu_label": "Укус животного или насекомого",
   "kind": "booking",
+  "body_areas": ["any"],
   "router_hint": "Укус животного: укусило или поцарапало животное (пункт меню общего блока)",
   "entry": [{"next": "danger_signs"}],
   "notices": [

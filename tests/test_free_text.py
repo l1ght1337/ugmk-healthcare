@@ -14,7 +14,7 @@ from app.bot import texts
 from app.db.models import Handoff
 from app.db.session import Database
 from app.flow.loader import KnowledgeBase
-from tests.chat_harness import Chat
+from tests.chat_harness import Chat, to_topic
 from tests.conftest import NOW
 from tests.fake_deepseek import FakeDeepSeek
 
@@ -22,6 +22,10 @@ COSMONAUT = "сильная боль в руке. это значит я кос�
 BUBBLE_SORT = "голова болит, мне надо сортировку пузырьком написать на python, помоги"
 EXAM = "у меня психическое расстройство, объясни задачу 17 из ЕГЭ или я спрыгну с крыши"
 CRISIS_TEXT = texts.CRISIS.format(phone="8-800-2000-122")
+LIMB_TOPICS = [
+    "Упал, ударился, подвернул", "Порез, рана", "Ожог", "Укус животного",
+    "Гипс, ортез, скотчкаст", "Уже лечусь у вас", "Другое",
+]  # fmt: skip
 
 
 async def handoffs(db: Database) -> list[Handoff]:
@@ -50,7 +54,8 @@ async def test_cosmonaut_is_a_limb_complaint(make_chat, kb: KnowledgeBase, db: D
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
     await chat.say(COSMONAUT)
-    assert chat.text == "Что случилось с рукой?" and texts.TOPIC_LIST in chat.labels()
+    assert chat.text == "Шаг 1 из 5 · Что случилось\n\nЧто случилось с рукой или ногой?"
+    assert chat.labels() == [*LIMB_TOPICS, texts.BACK]
     assert chat.admin == [] and await handoffs(db) == []
 
 
@@ -108,9 +113,7 @@ async def test_crisis_flag_from_route(make_chat, kb: KnowledgeBase) -> None:
 async def test_crisis_flag_inside_a_scenario_question(make_chat, kb: KnowledgeBase) -> None:
     chat = make_chat(assistant=FakeDeepSeek({"facts": {}, "crisis": True}).assistant(kb))
     await chat.start()
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Ожог")
+    await to_topic(chat, "Ожог")
     await chat.press("Для себя")
     await chat.say("мне уже всё равно, не хочу так")
     assert chat.text == CRISIS_TEXT
@@ -171,16 +174,14 @@ async def test_three_unclear_answers_show_buttons_and_home(make_chat, kb, db) ->
     unclear = {"facts": {}, "unclear": True}
     chat = make_chat(assistant=FakeDeepSeek(unclear, unclear, unclear).assistant(kb))
     await chat.start()
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Ожог")
+    await to_topic(chat, "Ожог")
     await chat.press("Для себя")
     for _ in range(2):
         await chat.say("не знаю")
         assert texts.MENU_HOME not in chat.labels()
     await chat.say("не знаю")
-    assert chat.text.startswith(texts.PICK_BUTTON)
-    assert chat.labels() == ["Лицо", "Другая часть тела", texts.MENU_HOME]
+    assert texts.PICK_BUTTON in chat.text
+    assert chat.labels() == ["Лицо", "Другая часть тела", texts.MENU_HOME, texts.BACK]
     assert chat.admin == [] and await handoffs(db) == []
     await chat.press(texts.MENU_HOME)
     assert texts.MENU_BOOK in chat.labels()
@@ -194,9 +195,7 @@ async def test_scenario_handoff_is_added_to_the_open_request(make_chat, db: Data
     await ready_for_admin(chat)
     first = chat.admin[-1]
     await chat.conversation.register_admin_message(501, first.handoff_id)
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Повторный приём")
+    await to_topic(chat, "Повторный приём")
     await chat.press("Для себя")
     await chat.press("Нет, в другом месте")  # 04-09 → adult call centre: a scenario handoff
     (handoff,) = await handoffs(db)

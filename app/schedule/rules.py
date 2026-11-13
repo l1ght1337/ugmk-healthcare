@@ -86,3 +86,22 @@ async def find_slots(
         min_lead=timedelta(minutes=config.demo.min_lead_minutes),
     )
     return ordered[offset : offset + limit]
+
+
+async def all_slots(
+    provider: ScheduleProvider,
+    booking: Booking,
+    *,
+    now: datetime,
+    config: ScheduleConfig,
+) -> list[Slot]:
+    """Every free slot the rules allow, for the day picker and the time grid."""
+    horizon = now + timedelta(days=config.demo.days_ahead)
+    free = await provider.free_slots(now, horizon)
+    return order_slots(
+        free,
+        booking.slot_policy,
+        now=now,
+        windows=config.repeat_windows,
+        min_lead=timedelta(minutes=config.demo.min_lead_minutes),
+    )

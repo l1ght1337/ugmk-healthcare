@@ -5,6 +5,7 @@
   "title": "Травма глаз",
   "menu_label": "Травма глаза",
   "kind": "routing",
+  "body_areas": ["head"],
   "router_hint": "Травма глаза: удар, инородное тело в глазу, ранение, ожог глаза и т. п.",
   "entry": [{"outcome": "cgb23"}],
   "outcomes": {

@@ -8,6 +8,7 @@ read by the LLM; when DeepSeek is not configured, times out or fails, the result
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from app.flow.schema import FactValue, Question, Scenario
@@ -26,9 +27,10 @@ class TextReading:
     wants_admin: bool = False
     area: str | None = None
     scenario_id: str | None = None
+    candidates: list[str] = field(default_factory=list)
     facts: dict[str, FactValue] = field(default_factory=dict)
     clarify: str | None = None
-    unavailable: bool = False  # no LLM: the bot falls back to buttons
+    unavailable: bool = False  # no LLM: the bot falls back to buttons (and the word list)
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ async def read_text(
     except LLMUnavailable as exc:
         log.warning("route unavailable: %s", exc)
         return TextReading(unavailable=True)
-    return TextReading(r.kind, r.wants_admin, r.area, r.scenario, r.facts, r.clarify)
+    return TextReading(r.kind, r.wants_admin, r.area, r.scenario, r.candidates, r.facts, r.clarify)
 
 
 async def read_answer(
@@ -77,12 +79,15 @@ async def read_answer(
 
 
 async def read_question(
-    assistant: Assistant | None, text: str, known: KnownPerson | None = None
+    assistant: Assistant | None,
+    text: str,
+    known: KnownPerson | None = None,
+    on_partial: Callable[[str], Awaitable[None]] | None = None,
 ) -> InfoReading:
     if assistant is None:
         return InfoReading(unavailable=True)
     try:
-        r = await assistant.answer(text, known)
+        r = await assistant.answer(text, known, on_partial)
     except LLMUnavailable as exc:
         log.warning("answer unavailable: %s", exc)
         return InfoReading(unavailable=True)

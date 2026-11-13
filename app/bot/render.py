@@ -7,8 +7,9 @@ becomes «уточнит администратор».
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 from app.bot import texts
 from app.config import ClinicData
@@ -33,6 +34,21 @@ def format_when(moment: datetime) -> str:
 
 def format_time(moment: time | datetime) -> str:
     return f"{moment:%H:%M}"
+
+
+def format_day_time(moment: datetime) -> str:
+    """«пятница, 13 ноября, 14:30» for the booking card."""
+    day = f"{moment.day} {texts.MONTHS_GENITIVE[moment.month - 1]}"
+    return f"{texts.WEEKDAYS[moment.weekday()]}, {day}, {moment:%H:%M}"
+
+
+def day_label(day: date, today: date) -> str:
+    """Day button: «Сегодня, 12.11», «Завтра, 13.11», «Сб, 14.11» (≤ 18 characters)."""
+    if day == today:
+        return f"{texts.TODAY}, {day:%d.%m}"
+    if day == today + timedelta(days=1):
+        return f"{texts.TOMORROW}, {day:%d.%m}"
+    return f"{texts.WEEKDAYS_SHORT[day.weekday()]}, {day:%d.%m}"
 
 
 def booked_word(patronymic: str | None) -> str:
@@ -90,15 +106,6 @@ def ask_question(step: AskQuestion, clarify: str | None = None, *, pick: bool = 
     else:
         text = step.question.ask
     return Prompt(text, step.question.buttons())
-
-
-def topic_menu(kb: KnowledgeBase) -> Prompt:
-    """Scenario buttons when the complaint could not be understood."""
-    ordered = sorted(kb.scenarios.values(), key=lambda s: tuple(map(int, s.number.split("."))))
-    return Prompt(
-        texts.PICK_TOPIC,
-        tuple(Choice(label=s.menu_label, facts={"scenario": s.id}) for s in ordered),
-    )
 
 
 def place_line(place: Place) -> str:
@@ -224,3 +231,133 @@ def booking_confirmation(
     if demo:
         parts.append(texts.DEMO_BOOKING)
     return "\n\n".join(parts)
+
+
+# --- booking card (part C) ----------------------------------------------------------------
+
+SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[А-ЯЁ{])")
+
+
+def summary_parts(template: str) -> dict[str, str]:
+    """Sentences of the script's step-5 summary: «booked», «price», «payment», «address».
+
+    «Благодарю Вас за ожидание! {patient} {booked} на приём … на {date} в {time}. Стоимость
+    консультации {price}, … оплачиваются дополнительно. Оплачивать планируете …? Адрес …».
+    """
+    parts: dict[str, str] = {}
+    for sentence in SENTENCE.split(template.strip()):
+        if "{booked}" in sentence:
+            parts["booked"] = sentence
+        elif sentence.startswith("Стоимость"):
+            parts["price"] = sentence
+        elif sentence.startswith("Оплачивать"):
+            parts["payment"] = sentence
+        elif sentence.startswith("Адрес"):
+            parts["address"] = sentence
+    return parts
+
+
+@dataclass(frozen=True)
+class Card:
+    """A structured message; the Telegram layer sends it as a rich message if it can."""
+
+    title: str
+    lead: str
+    fields: tuple[tuple[str, str], ...]
+    paragraphs: tuple[str, ...]
+    list_title: str
+    items: tuple[str, ...]
+    notes: tuple[str, ...] = ()
+
+    def plain(self) -> str:
+        """The same content as plain text: the fallback for clients without rich messages."""
+        lines = [self.title, "", self.lead, ""]
+        lines += [f"{name}: {value}" for name, value in self.fields]
+        lines += ["", *self.paragraphs]
+        lines += ["", f"{self.list_title}:"]
+        lines += [f"• {item}" for item in self.items]
+        text = "\n".join(lines)
+        if self.notes:
+            text += "\n\n" + "\n\n".join(self.notes)
+        return text
+
+
+@dataclass(frozen=True)
+class Venue:
+    latitude: float
+    longitude: float
+    title: str
+    address: str
+
+
+def _bring_items(kb: KnowledgeBase, audience: Audience) -> tuple[str, ...]:
+    c = kb.common
+    phrases = (
+        (c.bring_child.text, c.bring_child_first_visit.text)
+        if audience == "child"
+        else (c.bring_adult.text, c.bring_adult_first_visit.text)
+    )
+    items = []
+    for phrase in phrases:
+        item = phrase.removeprefix("С собой возьмите ").strip()
+        items.append(item[:1].upper() + item[1:])
+    return tuple(items)
+
+
+def booking_card(
+    kb: KnowledgeBase,
+    done: Done,
+    slot: Slot,
+    *,
+    first_name: str,
+    patronymic: str | None,
+    audience: Audience,
+    clinic: ClinicData,
+    demo: bool,
+) -> Card:
+    """Step 5 of the scripts as a card: when, doctor, address, price, what to bring."""
+    assert done.outcome.booking is not None and done.scenario.summary is not None
+    parts = summary_parts(done.scenario.summary)
+    lead = (
+        parts["booked"]
+        .split(" на {date}")[0]
+        .format(patient=patient_display(first_name, patronymic), booked=booked_word(patronymic))
+    )
+    price = parts["price"].format(price=price_text(clinic, done.outcome.booking.price_key))
+    center = clinic.contacts.trauma_center
+    notes = []
+    if needs_night_parking(slot, clinic):
+        notes.append(kb.common.parking_after_20.text)
+    if demo:
+        notes.append(texts.DEMO_BOOKING)
+    return Card(
+        title=texts.CARD_TITLE,
+        lead=f"{lead}.",
+        fields=(
+            (texts.CARD_WHEN, format_day_time(slot.start)),
+            (texts.CARD_DOCTOR, slot.doctor),
+            (texts.CARD_ADDRESS, f"{center.address}, {center.entrance}"),
+        ),
+        paragraphs=(price,),
+        list_title=texts.CARD_BRING,
+        items=_bring_items(kb, audience),
+        notes=tuple(notes),
+    )
+
+
+def payment_question(done: Done) -> str:
+    """«Оплачивать планируете самостоятельно или по страховке?» from the script."""
+    assert done.scenario.summary is not None
+    return summary_parts(done.scenario.summary).get("payment", texts.PAYMENT_QUESTION)
+
+
+def venue(clinic: ClinicData) -> Venue | None:
+    center = clinic.contacts.trauma_center
+    if center.location is None:  # TODO: the map point is not confirmed yet
+        return None
+    return Venue(
+        center.location.latitude,
+        center.location.longitude,
+        texts.VENUE_TITLE,
+        f"{center.address}, {center.entrance}",
+    )

@@ -1,0 +1,117 @@
+{
+  "root": "root",
+  "areas": {"limb": "limb", "head": "head", "torso": "torso"},
+  "menus": {
+    "root": {
+      "text": "Выберите, пожалуйста, что случилось:",
+      "items": [
+        {"id": "g_limb", "label": "Рука или нога", "menu": "limb", "area": "limb"},
+        {"id": "g_wound", "label": "Рана, ожог, укус", "menu": "wounds"},
+        {"id": "g_head", "label": "Голова, лицо, глаза, уши", "menu": "head", "area": "head"},
+        {"id": "g_treated", "label": "Уже лечусь у вас", "menu": "treated"},
+        {"id": "g_other", "label": "Другое", "menu": "other"}
+      ]
+    },
+    "limb": {
+      "text": "Что случилось с рукой или ногой?",
+      "items": [
+        {"id": "l_fall", "label": "Упал, ударился, подвернул", "menu": "fall"},
+        {"id": "l_cut", "label": "Порез, рана", "scenario": "cut_sutures"},
+        {"id": "l_burn", "label": "Ожог", "scenario": "burns"},
+        {"id": "l_bite", "label": "Укус животного", "scenario": "animal_bite"},
+        {"id": "l_casts", "label": "Гипс, ортез, скотчкаст", "menu": "casts"},
+        {"id": "l_treated", "label": "Уже лечусь у вас", "menu": "treated"},
+        {"id": "l_other", "label": "Другое", "menu": "other"}
+      ]
+    },
+    "fall": {
+      "text": "На что больше похоже?",
+      "items": [
+        {"id": "f_dislocation", "label": "Похоже на вывих", "scenario": "dislocation"},
+        {"id": "f_fracture", "label": "Похоже на перелом", "scenario": "fracture"},
+        {"id": "f_ligament", "label": "Растяжение или разрыв связок", "scenario": "ligament_rupture"},
+        {"id": "f_unsure", "label": "Не знаю", "scenario": "dislocation"}
+      ]
+    },
+    "casts": {
+      "text": "Что нужно сделать?",
+      "items": [
+        {"id": "c_apply", "label": "Наложить гипс", "scenario": "cast_apply"},
+        {"id": "c_remove", "label": "Снять гипс", "scenario": "cast_removal"},
+        {"id": "c_orthosis", "label": "Ортез", "scenario": "orthosis"},
+        {"id": "c_scotchcast", "label": "Скотчкаст", "scenario": "scotchcast"}
+      ]
+    },
+    "treated": {
+      "text": "С чем обращаетесь?",
+      "items": [
+        {"id": "r_repeat", "label": "Повторный приём", "scenario": "repeat_visit"},
+        {"id": "r_dressing", "label": "Перевязка", "scenario": "dressing"},
+        {"id": "r_sick_leave", "label": "Больничный", "scenario": "sick_leave"},
+        {"id": "r_puncture", "label": "Повторная пункция", "scenario": "joint_puncture"},
+        {"id": "r_pins", "label": "Удаление спиц", "scenario": "pin_removal"}
+      ]
+    },
+    "wounds": {
+      "text": "Что случилось?",
+      "items": [
+        {"id": "w_cut", "label": "Порез, рана", "scenario": "cut_sutures"},
+        {"id": "w_burn", "label": "Ожог", "scenario": "burns"},
+        {"id": "w_bite", "label": "Укус животного", "scenario": "animal_bite"},
+        {"id": "w_needle", "label": "Укол чужой иглой", "scenario": "needle_injury"},
+        {"id": "w_other", "label": "Другое", "menu": "other"}
+      ]
+    },
+    "head": {
+      "text": "Что случилось?",
+      "items": [
+        {"id": "h_hit", "label": "Ударился головой", "scenario": "head_trauma"},
+        {"id": "h_eye", "label": "Травма глаза", "scenario": "eye_trauma"},
+        {"id": "h_ent", "label": "Ухо, горло, нос", "scenario": "ent_trauma"},
+        {"id": "h_cut", "label": "Порез, рана", "scenario": "cut_sutures"},
+        {"id": "h_burn", "label": "Ожог", "scenario": "burns"},
+        {"id": "h_bite", "label": "Укус животного", "scenario": "animal_bite"},
+        {"id": "h_treated", "label": "Уже лечусь у вас", "menu": "treated"},
+        {"id": "h_other", "label": "Другое", "menu": "other"}
+      ]
+    },
+    "torso": {
+      "text": "Что случилось?",
+      "items": [
+        {"id": "t_hit", "label": "Удар в грудь или живот", "scenario": "chest_abdomen"},
+        {"id": "t_back", "label": "Потянул шею или спину", "scenario": "neurology"},
+        {"id": "t_genital", "label": "Травма половых органов", "scenario": "genital_trauma"},
+        {"id": "t_cut", "label": "Порез, рана", "scenario": "cut_sutures"},
+        {"id": "t_burn", "label": "Ожог", "scenario": "burns"},
+        {"id": "t_bite", "label": "Укус животного", "scenario": "animal_bite"},
+        {"id": "t_pus", "label": "Нагноение, плохо заживает", "scenario": "inflammation"},
+        {"id": "t_treated", "label": "Уже лечусь у вас", "menu": "treated"},
+        {"id": "t_other", "label": "Другое", "menu": "other"}
+      ]
+    },
+    "other": {
+      "text": "Опишите, пожалуйста, своими словами, что случилось, — или позовите администратора.",
+      "items": [
+        {"id": "o_describe", "label": "Опишите своими словами", "action": "describe"},
+        {"id": "o_admin", "label": "Позвать администратора", "action": "admin"}
+      ]
+    }
+  },
+  "area_facts": {
+    "limb": {
+      "burns": {"burn_location": "body"},
+      "cut_sutures": {"wound_location": "body"},
+      "dressing": {"body_part": "body"}
+    },
+    "head": {
+      "cut_sutures": {"wound_location": "face_neck_head"},
+      "dressing": {"body_part": "head_neck_face"}
+    },
+    "torso": {
+      "burns": {"burn_location": "body"}
+    }
+  },
+  "todo": [
+    "«Не знаю» после «Упал, ударился, подвернул» временно ведём по сценарию «Вывихи» (04-01) — уточнить у клиники (docs/clinic_requests.md)"
+  ]
+}

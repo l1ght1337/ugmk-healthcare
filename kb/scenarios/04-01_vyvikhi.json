@@ -5,6 +5,7 @@
   "title": "Вывихи",
   "menu_label": "Вывих",
   "kind": "booking",
+  "body_areas": ["limb"],
   "router_hint": "Вывих (пункт меню общего блока «Вывих»)",
   "entry": [{"next": "how"}],
   "questions": [

@@ -23,6 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Audience = Literal["child", "adult"]
 AUDIENCES: tuple[Audience, ...] = ("child", "adult")
+# Body areas for choosing topics by context (part C): limb — arm, leg; head — head, face,
+# eyes, ears; torso — chest, abdomen, back, neck, genitals; any — not tied to one area.
+Area = Literal["limb", "head", "torso"]
+AREAS: tuple[Area, ...] = ("limb", "head", "torso")
+BodyArea = Literal["limb", "head", "torso", "any"]
 # Facts known before any scenario question is asked.
 CONTEXT_FACTS = frozenset({"audience"})
 
@@ -238,6 +243,9 @@ class Scenario(_Model):
     title: str
     menu_label: str = Field(min_length=1, max_length=BUTTON_MAX, description="Menu button")
     kind: Literal["booking", "routing"]
+    body_areas: tuple[BodyArea, ...] = Field(
+        min_length=1, description="Where the injury is; topics of other areas are not shown"
+    )
     router_hint: str = Field(description="When the scenario applies, in the script's words")
     entry: tuple[Branch, ...] = Field(min_length=1)
     questions: tuple[Question, ...] = ()
@@ -251,6 +259,10 @@ class Scenario(_Model):
         default=(), description="Staff-only reference; never shown to patients or sent to the LLM"
     )
     todo: tuple[str, ...] = ()
+
+    def fits(self, area: str | None) -> bool:
+        """Can be offered once the patient named this body area (None: anything goes)."""
+        return area is None or "any" in self.body_areas or area in self.body_areas
 
     def question(self, question_id: str) -> Question:
         for q in self.questions:
@@ -413,3 +425,59 @@ class CommonPhrases(_Model):
             if inside:
                 return slot.text
         raise AssertionError("validated slots cover the whole day")
+
+
+class MenuItem(_Model):
+    """A topic button: opens another menu, starts a scenario, or an action."""
+
+    id: str = Field(pattern=SNAKE, description="Unique across all menus (callback data)")
+    label: str = Field(min_length=1, max_length=BUTTON_MAX)
+    menu: str | None = None
+    scenario: str | None = None
+    action: Literal["describe", "admin"] | None = None
+    area: Area | None = Field(default=None, description="Choosing it names the body area")
+    facts: dict[str, FactValue] = Field(
+        default={}, description="Answers the button already gives (passed to the scenario)"
+    )
+
+    @model_validator(mode="after")
+    def _one_target(self) -> MenuItem:
+        if sum(t is not None for t in (self.menu, self.scenario, self.action)) != 1:
+            raise ValueError(f"menu item {self.id!r} needs exactly one of menu/scenario/action")
+        if self.facts and self.scenario is None:
+            raise ValueError(f"menu item {self.id!r}: facts only with a scenario")
+        return self
+
+
+class Menu(_Model):
+    text: str = Field(min_length=1)
+    items: tuple[MenuItem, ...] = Field(min_length=2)
+
+
+class TopicTree(_Model):
+    """kb/scenarios/_menu.json: topics about what happened, not diagnoses (part C)."""
+
+    root: str = Field(description="«Выбрать из списка» before any complaint: five groups")
+    areas: dict[Area, str] = Field(description="Menu shown once the body area is known")
+    menus: dict[str, Menu]
+    area_facts: dict[Area, dict[str, dict[str, FactValue]]] = Field(
+        default={}, description="Answers implied by the area, per scenario (a burn on a hand)"
+    )
+    todo: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _links(self) -> TopicTree:
+        ids = [i.id for m in self.menus.values() for i in m.items]
+        if len(set(ids)) != len(ids):
+            raise ValueError("menu item ids must be unique")
+        for name in (self.root, *self.areas.values()):
+            if name not in self.menus:
+                raise ValueError(f"unknown menu {name!r}")
+        for menu in self.menus.values():
+            for item in menu.items:
+                if item.menu is not None and item.menu not in self.menus:
+                    raise ValueError(f"item {item.id!r}: unknown menu {item.menu!r}")
+        return self
+
+    def item(self, item_id: str) -> MenuItem | None:
+        return next((i for m in self.menus.values() for i in m.items if i.id == item_id), None)

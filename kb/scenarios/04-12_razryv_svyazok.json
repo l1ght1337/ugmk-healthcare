@@ -5,6 +5,7 @@
   "title": "Разрыв связок",
   "menu_label": "Разрыв связок",
   "kind": "booking",
+  "body_areas": ["limb"],
   "router_hint": "Разрыв связок или подозрение на разрыв связок (пункт меню общего блока)",
   "entry": [{"next": "how"}],
   "questions": [

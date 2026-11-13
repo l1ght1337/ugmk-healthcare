@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     allowed_user_ids: Annotated[list[int], NoDecode] = []
     # Requests to the administrators per user per day; then the bot names the clinic phone.
     handoff_daily_limit: int = Field(default=3, ge=1, le=100)
+    # The booking card as a Telegram rich message (Bot API 10.x); false — plain text.
+    rich_messages: bool = True
+    # Answers to questions streamed as a draft (sendMessageDraft); false — «печатает…» only.
+    stream_answers: bool = True
 
     # DeepSeek (OpenAI-compatible API)
     deepseek_api_key: SecretStr | None = None

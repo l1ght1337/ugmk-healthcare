@@ -11,22 +11,29 @@ from app.bot.conversation import Conversation
 from app.db.models import Booking, Handoff, Reminder
 from app.db.session import Database
 from app.schedule.mock import MockSchedule
-from tests.chat_harness import PATIENT, Chat, Clock, make_settings
+from tests.chat_harness import PATIENT, Chat, Clock, make_settings, to_topic
 from tests.conftest import NOW
 from tests.fake_deepseek import FakeDeepSeek
 
 
-async def book_dislocation(chat: Chat, *, slot: str = "Чт 12.11") -> None:
-    """Menu → «Вывих» by buttons → slot → consent → name → birth date → contact."""
-    await chat.start()
+async def to_dislocation(chat: Chat) -> None:
+    """Menu → «Выбрать из списка» → «Рука или нога» → «Упал, ударился, подвернул» → вывих."""
     await chat.press(texts.MENU_BOOK)
     await chat.press(texts.TOPIC_LIST)
-    await chat.press("Вывих")
+    await chat.press("Рука или нога")
+    await chat.press("Упал, ударился, подвернул")
+    await chat.press("Похоже на вывих")
+
+
+async def book_dislocation(chat: Chat, *, day: str = "Сегодня") -> None:
+    """A dislocation by buttons → day → time → consent → name → birth date → contact."""
+    await chat.start()
+    await to_dislocation(chat)
     await chat.press("Для себя")
     await chat.press("Бытовая травма")
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")
-    await chat.press(slot)
+    await chat.pick_slot(day)
     await chat.press(texts.CONSENT_YES)
     await chat.say("петров иван сергеевич")
     await chat.say("12.03.1985")
@@ -46,33 +53,50 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     assert chat.labels() == [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN]
 
     await chat.press(texts.MENU_BOOK)
-    await chat.say("вывихнул плечо")  # no LLM configured → topic menu
-    assert texts.PICK_TOPIC in chat.text and "Вывих" in chat.labels()
-    await chat.press("Вывих")
-    assert chat.labels() == ["Для себя", "Для ребёнка (до 18 лет)"]
+    await chat.say("вывихнул плечо")  # no LLM: the word list → arm, «упал, подвернул» topics
+    assert (
+        chat.text.startswith("Шаг 1 из 5 · Что случилось") and "На что больше похоже?" in chat.text
+    )
+    assert chat.labels()[:2] == ["Похоже на вывих", "Похоже на перелом"]
+    await chat.press("Похоже на вывих")
+    assert chat.labels() == ["Для себя", "Для ребёнка (до 18 лет)", texts.BACK]
     await chat.press("Для себя")
     await chat.press("Бытовая травма")
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")
-    assert "вывих, врач попробует его вправить" in chat.text
-    assert "Пожалуйста, подождите минуту" in chat.text
-    slots = [label for label in chat.labels() if label.startswith("Чт 12.11")]
-    assert slots and slots[0][10:15] >= "13:00"  # not earlier than an hour from now (12:00)
-    later = next(label for label in slots if label[10:15] >= "14:00")  # «за 2 часа» still ahead
+    info, days = chat.replies
+    assert "вывих, врач попробует его вправить" in info.text and info.edit and not info.screen
+    assert days.text.startswith("Шаг 4 из 5 · День и время") and days.screen and not days.edit
+    assert chat.days()[0].label == "Сегодня, 12.11"
+    await chat.pick_day("Сегодня")
+    assert "12 ноября (четверг)" in chat.text and "смены:" in chat.text
+    times = [b.label for b in chat.times()]
+    assert times and times[0] >= "13:00"  # not earlier than an hour from now (12:00)
+    later = next(t for t in times if t >= "14:00")  # «за 2 часа» still ahead
 
-    await chat.press(later)
-    assert texts.CONSENT in chat.text
+    await chat.pick_time(later)
+    assert texts.CONSENT in chat.text and chat.replies[0].edit
     await chat.press(texts.CONSENT_YES)
     assert "фамилия, имя, отчество" in chat.text
     await chat.say("петров иван сергеевич")
     await chat.say("12.03.1985")
     assert chat.replies[-1].ask_contact
     await chat.contact()
-    assert chat.replies[0].remove_keyboard
-    assert "Иван Сергеевич записан на приём травматолога-ортопеда" in chat.text
-    assert "ул. Шейнкмана, 113/2, вход через детское отделение" in chat.text
-    assert "С собой возьмите паспорт. При первом обращении — ещё СНИЛС." in chat.text
-    assert texts.DEMO_BOOKING in chat.text
+    thanks, card, payment = chat.replies
+    assert thanks.remove_keyboard and card.card is not None
+    for part in (
+        "Запись в травмпункт",
+        "Иван Сергеевич записан на приём травматолога-ортопеда в травмпункт.",
+        f"Дата и время: четверг, 12 ноября, {later}",
+        "Врач: ",
+        "Адрес: ул. Шейнкмана, 113/2, вход через детское отделение",
+        "Стоимость консультации 2000 рублей (демо-цена)",
+        "Что взять с собой:\n• Паспорт.\n• При первом обращении — ещё СНИЛС.",
+        texts.DEMO_BOOKING,
+    ):
+        assert part in card.text, part
+    assert [b.label for row in card.buttons for b in row] == [texts.MOVE, texts.CANCEL]
+    assert payment.text == "Оплачивать планируете самостоятельно или по страховке?"
     await chat.press(texts.PAYMENT_INSURANCE)
 
     first = (await bookings(db))[0]
@@ -98,11 +122,14 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     # control visit: 04-09 with «первично у нас» known → only «больничный?»
     await chat.press(texts.CONTROL_YES)
     assert chat.text == "Открывали больничный лист?"
-    await chat.press("Нет")
-    offered = [label for label in chat.labels() if label[:2] in texts.WEEKDAYS_SHORT]
-    assert offered and all(label[3:8] >= "22.11" for label in offered)  # about +10 days
-    assert "Предлагаю время около 22 ноября" in chat.text and texts.OTHER_DAY in chat.labels()
-    await chat.press(offered[0])  # patient, consent and phone are known: booked at once
+    await chat.press("Нет")  # straight to the time grid of the day about 10 days later
+    assert chat.text.startswith("Предлагаю время около 22 ноября (воскресенье).")
+    assert "22 ноября (воскресенье)" in chat.text and texts.OTHER_DAY in chat.labels()
+    assert chat.times() and not chat.days()
+    await chat.press(texts.OTHER_DAY)
+    assert chat.days()[0].label == "Чт, 19.11"  # a few days before the target
+    await chat.pick_day("Вс, 22.11")
+    await chat.pick_time()  # patient, consent and phone are known: booked at once
     assert "записан на приём" in chat.text and texts.CONSENT not in chat.text
     await chat.press(texts.PAYMENT_SELF)
 
@@ -136,6 +163,8 @@ async def test_day_before_reminder_lists_documents(make_chat, schedule: MockSche
     await chat.press(texts.PAYMENT_SELF)
     await chat.press(texts.MENU_MY)
     await chat.press(texts.MOVE)
+    assert texts.MOVE_PICK in chat.text and "Шаг" not in chat.text
+    await chat.pick_day("Завтра")
     await chat.data(f"s:{tomorrow.id}")
     assert chat.text.startswith("Готово, запись перенесена на 13 ноября (пятница)")
     await chat.demo_next()
@@ -155,8 +184,7 @@ async def test_case_18_reschedule_and_cancel_free_the_slot(
     await chat.press(texts.MENU_MY)
     assert "Петров Иван Сергеевич" in chat.text
     await chat.press(texts.MOVE)
-    new_label = next(label for label in chat.labels() if label[:2] in texts.WEEKDAYS_SHORT)
-    await chat.press(new_label)
+    await chat.pick_slot("Завтра")
     moved = (await bookings(db))[0]
     free = {s.id for s in await schedule.free_slots(NOW, NOW + timedelta(days=14))}
     assert moved.slot_id != old and old in free and moved.slot_id not in free
@@ -182,9 +210,7 @@ async def test_case_2_handoff_asks_consent_and_contact_then_reply_goes_back(
 ) -> None:
     chat = make_chat()
     await chat.start()
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Перелом")
+    await to_topic(chat, "Перелом")
     await chat.press("Для ребёнка (до 18 лет)")
     await chat.say("8 лет")
     await chat.press("Бытовая травма")
@@ -273,10 +299,10 @@ async def test_child_age_from_complaint_is_confirmed_with_buttons(make_chat, kb)
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
     await chat.say("у сына 8 лет вывих, упал вчера дома, к врачу не ходили")
-    assert chat.text == "Правильно понимаю: запись для ребёнка, 8 лет?"
-    assert chat.labels() == ["Да, ребёнок 8 лет", "Нет"]
+    assert chat.text.endswith("\n\nПравильно понимаю: запись для ребёнка, 8 лет?")
+    assert chat.labels() == ["Да, ребёнок 8 лет", "Нет", texts.BACK]
     await chat.press("Да, ребёнок 8 лет")
-    assert "Пожалуйста, подождите минуту" in chat.text  # all answers known → straight to slots
+    assert texts.DAY_PICK in chat.text  # all answers known → straight to the day picker
 
 
 async def test_child_age_rejected_asks_who(make_chat, kb) -> None:
@@ -285,19 +311,17 @@ async def test_child_age_rejected_asks_who(make_chat, kb) -> None:
     await chat.start()
     await chat.say("дочке 3 года, обожглась")
     await chat.press("Нет")
-    assert chat.labels() == ["Для себя", "Для ребёнка (до 18 лет)"]
+    assert chat.labels() == ["Для себя", "Для ребёнка (до 18 лет)", texts.BACK]
 
 
 async def test_free_text_answer_falls_back_to_buttons(make_chat, kb) -> None:
     chat = make_chat(assistant=FakeDeepSeek(500, 500).assistant(kb))
     await chat.start()
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Ожог")
+    await to_topic(chat, "Ожог")
     await chat.press("Для себя")
     await chat.say("обожгла руку")
-    assert chat.text.startswith(texts.PICK_BUTTON)
-    assert chat.labels() == ["Лицо", "Другая часть тела"]
+    assert texts.PICK_BUTTON in chat.text
+    assert chat.labels() == ["Лицо", "Другая часть тела", texts.BACK]
 
 
 async def test_questions_are_answered_from_kb_info(make_chat, kb) -> None:
@@ -323,15 +347,13 @@ async def test_returning_patient_is_picked_not_retyped(make_chat, db: Database) 
     chat = make_chat()
     await book_dislocation(chat)
     await chat.press(texts.PAYMENT_SELF)
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Перелом")
+    await to_topic(chat, "Перелом")
     await chat.press("Для себя")
     await chat.press("Бытовая травма")
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")
-    await chat.press(next(lbl for lbl in chat.labels() if lbl[:2] in texts.WEEKDAYS_SHORT))
-    assert chat.labels() == ["Петров Иван, 12.03.1985", texts.PATIENT_NEW]
+    await chat.pick_slot()
+    assert chat.labels() == ["Петров Иван, 12.03.1985", texts.PATIENT_NEW, texts.BACK]
     await chat.press("Петров Иван, 12.03.1985")
     assert "Иван Сергеевич записан" in chat.text
     assert len(await bookings(db)) == 2
@@ -383,9 +405,7 @@ async def test_restart_keeps_booked_slots_taken(make_chat, kb, clinic, db, clock
 async def test_admin_from_slot_choice_keeps_the_scenario_context(make_chat) -> None:
     chat = make_chat()
     await chat.start()
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Ожог")
+    await to_topic(chat, "Ожог")
     await chat.press("Для себя")
     await chat.press("Другая часть тела")
     await chat.press("Кипяток, пар, огонь, солнце")
@@ -406,33 +426,29 @@ async def test_child_booking_asks_the_guardian_item_once(make_chat, db: Database
     chat = make_chat()
     await book_dislocation(chat)  # adult: consent without the guardian item
     await chat.press(texts.PAYMENT_SELF)
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Ожог")
+    await to_topic(chat, "Ожог")
     await chat.press("Для ребёнка (до 18 лет)")
     await chat.say("5 лет")
     await chat.press("Другая часть тела")
     await chat.press("Кипяток, пар, огонь, солнце")
     await chat.press("Менее суток назад")
     await chat.press("Нет, не обращались")
-    await chat.press(next(lbl for lbl in chat.labels() if lbl[:2] in texts.WEEKDAYS_SHORT))
+    await chat.pick_slot()
     assert texts.CONSENT_ITEM_GUARDIAN in chat.text  # adult consent is not enough for a child
     await chat.press(texts.CONSENT_YES)
     await chat.say("Петрова Анна Ивановна")
     await chat.say("01.02.2021")
     assert "Анна Ивановна записана" in chat.text  # phone already known
     await chat.press(texts.PAYMENT_SELF)
-    await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.TOPIC_LIST)
-    await chat.press("Ожог")
+    await to_topic(chat, "Ожог")
     await chat.press("Для ребёнка (до 18 лет)")
     await chat.say("5 лет")
     await chat.press("Другая часть тела")
     await chat.press("Кипяток, пар, огонь, солнце")
     await chat.press("Менее суток назад")
     await chat.press("Нет, не обращались")
-    await chat.press(next(lbl for lbl in chat.labels() if lbl[:2] in texts.WEEKDAYS_SHORT))
-    assert chat.labels() == ["Петрова Анна, 01.02.2021", texts.PATIENT_NEW]  # no consent again
+    await chat.pick_slot()
+    assert chat.labels() == ["Петрова Анна, 01.02.2021", texts.PATIENT_NEW, texts.BACK]
 
 
 async def test_consent_text_mentions_withdrawal(make_chat) -> None:

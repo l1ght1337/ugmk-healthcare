@@ -146,6 +146,16 @@ def test_changed_settings_rebuild_the_csv(rows, clinic: ClinicData, tmp_path: Pa
     assert ensure_horizon(path, FIRST_DAY, clinic.schedule) is False
 
 
+def test_running_bot_tops_up_the_schedule(clinic: ClinicData, tmp_path: Path) -> None:
+    path = tmp_path / "schedule.csv"
+    ensure_horizon(path, FIRST_DAY, clinic.schedule)
+    provider = MockSchedule.from_csv(path, tz=TZ, config=clinic.schedule)
+    assert provider.top_up(FIRST_DAY) is False  # nothing to add today
+    assert provider.top_up(FIRST_DAY + timedelta(days=1)) is True
+    last = FIRST_DAY + timedelta(days=DAYS)
+    assert provider._slots[f"{last:%Y%m%d}-1200-main"].start.date() == last
+
+
 def test_make_provider_creates_missing_csv(clinic: ClinicData, tmp_path: Path) -> None:
     path = tmp_path / "schedule.csv"
     provider = make_provider(Settings(schedule_provider="mock"), clinic, csv_path=path)
