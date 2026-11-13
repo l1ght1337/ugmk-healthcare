@@ -59,8 +59,25 @@ def render_prices(clinic: ClinicData) -> str:
     return "\n".join(lines)
 
 
+def render_clinic_facts(clinic: ClinicData) -> str:
+    """Facts kept in config/ (not in kb/info), worded as the scripts word them."""
+    lines = ["# Скорая помощь и вакцина", "", "Источник: config/clinic.yaml.", ""]
+    lines.append(f"- {clinic.clinic.emergency.reply}")
+    if clinic.contacts.ambulance_line_phone:
+        lines.append(f"- Линия скорой помощи клиники: {clinic.contacts.ambulance_line_phone}.")
+    if clinic.clinic.rabies_vaccine_available:
+        lines.append("- Наличие антирабической вакцины на сегодня уточнит администратор.")
+    else:  # 04-11
+        lines.append(
+            "- Антирабической вакцины нет — доктор может обработать место укуса и сделать "
+            "перевязку."
+        )
+    return "\n".join(lines)
+
+
 def render_info(info_dir: Path = KB_DIR / "info", clinic: ClinicData | None = None) -> str:
     """kb/info/*.md in a fixed order plus prices — the only source for answers to questions."""
     parts = [p.read_text(encoding="utf-8").strip() for p in sorted(info_dir.glob("*.md"))]
-    parts.append(render_prices(clinic or get_clinic_data()))
+    clinic = clinic or get_clinic_data()
+    parts += [render_prices(clinic), render_clinic_facts(clinic)]
     return "\n\n".join(parts) + "\n"

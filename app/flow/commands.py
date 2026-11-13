@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-MenuAction = Literal["book", "my_bookings", "ask", "admin"]
+MenuAction = Literal["book", "my_bookings", "ask", "admin", "forget", "about_bot"]
 
 _BOOKING = r"(?:запис\w*|при[её]м\w*|визит\w*)"
 # Requests, not stories: «отмени запись», not «приём у врача отменили».
@@ -44,6 +44,19 @@ COMMANDS: tuple[tuple[MenuAction, re.Pattern[str]], ...] = (
             r"(?:\s+пожалуйста)?$"
         ),
     ),
+    # «Удалите мои данные» — the /forget confirmation
+    (
+        "forget",
+        re.compile(
+            r"\b(?:удал\w*|сотр\w*|стер\w*|отзыва\w*|отозва\w*)\b.*\b(?:данн\w*|согласи\w*)"
+        ),
+    ),
+    # «Ты бот?», «ты человек?», «с кем я говорю»
+    (
+        "about_bot",
+        re.compile(r"^(?:а\s+)?(?:ты|вы)\s+(?:бот|человек|робот|живой|живая|нейросеть)\b"),
+    ),
+    ("about_bot", re.compile(r"\bс\s+кем\s+я\s+(?:говорю|разговариваю|общаюсь|переписываюсь)\b")),
     ("ask", re.compile(r"^(?:у\s+меня\s+)?(?:есть\s+)?(?:хочу\s+задать\s+|задать\s+)?вопрос$")),
 )
 

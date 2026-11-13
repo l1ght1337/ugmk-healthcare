@@ -170,6 +170,7 @@ WIZARD_STEPS = frozenset(STAGE_OF)
 # Steps where the text is data (age, name, phone…): «отмени запись» there is not a command.
 DATA_STEPS = frozenset({"age", "name", "birth", "contact", "admin_reply", "visit_question"})
 MENU_ITEM = {"book": "book", "my_bookings": "my", "ask": "ask", "admin": "admin"}
+COMMAND_ACTIONS = frozenset({*MENU_ITEM, "forget", "about_bot"})
 
 
 class Session(BaseModel):
@@ -622,7 +623,7 @@ class Conversation:
             return
         step = c.s.step
         if step not in DATA_STEPS and (action := find_command(text)) is not None:
-            await self._on_menu(c, MENU_ITEM[action])  # the same screen as the menu button
+            await self._command(c, action)  # the same screen as the menu button
             return
         handlers: dict[str, Callable[[Ctx, str], Awaitable[None]]] = {
             "age": self._on_age,
@@ -673,8 +674,27 @@ class Conversation:
         elif reading.kind == "complaint":
             area = reading.area or topics.guess_area(text) or c.s.area
             self._topics_for(c, area, reading.candidates, reading.clarify or texts.ASK_COMPLAINT)
-        elif reading.kind == "menu_action" and reading.action in MENU_ITEM:
-            await self._on_menu(c, MENU_ITEM[reading.action])
+        elif reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS:
+            await self._command(c, reading.action)
+        elif reading.kind == "medical_question":  # no advice and no diagnosis (rule 1)
+            self._reset(c)
+            book = Button(texts.MENU_BOOK, "m:book", "primary")
+            c.say(texts.MEDICAL, [[book], _home()])
+        elif reading.kind == "about_bot":
+            await self._command(c, "about_bot")
+        elif reading.kind == "feedback":  # to an administrator, only if the patient agrees
+            self._reset(c)
+            c.s.step = "offer_admin"
+            c.s.handoff_reason, c.s.handoff_context = texts.FEEDBACK_REASON, text
+            c.say(texts.FEEDBACK, self._ask_admin_buttons(texts.HANDOFF_YES))
+        elif reading.kind == "other_department":
+            self._reset(c)
+            if phone := self.clinic.contacts.call_center_phone:
+                c.say(texts.OTHER_DEPARTMENT.format(phone=phone), _menu())
+            else:  # TODO: the clinic phone (docs/clinic_requests.md, item 2)
+                c.s.step = "offer_admin"
+                c.s.handoff_reason, c.s.handoff_context = texts.OTHER_DEPARTMENT_REASON, text
+                c.say(texts.OTHER_DEPARTMENT_NO_PHONE, self._ask_admin_buttons())
         elif reading.kind == "clinic_question":  # «У меня нет этой информации» only here
             await self._answer_question(c, text)
         elif reading.kind == "other_medical":
@@ -1086,8 +1106,25 @@ class Conversation:
         buttons = [Button(ch.label, f"q:{qid}:{i}") for i, ch in enumerate(prompt.choices)]
         self._screen(c, prompt.text, buttons, rows=[_home()] if stuck else [])
 
-    def _ask_admin_buttons(self) -> list[list[Button]]:
-        return [[Button(texts.ASK_ADMIN_QUESTION, "h:yes", "primary")], _home()]
+    def _ask_admin_buttons(self, label: str = texts.ASK_ADMIN_QUESTION) -> list[list[Button]]:
+        return [[Button(label, "h:yes", "primary")], _home()]
+
+    async def _command(self, c: Ctx, action: str) -> None:
+        """A menu command typed as text (app/flow/commands.py) or found by route."""
+        if action in MENU_ITEM:
+            await self._on_menu(c, MENU_ITEM[action])
+        elif action == "forget":
+            await self._forget_ask(c)
+        else:  # about_bot
+            self._reset(c)
+            c.say(
+                texts.ABOUT_BOT,
+                [
+                    [Button(texts.MENU_ADMIN, "m:admin")],
+                    [Button(texts.MENU_FORGET, "fg:ask")],
+                    _home(),
+                ],
+            )
 
     async def _done(self, c: Ctx, done: Done) -> None:
         if done.outcome_id == FALLBACK_OUTCOME:  # a knowledge-base gap: no automatic handoff
@@ -1917,6 +1954,9 @@ class Conversation:
         )
 
     async def _on_forget(self, c: Ctx, value: str) -> None:
+        if value == "ask":  # «Удалить мои данные» under «о боте»
+            await self._forget_ask(c)
+            return
         if value != "yes":
             c.say(texts.FORGET_KEPT, _menu())
             return

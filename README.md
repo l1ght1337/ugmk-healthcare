@@ -113,5 +113,6 @@ docs/              ТЗ, карта скриптов, кейсы, исходы, 
 - `docs/scripts_overview.md` — карта скриптов колл-центра
 - `docs/test_cases.md` — приёмочные кейсы; `docs/engine_outcomes.md` — исходы движка по ним
 - `docs/clinic_load.md` — загрузка травмпункта и расчёт стоимости DeepSeek
+- `docs/faq_matrix.md` — вопросы пациентов и откуда бот берёт ответ (`uv run python -m tests.faq_cases --write`)
 - `docs/manual_test.md` — ручной прогон в Telegram; `docs/button_labels.md` — подписи кнопок
 - `docs/clinic_requests.md` — что нужно получить и согласовать с клиникой

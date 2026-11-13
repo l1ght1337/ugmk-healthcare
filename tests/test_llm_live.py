@@ -17,6 +17,7 @@ from app.flow.loader import KnowledgeBase
 from app.llm.assistant import Assistant
 from app.llm.client import DeepSeekClient
 from app.llm.usage import Usage, log_usage
+from tests.faq_cases import CONFIG, FAQS, KB, Faq
 from tests.live_report import LIVE_LOG, RUN_ID
 
 pytestmark = pytest.mark.live
@@ -178,3 +179,18 @@ async def test_candidates_for_a_twisted_ankle(assistant: Assistant, kb: Knowledg
     if result.scenario is None:
         assert 3 <= len(result.candidates) <= 5, result
         assert best_menu(kb, result.area, result.candidates) in ("fall", "limb"), result
+
+
+FAQ_LIVE = [f for f in FAQS if f.live]
+
+
+@pytest.mark.parametrize("faq", FAQ_LIVE, ids=[f.group for f in FAQ_LIVE])
+async def test_faq_group(assistant: Assistant, faq: Faq) -> None:
+    """One question per group of docs/faq_matrix.md, as the matrix says."""
+    result = await assistant.route(faq.question)
+    assert result.kind == faq.kind, (faq.question, result)
+    if faq.scenario:
+        assert result.scenario == faq.scenario, result
+    if faq.source in (KB, CONFIG):
+        answer = await assistant.answer(faq.question)
+        assert answer.answer, (faq.question, answer)

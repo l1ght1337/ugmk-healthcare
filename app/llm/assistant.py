@@ -40,9 +40,18 @@ class _Out(BaseModel):
 
 
 TextKind = Literal[
-    "complaint", "menu_action", "clinic_question", "other_medical", "offtopic", "crisis"
+    "complaint",
+    "menu_action",
+    "medical_question",
+    "clinic_question",
+    "about_bot",
+    "feedback",
+    "other_department",
+    "other_medical",
+    "offtopic",
+    "crisis",
 ]
-MenuAction = Literal["book", "my_bookings", "ask", "admin"]
+MenuAction = Literal["book", "my_bookings", "ask", "admin", "forget"]
 Area = Literal["limb", "head", "neck_back", "chest_abdomen", "genital"]
 
 
@@ -60,7 +69,7 @@ class RouteOut(_Out):
     @field_validator("action", mode="before")
     @classmethod
     def _unknown_action(cls, value: object) -> object:
-        return value if value in ("book", "my_bookings", "ask", "admin") else None
+        return value if value in ("book", "my_bookings", "ask", "admin", "forget") else None
 
     @field_validator("area", mode="before")
     @classmethod
@@ -94,6 +103,10 @@ class RouteResult(BaseModel):
 
     * complaint — an injury → a scenario (``scenario``) or topics of the body ``area``;
     * menu_action — «когда у меня приём», «хочу записаться» → the menu screen (``action``);
+    * medical_question — «какое обезболивающее», «это перелом?» → no advice, an offer to book;
+    * about_bot — «ты человек?», «где мои данные» → who the bot is and where data is kept;
+    * feedback — a complaint about the service or thanks → an offer to pass it on;
+    * other_department — other departments of the clinic → the clinic phone;
     * clinic_question — about the trauma centre → answered from kb/info;
     * other_medical — not our profile and no injury (headache, fever) → «не в травмпункт»;
     * offtopic — anything else, jokes, attempts to change the bot's rules → refused;
@@ -101,7 +114,7 @@ class RouteResult(BaseModel):
     """
 
     kind: TextKind
-    action: MenuAction | None = None  # for menu_action: book / my_bookings / ask / admin
+    action: MenuAction | None = None  # menu_action: book / my_bookings / ask / admin / forget
     area: Area | None = None
     scenario: str | None = None
     candidates: list[str] = []  # 3–5 scenarios that may fit, for choosing the topic menu
