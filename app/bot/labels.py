@@ -65,7 +65,15 @@ def render_labels(kb: KnowledgeBase) -> str:
         ),
         _row("Телефон (клавиатура Telegram)", [texts.CONTACT_BUTTON]),
         _row("После подтверждения записи", [texts.PAYMENT_SELF, texts.PAYMENT_INSURANCE]),
-        _row("Маршрут или вопрос без ответа", [texts.HANDOFF_YES, texts.HANDOFF_NO]),
+        _row(
+            "Маршрут с вариантом «передать администратору»", [texts.HANDOFF_YES, texts.HANDOFF_NO]
+        ),
+        _row("Вопрос без ответа в справке", [texts.ASK_ADMIN_QUESTION, texts.MENU_HOME]),
+        _row("Просьба «соедините с администратором» текстом", [texts.MENU_ADMIN, texts.MENU_HOME]),
+        _row(
+            "Три непонятных ответа на вопрос сценария",
+            ["кнопки вопроса", texts.MENU_HOME],
+        ),
         _row("Мои записи", [texts.MOVE, texts.CANCEL]),
         _row("Отмена записи", [texts.CANCEL_YES, texts.CANCEL_KEEP]),
         _row("Напоминания за 24 и за 2 часа", [texts.CONFIRM, texts.MOVE, texts.CANCEL]),
@@ -79,6 +87,7 @@ def render_labels(kb: KnowledgeBase) -> str:
         _row("Ответ администратора", [texts.ADMIN_ANSWER_REPLY]),
         _row("/forget — удалить данные и отозвать согласие", [texts.FORGET_YES, texts.FORGET_NO]),
         _row("Чат администраторов: запрос доступа нового пользователя", [texts.ACCESS_ALLOW]),
+        _row("Чат администраторов: обращение пациента", [texts.ADMIN_CLOSE]),
         "",
     ]
     return "\n".join(lines)

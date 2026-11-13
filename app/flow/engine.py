@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 INFANT_SCENARIO = "infant_under_6m"
 INFANT_UNDER_MONTHS = 6  # 05-04: «дети в возрасте до 6 месяцев»
 ADULT_FROM_MONTHS = 18 * 12  # teens 15–17 are led as children (customer decision)
-MAX_ASKS = 3  # a question that is still unclear after this many asks goes to an admin
+MAX_ASKS = 3  # after this many unclear answers the bot shows only the step's buttons
 MAX_JUMPS = 5  # guard against jump chains between scenarios
 
 
@@ -77,6 +77,11 @@ class AskQuestion:
     scenario: Scenario
     question: Question
     attempt: int = 1  # 2+ means the previous answer did not settle the question
+
+    @property
+    def stuck(self) -> bool:
+        """Three unclear answers: show the buttons and «В главное меню», no administrator."""
+        return self.attempt > MAX_ASKS
 
 
 @dataclass(frozen=True)
@@ -178,10 +183,6 @@ class Engine:
                 state.asks += 1
             else:
                 state.question_id, state.asks = question.id, 1
-            if state.asks > MAX_ASKS:
-                return self._fallback(
-                    state, scenario, f"не удалось понять ответ на «{question.ask}»"
-                )
             return AskQuestion(scenario, question, attempt=state.asks)
         for f in question.fields:
             if f.name not in state.facts and f.default is not None:

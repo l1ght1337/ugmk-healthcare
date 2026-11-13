@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.bot.conversation import Conversation
 from app.config import ClinicData, load_clinic_data
+from app.db.session import Database
 from app.flow.engine import AskPatient, AskQuestion, DialogState, Done, Engine
 from app.flow.loader import KnowledgeBase, load_kb
 from app.flow.schema import Audience
@@ -88,3 +91,40 @@ def run(engine: Engine):
         return walk(engine, scenario_id, answers, **kwargs)  # type: ignore[arg-type]
 
     return _run
+
+
+# --- a patient chatting with Conversation (no Telegram) ----------------------------------
+
+
+@pytest.fixture
+async def db(tmp_path: Path) -> Database:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path / 'bot.db'}")
+    await database.init()
+    yield database
+    await database.close()
+
+
+@pytest.fixture
+def clock():
+    from tests.chat_harness import Clock
+
+    return Clock(NOW)
+
+
+@pytest.fixture
+def make_chat(kb: KnowledgeBase, clinic: ClinicData, db: Database, schedule: MockSchedule, clock):
+    from tests.chat_harness import Chat, make_settings
+
+    def _make(assistant=None, **overrides: object):
+        conversation = Conversation(
+            kb=kb,
+            clinic=clinic,
+            settings=make_settings(**overrides),
+            db=db,
+            schedule=schedule,
+            assistant=assistant,
+            clock=clock,
+        )
+        return Chat(conversation)
+
+    return _make

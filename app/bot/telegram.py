@@ -32,12 +32,14 @@ from app.config import Settings
 
 log = logging.getLogger(__name__)
 
+CLOSE_PREFIX = "close:"
 Markup = InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | None
 
 
 def inline(buttons: tuple[tuple[Button, ...], ...]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=b.label, callback_data=b.data) for b in row] for row in buttons
+        [InlineKeyboardButton(text=b.label, callback_data=b.data, style=b.style) for b in row]
+        for row in buttons
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -150,8 +152,27 @@ def build_dispatcher(
             if turn is None:
                 await message.reply("Не нашёл обращение для этого сообщения.")
                 return
+            if isinstance(turn, str):  # e.g. a crisis note: nothing goes to the patient
+                await message.reply(turn)
+                return
             await delivery(turn)
             await message.reply("Ответ отправлен пациенту.")
+
+        @admin.callback_query(
+            F.message.chat.id == settings.admin_chat_id, F.data.startswith(CLOSE_PREFIX)
+        )
+        async def close(callback: CallbackQuery) -> None:
+            ref = (callback.data or "").removeprefix(CLOSE_PREFIX)
+            by = callback.from_user.full_name or str(callback.from_user.id)
+            closed = await conversation.close_handoff(int(ref), by) if ref.isdigit() else False
+            await callback.answer("Закрыто" if closed else "Уже закрыто")
+            message = callback.message
+            if isinstance(message, Message):
+                note = texts.ADMIN_CLOSED.format(by=by)
+                try:
+                    await message.edit_text(f"{message.text or ''}\n\n{note}", reply_markup=None)
+                except TelegramBadRequest:
+                    log.debug("could not mark the request as closed", exc_info=True)
 
         @admin.callback_query(
             F.message.chat.id == settings.admin_chat_id, F.data.startswith(ALLOW_PREFIX)

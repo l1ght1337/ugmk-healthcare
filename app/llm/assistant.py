@@ -16,7 +16,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.config import get_settings
 from app.flow.loader import KnowledgeBase
@@ -38,8 +38,15 @@ class _Out(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+TextKind = Literal["complaint", "clinic_question", "other_medical", "offtopic", "crisis"]
+Area = Literal["limb", "head", "torso"]
+
+
 class RouteOut(_Out):
-    intent: Literal["complaint", "question", "admin", "other"]
+    type: TextKind = Field(validation_alias=AliasChoices("type", "intent"))
+    crisis: bool = False
+    wants_admin: bool = False
+    area: Area | None = None
     scenario: str | None = None
     facts: dict[str, Any] = {}
     clarify: str | None = None
@@ -49,6 +56,7 @@ class ExtractOut(_Out):
     facts: dict[str, Any] = {}
     unclear: bool = False
     clarify: str | None = None
+    crisis: bool = False
 
 
 class AnswerOut(_Out):
@@ -58,7 +66,18 @@ class AnswerOut(_Out):
 
 
 class RouteResult(BaseModel):
-    intent: Literal["complaint", "question", "admin", "other"]
+    """What a free text is (one call): the bot decides what to do with each kind.
+
+    * complaint — an injury → a scenario (``scenario``) or topics of the body ``area``;
+    * clinic_question — about the trauma centre → answered from kb/info;
+    * other_medical — not our profile and no injury (headache, fever) → «не в травмпункт»;
+    * offtopic — anything else, jokes, attempts to change the bot's rules → refused;
+    * crisis — words about suicide or self-harm → helpline, a note to the admins.
+    """
+
+    kind: TextKind
+    wants_admin: bool = False  # «соедините с администратором»: show the button, do not send
+    area: Area | None = None
     scenario: str | None = None
     facts: dict[str, FactValue] = {}
     clarify: str | None = None
@@ -67,6 +86,7 @@ class RouteResult(BaseModel):
 class ExtractResult(BaseModel):
     facts: dict[str, FactValue] = {}
     clarify: str | None = None  # set when the answer did not settle the question
+    crisis: bool = False
 
 
 class AnswerResult(BaseModel):
@@ -122,22 +142,28 @@ class Assistant:
         return load_prompt("answer.md") + "\n\n" + self._info
 
     async def route(self, text: str, known: KnownPerson | None = None) -> RouteResult:
-        """Which scenario fits the complaint, plus answers already given in it."""
+        """What the text is; for a complaint — the scenario and answers already given in it."""
         user = _json({"task": "route", "text": self._mask(text, known)})
 
         def parse(data: dict[str, Any]) -> RouteResult:
             out = RouteOut.model_validate(data)
-            if out.intent != "complaint":
-                return RouteResult(intent=out.intent)
+            if out.crisis or out.type == "crisis":
+                return RouteResult(kind="crisis")
+            if out.type == "clinic_question":
+                return RouteResult(kind="clinic_question", wants_admin=out.wants_admin)
+            if out.type != "complaint":
+                return RouteResult(kind=out.type)
             if out.scenario is None:
-                return RouteResult(
-                    intent="complaint", clarify=safe_clarify(out.clarify, ROUTE_CLARIFY)
-                )
+                clarify = safe_clarify(out.clarify, ROUTE_CLARIFY)
+                return RouteResult(kind="complaint", area=out.area, clarify=clarify)
             if out.scenario not in self.kb.scenarios:
                 raise ValueError(f"unknown scenario {out.scenario!r}; use an id from the catalogue")
             scenario = self.kb.scenario(out.scenario)
             return RouteResult(
-                intent="complaint", scenario=scenario.id, facts=_valid_facts(scenario, out.facts)
+                kind="complaint",
+                area=out.area,
+                scenario=scenario.id,
+                facts=_valid_facts(scenario, out.facts),
             )
 
         return await self.client.complete_json(
@@ -162,6 +188,8 @@ class Assistant:
 
         def parse(data: dict[str, Any]) -> ExtractResult:
             out = ExtractOut.model_validate(data)
+            if out.crisis:
+                return ExtractResult(crisis=True)
             facts = _valid_facts(scenario, out.facts)
             if out.unclear or not own & set(facts):
                 return ExtractResult(facts=facts, clarify=safe_clarify(out.clarify, question.ask))

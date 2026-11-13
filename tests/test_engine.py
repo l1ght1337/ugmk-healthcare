@@ -45,10 +45,10 @@ def test_question_is_asked_again_until_answered(engine: Engine) -> None:
     assert isinstance(step, AskQuestion) and step.question.id == "how" and step.attempt == 2
     for _ in range(MAX_ASKS - 2):
         step = engine.answer(state, {})
-    assert isinstance(step, AskQuestion) and step.attempt == MAX_ASKS
-    done = engine.answer(state, {})
-    assert isinstance(done, Done) and done.kind == "handoff"
-    assert "не удалось понять ответ" in done.outcome.handoff_reason
+    assert isinstance(step, AskQuestion) and step.attempt == MAX_ASKS and not step.stuck
+    stuck = engine.answer(state, {})  # third unclear answer: buttons only, no administrator
+    assert isinstance(stuck, AskQuestion) and stuck.question.id == "how" and stuck.stuck
+    assert state.outcome_id is None
 
 
 def test_unknown_facts_are_ignored(engine: Engine) -> None:

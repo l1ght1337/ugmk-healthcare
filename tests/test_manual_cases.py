@@ -47,6 +47,10 @@ async def _do(chat: Chat, step: Step) -> None:
             await chat.demo_next()
             if step.value in chat.text:
                 break
+    elif step.do == "close":
+        post = next(p for p in reversed(chat.admin) if p.buttons)
+        handoff = int(post.buttons[0][0].data.removeprefix("close:"))
+        assert await chat.conversation.close_handoff(handoff, "Администратор")
     elif step.do == "admin":
         post = chat.admin[-1]
         message_id = 10_000 + len(chat.admin)
@@ -82,7 +86,11 @@ async def test_all_manual_cases_in_order(
 ) -> None:
     fake = FakeDeepSeek()
     settings = Settings(
-        _env_file=None, schedule_provider="mock", demo_mode=True, admin_chat_id=-100123
+        _env_file=None,
+        schedule_provider="mock",
+        demo_mode=True,
+        admin_chat_id=-100123,
+        handoff_daily_limit=10,  # the run has more than three requests in a day
     )
     conversation = Conversation(
         kb=kb,

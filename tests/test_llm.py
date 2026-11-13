@@ -11,7 +11,7 @@ from app.config import Settings
 from app.flow.loader import KnowledgeBase
 from app.llm import make_assistant
 from app.llm.client import LLMUnavailable
-from app.llm.reader import read_answer, read_complaint, read_question
+from app.llm.reader import read_answer, read_question, read_text
 from tests.fake_deepseek import Delay, FakeDeepSeek
 
 
@@ -29,9 +29,13 @@ async def test_route_keeps_only_valid_facts(kb: KnowledgeBase) -> None:
 
 
 async def test_route_other_intents_have_no_scenario(kb: KnowledgeBase) -> None:
-    fake = FakeDeepSeek({"intent": "question", "scenario": "dislocation", "facts": {"x": 1}})
+    fake = FakeDeepSeek(
+        {"type": "clinic_question", "scenario": "dislocation", "facts": {"x": 1}, "area": "limb"}
+    )
     result = await fake.assistant(kb).route("где вы находитесь?")
-    assert (result.intent, result.scenario, result.facts) == ("question", None, {})
+    assert (result.kind, result.scenario, result.facts, result.area) == (
+        "clinic_question", None, {}, None,
+    )  # fmt: skip
 
 
 async def test_invalid_answer_is_retried_once_with_the_same_prefix(kb: KnowledgeBase) -> None:
@@ -49,7 +53,7 @@ async def test_unknown_scenario_twice_is_unavailable(kb: KnowledgeBase) -> None:
     fake = FakeDeepSeek(bad, bad)
     with pytest.raises(LLMUnavailable):
         await fake.assistant(kb).route("МРТ колена")
-    reading = await read_complaint(FakeDeepSeek(bad, bad).assistant(kb), "МРТ колена")
+    reading = await read_text(FakeDeepSeek(bad, bad).assistant(kb), "МРТ колена")
     assert reading.unavailable
 
 
@@ -76,7 +80,7 @@ async def test_no_api_key_means_buttons_only(kb: KnowledgeBase) -> None:
     assert make_assistant(Settings(_env_file=None, deepseek_api_key=None), kb) is None
     sc = kb.scenario("burns")
     assert (await read_answer(None, sc, sc.question("burn_cause"), "кипяток")).unavailable
-    assert (await read_complaint(None, "обжёгся")).unavailable
+    assert (await read_text(None, "обжёгся")).unavailable
     assert (await read_question(None, "где парковка?")).unavailable
 
 
@@ -120,7 +124,7 @@ async def test_unknown_question_offers_admin(kb: KnowledgeBase) -> None:
 
 
 async def test_usage_is_counted_per_call_without_texts(kb: KnowledgeBase) -> None:
-    fake = FakeDeepSeek({"intent": "other"})
+    fake = FakeDeepSeek({"type": "offtopic"})
     await fake.assistant(kb).route("Кузнецову позвонить можно?")
     (usage,) = fake.usage
     assert (usage.task, usage.prompt_tokens, usage.cache_hit_tokens, usage.cache_miss_tokens) == (
@@ -131,7 +135,7 @@ async def test_usage_is_counted_per_call_without_texts(kb: KnowledgeBase) -> Non
 
 async def test_system_prompt_is_identical_across_calls(kb: KnowledgeBase) -> None:
     fake = FakeDeepSeek(
-        {"intent": "other"}, {"facts": {}, "unclear": True}, {"facts": {}, "unclear": True}
+        {"type": "offtopic"}, {"facts": {}, "unclear": True}, {"facts": {}, "unclear": True}
     )
     assistant = fake.assistant(kb)
     burns, dislocation = kb.scenario("burns"), kb.scenario("dislocation")
@@ -164,7 +168,7 @@ def test_prompts_carry_the_catalogue_but_no_operator_notes(kb: KnowledgeBase) ->
 
 
 async def test_warm_up_touches_both_system_prompts(kb: KnowledgeBase) -> None:
-    fake = FakeDeepSeek({"intent": "other"}, {"found": False})
+    fake = FakeDeepSeek({"type": "offtopic"}, {"found": False})
     assistant = fake.assistant(kb)
     assert await assistant.warm_up()
     systems = {r["messages"][0]["content"] for r in fake.requests}

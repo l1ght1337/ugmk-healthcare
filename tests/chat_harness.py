@@ -5,8 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.bot.conversation import AdminPost, Button, Conversation, Reply, Turn, UserRef
+from app.config import Settings
 
 PATIENT = UserRef(id=1001, chat_id=1001, username="tester", display_name="Тест Тестов")
+ADMIN_CHAT = -1001234567890
+
+
+def make_settings(**overrides: object) -> Settings:
+    base = {"schedule_provider": "mock", "demo_mode": True, "admin_chat_id": ADMIN_CHAT}
+    return Settings(_env_file=None, **(base | overrides))  # type: ignore[arg-type]
 
 
 class Clock:

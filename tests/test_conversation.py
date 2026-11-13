@@ -3,58 +3,17 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from pathlib import Path
 
-import pytest
 from sqlalchemy import select
 
 from app.bot import texts
 from app.bot.conversation import Conversation
-from app.config import ClinicData, Settings
 from app.db.models import Booking, Handoff, Reminder
 from app.db.session import Database
-from app.flow.loader import KnowledgeBase
 from app.schedule.mock import MockSchedule
-from tests.chat_harness import PATIENT, Chat, Clock
+from tests.chat_harness import PATIENT, Chat, Clock, make_settings
 from tests.conftest import NOW
 from tests.fake_deepseek import FakeDeepSeek
-
-ADMIN_CHAT = -1001234567890
-
-
-@pytest.fixture
-async def db(tmp_path: Path) -> Database:
-    database = Database(f"sqlite+aiosqlite:///{tmp_path / 'bot.db'}")
-    await database.init()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
-def clock() -> Clock:
-    return Clock(NOW)
-
-
-def settings(**overrides: object) -> Settings:
-    base = {"schedule_provider": "mock", "demo_mode": True, "admin_chat_id": ADMIN_CHAT}
-    return Settings(_env_file=None, **(base | overrides))  # type: ignore[arg-type]
-
-
-@pytest.fixture
-def make_chat(kb: KnowledgeBase, clinic: ClinicData, db: Database, schedule: MockSchedule, clock):
-    def _make(assistant=None, **overrides: object) -> Chat:
-        conversation = Conversation(
-            kb=kb,
-            clinic=clinic,
-            settings=settings(**overrides),
-            db=db,
-            schedule=schedule,
-            assistant=assistant,
-            clock=clock,
-        )
-        return Chat(conversation)
-
-    return _make
 
 
 async def book_dislocation(chat: Chat, *, slot: str = "Чт 12.11") -> None:
@@ -343,7 +302,8 @@ async def test_free_text_answer_falls_back_to_buttons(make_chat, kb) -> None:
 
 async def test_questions_are_answered_from_kb_info(make_chat, kb) -> None:
     answer = "Травмпункт работает круглосуточно по предварительной записи."
-    fake = FakeDeepSeek({"found": True, "answer": answer}, {"found": False})
+    question = {"type": "clinic_question"}
+    fake = FakeDeepSeek(question, {"found": True, "answer": answer}, question, {"found": False})
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
     await chat.press(texts.MENU_ASK)
@@ -351,8 +311,9 @@ async def test_questions_are_answered_from_kb_info(make_chat, kb) -> None:
     assert chat.text.startswith(answer)
     await chat.press(texts.MENU_ASK)
     await chat.say("Делаете МРТ колена?")
-    assert texts.INFO_UNKNOWN in chat.text
-    await chat.press(texts.HANDOFF_YES)
+    assert chat.text == texts.INFO_UNKNOWN and chat.admin == []  # only by the button
+    assert chat.labels() == [texts.ASK_ADMIN_QUESTION, texts.MENU_HOME]
+    await chat.press(texts.ASK_ADMIN_QUESTION)
     await chat.press(texts.CONSENT_YES)
     await chat.contact()
     assert "Сообщение пациента: Делаете МРТ колена?" in chat.admin[-1].text
@@ -409,7 +370,7 @@ async def test_restart_keeps_booked_slots_taken(make_chat, kb, clinic, db, clock
     restarted = Conversation(
         kb=kb,
         clinic=clinic,
-        settings=settings(),
+        settings=make_settings(),
         db=db,
         schedule=fresh,
         assistant=None,

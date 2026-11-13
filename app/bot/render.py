@@ -112,13 +112,16 @@ def place_line(place: Place) -> str:
     return f"• {text}"
 
 
-def handoff_message(clinic: ClinicData, now: datetime) -> str:
+def handoff_when(clinic: ClinicData, now: datetime) -> str:
+    """« в рабочее время — с 08:00 до 20:00» outside the administrators' hours, else empty."""
     hours = clinic.contacts.admin_working_hours
-    when = ""
-    if not hours.contains(now.time()):
-        start, end = format_time(hours.start), format_time(hours.end)
-        when = texts.HANDOFF_LATER.format(start=start, end=end)
-    return texts.HANDOFF.format(when=when)
+    if hours.contains(now.time()):
+        return ""
+    return texts.HANDOFF_LATER.format(start=format_time(hours.start), end=format_time(hours.end))
+
+
+def handoff_message(clinic: ClinicData, now: datetime) -> str:
+    return texts.HANDOFF.format(when=handoff_when(clinic, now))
 
 
 def outcome_message(

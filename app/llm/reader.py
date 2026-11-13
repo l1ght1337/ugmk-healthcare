@@ -19,18 +19,23 @@ log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ComplaintReading:
-    intent: str | None = None  # complaint / question / admin / other
+class TextReading:
+    """A free text, classified (app/llm/assistant.py, RouteResult)."""
+
+    kind: str | None = None  # complaint / clinic_question / other_medical / offtopic / crisis
+    wants_admin: bool = False
+    area: str | None = None
     scenario_id: str | None = None
     facts: dict[str, FactValue] = field(default_factory=dict)
     clarify: str | None = None
-    unavailable: bool = False  # show the topic menu (render.topic_menu)
+    unavailable: bool = False  # no LLM: the bot falls back to buttons
 
 
 @dataclass(frozen=True)
 class AnswerReading:
     facts: dict[str, FactValue] = field(default_factory=dict)
     clarify: str | None = None
+    crisis: bool = False
     unavailable: bool = False  # show the question's buttons (render.ask_question(pick=True))
 
 
@@ -41,17 +46,17 @@ class InfoReading:
     unavailable: bool = False
 
 
-async def read_complaint(
+async def read_text(
     assistant: Assistant | None, text: str, known: KnownPerson | None = None
-) -> ComplaintReading:
+) -> TextReading:
     if assistant is None:
-        return ComplaintReading(unavailable=True)
+        return TextReading(unavailable=True)
     try:
         r = await assistant.route(text, known)
     except LLMUnavailable as exc:
         log.warning("route unavailable: %s", exc)
-        return ComplaintReading(unavailable=True)
-    return ComplaintReading(r.intent, r.scenario, r.facts, r.clarify)
+        return TextReading(unavailable=True)
+    return TextReading(r.kind, r.wants_admin, r.area, r.scenario, r.facts, r.clarify)
 
 
 async def read_answer(
@@ -68,7 +73,7 @@ async def read_answer(
     except LLMUnavailable as exc:
         log.warning("extract unavailable: %s", exc)
         return AnswerReading(unavailable=True)
-    return AnswerReading(r.facts, r.clarify)
+    return AnswerReading(r.facts, r.clarify, r.crisis)
 
 
 async def read_question(

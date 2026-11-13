@@ -118,7 +118,12 @@ class Reminder(Base):
 
 
 class Handoff(Base):
-    """A request passed to the administrators' chat."""
+    """A request passed to the administrators' chat.
+
+    One open request per user: new requests are added to it as replies in the admin chat.
+    It closes with «Закрыть обращение» or after a day without activity. ``kind`` «crisis»
+    is a note about a risk to life, not a request: never open, not counted in the limit.
+    """
 
     __tablename__ = "handoffs"
 
@@ -126,6 +131,13 @@ class Handoff(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     reason: Mapped[str] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    # Nullable for the test-stage schema evolution (old rows: a closed request).
+    kind: Mapped[str | None] = mapped_column(String(16), default="request")  # request / crisis
+    status: Mapped[str | None] = mapped_column(String(16), default="open")  # open / closed
+    updated_at: Mapped[datetime | None] = mapped_column(default=utcnow)
+    closed_at: Mapped[datetime | None]
+    closed_by: Mapped[str | None] = mapped_column(String(128))
+    last_note: Mapped[str | None] = mapped_column(String(512))  # what was sent last (no repeats)
 
 
 class AdminMessage(Base):

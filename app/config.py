@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     admin_chat_id: int | None = None
     # Telegram user IDs allowed to use the bot; empty means everyone.
     allowed_user_ids: Annotated[list[int], NoDecode] = []
+    # Requests to the administrators per user per day; then the bot names the clinic phone.
+    handoff_daily_limit: int = Field(default=3, ge=1, le=100)
 
     # DeepSeek (OpenAI-compatible API)
     deepseek_api_key: SecretStr | None = None

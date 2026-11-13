@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import render, texts
@@ -27,7 +27,15 @@ from app.config import ClinicData, Settings
 from app.db.models import AdminMessage, Booking, Handoff, Patient, Reminder, User, utcnow
 from app.db.session import Database
 from app.flow.age import find_child_age, parse_age_months
-from app.flow.engine import AskPatient, AskQuestion, DialogState, Done, Engine, Step
+from app.flow.engine import (
+    FALLBACK_OUTCOME,
+    AskPatient,
+    AskQuestion,
+    DialogState,
+    Done,
+    Engine,
+    Step,
+)
 from app.flow.identity import (
     age_in_months,
     normalize_phone,
@@ -36,14 +44,14 @@ from app.flow.identity import (
     parse_phone,
 )
 from app.flow.loader import KnowledgeBase
-from app.flow.safety import find_emergency
+from app.flow.safety import find_phrase
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import FactValue, Question, Scenario
 from app.flow.words import days as days_word
 from app.flow.words import format_age
 from app.llm.assistant import Assistant
 from app.llm.masking import KnownPerson
-from app.llm.reader import read_answer, read_complaint, read_question
+from app.llm.reader import read_answer, read_question, read_text
 from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, plan
 from app.schedule.base import ScheduleProvider, Slot, SlotUnavailable
 from app.schedule.rules import find_slots
@@ -51,6 +59,8 @@ from app.schedule.rules import find_slots
 log = logging.getLogger(__name__)
 
 SLOTS_PER_PAGE = 4
+HANDOFF_IDLE = timedelta(days=1)  # an open request with no activity for a day is closed
+CRISIS_THREAD = timedelta(minutes=30)  # later crisis messages go under the same note
 
 
 # --- what goes in and out ----------------------------------------------------------------
@@ -64,10 +74,14 @@ class UserRef:
     display_name: str | None = None
 
 
+ButtonStyle = Literal["primary", "success", "danger"]
+
+
 @dataclass(frozen=True)
 class Button:
     label: str
     data: str  # callback data, at most 64 bytes
+    style: ButtonStyle | None = None  # Bot API 9.4 colours; older clients show plain buttons
 
 
 @dataclass(frozen=True)
@@ -122,6 +136,7 @@ class Session(BaseModel):
     pending_scenario: str | None = None
     pending_facts: dict[str, FactValue] = {}
     child_age: int | None = None
+    area: str | None = None  # body area from the complaint: limb / head / torso
     slot_offset: int = 0
     slot_id: str | None = None
     patient_id: int | None = None
@@ -158,6 +173,10 @@ def _answer_label(question: Question, facts: dict[str, FactValue]) -> str | None
         if all(facts.get(k) == v for k, v in choice.facts.items()):
             return choice.label
     return None
+
+
+def _home() -> list[Button]:
+    return [Button(texts.MENU_HOME, "m:home")]
 
 
 def _menu() -> list[list[Button]]:
@@ -218,8 +237,11 @@ class Conversation:
         """/forget: withdraw consent and delete the user's data, after a confirmation."""
         return await self._run(user, self._forget_ask)
 
-    async def admin_reply(self, message_id: int, text: str) -> Turn | None:
-        """An administrator replied to a bot message in the admin chat."""
+    async def admin_reply(self, message_id: int, text: str) -> Turn | str | None:
+        """An administrator replied to a bot message in the admin chat.
+
+        Turn — the answer for the patient; str — a note for the admin chat; None — unknown.
+        """
         async with self.db() as db:
             link = await db.get(AdminMessage, message_id)
             if link is None:
@@ -228,12 +250,26 @@ class Conversation:
             user = await db.get(User, handoff.user_id) if handoff else None
             if handoff is None or user is None:
                 return None
+            if handoff.kind == "crisis":
+                return texts.CRISIS_NO_FORWARD
+            handoff.updated_at = self.clock()
+            await db.commit()
             reply = Reply(
                 texts.ADMIN_ANSWER.format(text=text),
                 ((Button(texts.ADMIN_ANSWER_REPLY, f"ar:{handoff.id}"),),),
                 chat_id=user.chat_id,
             )
             return Turn([reply])
+
+    async def close_handoff(self, handoff_id: int, by: str) -> bool:
+        """«Закрыть обращение» in the admin chat: the next request starts a new one."""
+        async with self.db() as db:
+            handoff = await db.get(Handoff, handoff_id)
+            if handoff is None or handoff.status != "open":
+                return False
+            handoff.status, handoff.closed_at, handoff.closed_by = "closed", self.clock(), by[:128]
+            await db.commit()
+            return True
 
     async def register_admin_message(self, message_id: int, handoff_id: int) -> None:
         async with self.db() as db:
@@ -316,7 +352,10 @@ class Conversation:
     async def _on_text(self, c: Ctx, text: str) -> None:
         if not text:
             return
-        if find_emergency(text, self.clinic.clinic.emergency.phrases):
+        if find_phrase(text, self.clinic.clinic.crisis.phrases):
+            await self._crisis(c, text)
+            return
+        if find_phrase(text, self.clinic.clinic.emergency.phrases):
             self._reset(c)
             c.say(render.emergency_message(self.clinic), _menu())
             return
@@ -328,7 +367,7 @@ class Conversation:
             "name": self._on_name,
             "birth": self._on_birth,
             "contact": self._on_phone_text,
-            "info": self._answer_question,
+            "info": self._on_free_text,
             "admin_reply": self._on_admin_reply_text,
             "visit_question": self._on_visit_question,
             "payment": self._on_payment_text,
@@ -342,25 +381,85 @@ class Conversation:
             c.say(texts.PICK_BUTTON_SHORT)
             await self._repeat_buttons(c)
         else:  # idle / complaint
-            await self._on_complaint(c, text)
+            await self._on_free_text(c, text)
 
-    async def _on_complaint(self, c: Ctx, text: str) -> None:
-        reading = await read_complaint(self.assistant, text, await self._known(c))
+    async def _on_free_text(self, c: Ctx, text: str) -> None:
+        """Any free text outside a scenario question: one route call decides what it is.
+
+        Nothing here reaches the administrators: only buttons and scenario outcomes do.
+        """
+        asked = c.s.step == "info"
+        reading = await read_text(self.assistant, text, await self._known(c))
         if reading.unavailable:
-            c.s.step = "complaint"
-            self._topic_menu(c, render.texts.PICK_TOPIC)
+            if asked:
+                c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
+                c.s.step = "offer_admin"
+                c.say(texts.INFO_DOWN, self._ask_admin_buttons())
+            else:
+                c.s.step = "complaint"
+                self._topic_menu(c, render.texts.PICK_TOPIC)
             return
-        if reading.intent == "complaint" and reading.scenario_id:
+        if reading.kind == "crisis":
+            await self._crisis(c, text)
+        elif reading.kind == "complaint" and reading.scenario_id:
             await self._begin(c, reading.scenario_id, reading.facts, find_child_age(text))
-        elif reading.intent == "complaint":
-            c.s.step = "complaint"
+            c.s.area = reading.area
+        elif reading.kind == "complaint":
+            self._reset(c)
+            c.s.step, c.s.area = "complaint", reading.area
             c.say(reading.clarify or texts.ASK_COMPLAINT, [[Button(texts.TOPIC_LIST, "t:list")]])
-        elif reading.intent == "question":
+        elif reading.kind == "clinic_question" and reading.wants_admin:
+            self._reset(c)
+            c.say(texts.WANTS_ADMIN, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
+        elif reading.kind == "clinic_question":
             await self._answer_question(c, text)
-        elif reading.intent == "admin":
-            await self._handoff(c, texts.ASK_ADMIN_REASON, text)
-        else:
-            c.say(texts.OTHER_INTENT, _menu())
+        elif reading.kind == "other_medical":
+            self._reset(c)
+            c.say(texts.NOT_OUR_PROFILE, _menu())
+        else:  # offtopic: the request is not carried out
+            self._reset(c)
+            c.say(texts.OFFTOPIC, _menu())
+
+    async def _crisis(self, c: Ctx, text: str) -> None:
+        """Suicide or self-harm: a calm answer with a helpline, a separate note to the admins."""
+        self._reset(c)
+        line = self.clinic.contacts.crisis_line_phone
+        c.say(texts.CRISIS.format(phone=line))
+        if not self.settings.admin_chat_id:
+            log.error("ADMIN_CHAT_ID is not set: crisis note for user %s not delivered", c.user.id)
+            return
+        recent = await c.db.scalar(
+            select(Handoff)
+            .where(
+                Handoff.user_id == c.user.id,
+                Handoff.kind == "crisis",
+                Handoff.updated_at >= c.now - CRISIS_THREAD,
+            )
+            .order_by(Handoff.id.desc())
+            .limit(1)
+        )
+        if recent is not None:
+            recent.updated_at = c.now
+            thread = await self._first_admin_message(c, recent.id)
+            c.turn.admin.append(
+                AdminPost(texts.CRISIS_MORE.format(text=text), recent.id, reply_to=thread)
+            )
+            return
+        note = Handoff(
+            user_id=c.user.id, reason=texts.CRISIS_REASON, kind="crisis", status="closed"
+        )
+        c.db.add(note)
+        await c.db.flush()
+        who = c.user.display_name or "без имени"
+        if c.user.username:
+            who += f" @{c.user.username}"
+        phone = f", телефон {c.user.phone}" if c.user.phone else ""
+        c.turn.admin.append(
+            AdminPost(
+                texts.CRISIS_ADMIN.format(who=who, id=c.user.id, phone=phone, text=text, line=line),
+                note.id,
+            )
+        )
 
     async def _on_age(self, c: Ctx, text: str) -> None:
         months = parse_age_months(text)
@@ -384,18 +483,22 @@ class Conversation:
     async def _on_answer_text(self, c: Ctx, text: str) -> None:
         dialog = c.s.dialog
         if dialog.scenario_id is None or dialog.question_id is None:
-            await self._on_complaint(c, text)
+            await self._on_free_text(c, text)
             return
         scenario = self.kb.scenario(dialog.scenario_id)
         question = scenario.question(dialog.question_id)
         reading = await read_answer(self.assistant, scenario, question, text, await self._known(c))
+        if reading.crisis:
+            await self._crisis(c, text)
+            return
         current = AskQuestion(scenario, question, attempt=max(dialog.asks, 1))
         if reading.unavailable:
-            self._ask(c, render.ask_question(current, pick=True))
+            self._ask(c, render.ask_question(current, pick=True), stuck=current.stuck)
             return
         step = self.engine.answer(dialog, reading.facts)
         if isinstance(step, AskQuestion) and step.question.id == question.id:
-            self._ask(c, render.ask_question(step, reading.clarify))
+            clarify = None if step.stuck else reading.clarify
+            self._ask(c, render.ask_question(step, clarify, pick=step.stuck), stuck=step.stuck)
         else:
             await self._show(c, step)
 
@@ -461,7 +564,7 @@ class Conversation:
             await self._on_button(c, "pay:self")
         else:
             c.s.step = "idle"
-            await self._on_complaint(c, text)
+            await self._on_free_text(c, text)
 
     # --- buttons -----------------------------------------------------------------------
 
@@ -504,7 +607,7 @@ class Conversation:
             await self._my_bookings(c)
         elif item == "admin":  # keep the scenario answers: the administrator sees the context
             await self._handoff(c, texts.ASK_ADMIN_REASON)
-        else:
+        else:  # «В главное меню»
             await self._show_menu(c)
 
     async def _on_topic(self, c: Ctx, value: str) -> None:
@@ -650,15 +753,27 @@ class Conversation:
             buttons = [[Button(ch.label, f"a:{ch.facts['audience']}")] for ch in prompt.choices]
             c.say(prompt.text, buttons)
         elif isinstance(step, AskQuestion):
-            self._ask(c, render.ask_question(step))
+            self._ask(c, render.ask_question(step, pick=step.stuck), stuck=step.stuck)
         else:
             await self._done(c, step)
 
-    def _ask(self, c: Ctx, prompt: render.Prompt) -> None:
+    def _ask(self, c: Ctx, prompt: render.Prompt, *, stuck: bool = False) -> None:
+        """A scenario question; ``stuck`` (three unclear answers) adds «В главное меню»."""
         c.s.step = "question"
-        c.say(prompt.text, [[Button(ch.label, f"q:{i}")] for i, ch in enumerate(prompt.choices)])
+        rows = [[Button(ch.label, f"q:{i}")] for i, ch in enumerate(prompt.choices)]
+        if stuck:
+            rows.append(_home())
+        c.say(prompt.text, rows)
+
+    def _ask_admin_buttons(self) -> list[list[Button]]:
+        return [[Button(texts.ASK_ADMIN_QUESTION, "h:yes")], _home()]
 
     async def _done(self, c: Ctx, done: Done) -> None:
+        if done.outcome_id == FALLBACK_OUTCOME:  # a knowledge-base gap: no automatic handoff
+            c.s.step = "idle"
+            c.s.handoff_reason = done.outcome.handoff_reason
+            c.say(texts.FLOW_BROKEN, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
+            return
         local = self._local(c.now)
         text = render.outcome_message(done, self.clinic, local, include_handoff=False)
         if done.kind == "book":
@@ -728,7 +843,7 @@ class Conversation:
         if found is None:
             await self._show_menu(c)
             return
-        spec, scenario = found
+        spec, _ = found
         slots = await self._find(c, spec)
         if not slots and c.s.anchor is not None:  # nothing around the control day
             c.s.anchor, c.s.slot_offset = None, 0
@@ -737,13 +852,8 @@ class Conversation:
             c.s.slot_offset = 0
             slots = await self._find(c, spec)
         if not slots:
-            c.say(texts.NO_SLOTS)
-            who = {"child": "Ребёнок", "adult": "Взрослый"}.get(
-                c.s.dialog.audience or "", "Пациент"
-            )
-            await self._handoff(
-                c, f"{who}: нет свободного времени, сценарий {scenario.number} «{scenario.title}»"
-            )
+            c.s.step = "idle"
+            c.say(texts.NO_SLOTS, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
             return
         if wait:
             c.say(self.kb.common.wait.text)
@@ -1094,7 +1204,7 @@ class Conversation:
     async def _on_visit_question(self, c: Ctx, text: str) -> None:
         booking = await self._user_booking(c, str(c.s.visit_booking or ""))
         if booking is None:
-            await self._on_complaint(c, text)
+            await self._on_free_text(c, text)
             return
         start = self._local(booking.start_at)
         reason = texts.VISIT_QUESTION_REASON.format(
@@ -1146,27 +1256,46 @@ class Conversation:
     # --- questions and administrators ------------------------------------------------------
 
     async def _answer_question(self, c: Ctx, text: str) -> None:
+        """A question about the trauma centre, from kb/info; an administrator only by button."""
         reading = await read_question(self.assistant, text, await self._known(c))
-        c.s.handoff_reason, c.s.handoff_context = "Вопрос пациента о травмпункте", text
-        offer = [[Button(texts.HANDOFF_YES, "h:yes")], [Button(texts.HANDOFF_NO, "h:no")]]
+        self._reset(c)
         if reading.answer and not reading.offer_admin:
-            c.s.step = "idle"
             c.say(f"{reading.answer}\n\n{self.kb.common.more_help.text}", _menu())
             return
         c.s.step = "offer_admin"
+        c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
         if reading.answer:
-            c.say(f"{reading.answer}\n\n{texts.OFFER_HANDOFF}", offer)
+            c.say(reading.answer, self._ask_admin_buttons())
         else:
             lead = texts.INFO_DOWN if reading.unavailable else texts.INFO_UNKNOWN
-            c.say(f"{lead} {texts.OFFER_HANDOFF}", offer)
+            c.say(lead, self._ask_admin_buttons())
 
     async def _handoff(self, c: Ctx, reason: str, context: str | None = None) -> None:
-        """Pass the request to ADMIN_CHAT_ID; consent and a phone number come first."""
+        """Pass the request to ADMIN_CHAT_ID; consent and a phone number come first.
+
+        Only after a button («Позвать администратора», «Передать вопрос администратору») or
+        a scenario outcome. One open request per user — new ones are added to it; at most
+        HANDOFF_DAILY_LIMIT (3) requests a day, then the clinic's phone.
+        """
         c.s.handoff_reason, c.s.handoff_context = reason, context
         if not self.settings.admin_chat_id:
             log.error("ADMIN_CHAT_ID is not set: cannot hand off %r", reason)
             c.s.step = "idle"
             c.say(texts.ADMIN_UNAVAILABLE, _menu())
+            return
+        current = await self._open_handoff(c)
+        if current is not None:
+            await self._add_to_handoff(c, current)
+            return
+        sent = await self._handoffs_today(c)
+        if sent >= self.settings.handoff_daily_limit:
+            text = texts.HANDOFF_LIMIT.format(count=sent)
+            if self.clinic.contacts.call_center_phone:
+                text += texts.HANDOFF_LIMIT_PHONE.format(
+                    phone=self.clinic.contacts.call_center_phone
+                )
+            c.s.step, c.s.handoff_reason, c.s.handoff_context = "idle", None, None
+            c.say(f"{text}\n\n{self.kb.common.more_help.text}", _menu())
             return
         if self._needs_consent(c):
             c.s.resume = "handoff"
@@ -1178,18 +1307,81 @@ class Conversation:
             return
         await self._send_handoff(c)
 
+    async def _open_handoff(self, c: Ctx) -> Handoff | None:
+        return await c.db.scalar(
+            select(Handoff)
+            .where(
+                Handoff.user_id == c.user.id,
+                Handoff.status == "open",
+                Handoff.updated_at >= c.now - HANDOFF_IDLE,
+            )
+            .order_by(Handoff.id.desc())
+            .limit(1)
+        )
+
+    async def _handoffs_today(self, c: Ctx) -> int:
+        count = await c.db.scalar(
+            select(func.count(Handoff.id)).where(
+                Handoff.user_id == c.user.id,
+                or_(Handoff.kind.is_(None), Handoff.kind != "crisis"),
+                Handoff.created_at >= c.now - timedelta(days=1),
+            )
+        )
+        return int(count or 0)
+
+    async def _first_admin_message(self, c: Ctx, handoff_id: int) -> int | None:
+        return await c.db.scalar(
+            select(AdminMessage.message_id)
+            .where(AdminMessage.handoff_id == handoff_id)
+            .order_by(AdminMessage.message_id)
+            .limit(1)
+        )
+
+    def _handoff_note(self, c: Ctx) -> str:
+        return f"{c.s.handoff_reason or texts.ASK_ADMIN_REASON}|{c.s.handoff_context or ''}"[:512]
+
+    async def _add_to_handoff(self, c: Ctx, handoff: Handoff) -> None:
+        """The request is already with the administrators: add what is new, as a reply."""
+        when = render.handoff_when(self.clinic, self._local(c.now))
+        note = self._handoff_note(c)
+        if note in (handoff.last_note, f"{handoff.reason}|"):
+            text = texts.HANDOFF_ALREADY.format(number=handoff.id, when=when)
+        else:
+            handoff.last_note, handoff.updated_at = note, c.now
+            thread = await self._first_admin_message(c, handoff.id)
+            body = await self._admin_text(c, handoff, addendum=True)
+            c.turn.admin.append(AdminPost(body, handoff.id, reply_to=thread))
+            text = texts.HANDOFF_ADDED.format(number=handoff.id, when=when)
+        c.s.step, c.s.handoff_reason, c.s.handoff_context = "idle", None, None
+        c.say(f"{text}\n\n{self.kb.common.more_help.text}", _menu())
+
     async def _send_handoff(self, c: Ctx) -> None:
         reason = c.s.handoff_reason or texts.ASK_ADMIN_REASON
-        handoff = Handoff(user_id=c.user.id, reason=reason[:512])
+        handoff = Handoff(
+            user_id=c.user.id,
+            reason=reason[:512],
+            kind="request",
+            status="open",
+            created_at=c.now,
+            updated_at=c.now,
+            last_note=self._handoff_note(c),
+        )
         c.db.add(handoff)
         await c.db.flush()
-        c.turn.admin.append(AdminPost(await self._admin_text(c, handoff), handoff.id))
+        close = ((Button(texts.ADMIN_CLOSE, f"close:{handoff.id}", style="success"),),)
+        c.turn.admin.append(
+            AdminPost(await self._admin_text(c, handoff), handoff.id, buttons=close)
+        )
         text = render.handoff_message(self.clinic, self._local(c.now))
         c.s.step, c.s.handoff_reason, c.s.handoff_context = "idle", None, None
         c.say(f"{text}\n\n{self.kb.common.more_help.text}", _menu(), remove_keyboard=False)
 
-    async def _admin_text(self, c: Ctx, handoff: Handoff) -> str:
-        lines = [f"Обращение № {handoff.id} из бота травмпункта", f"Причина: {handoff.reason}"]
+    async def _admin_text(self, c: Ctx, handoff: Handoff, *, addendum: bool = False) -> str:
+        reason = c.s.handoff_reason or handoff.reason
+        if addendum:
+            lines = [texts.ADMIN_ADDENDUM.format(number=handoff.id), f"Причина: {reason}"]
+        else:
+            lines = [f"Обращение № {handoff.id} из бота травмпункта", f"Причина: {reason}"]
         dialog = c.s.dialog
         if dialog.scenario_id:
             scenario = self.kb.scenario(dialog.scenario_id)
@@ -1207,6 +1399,8 @@ class Conversation:
             lines.append(f"Сообщение пациента: {c.s.handoff_context}")
         if c.s.patient_id and (patient := await c.db.get(Patient, c.s.patient_id)):
             lines.append(f"ФИО пациента: {patient.full_name}, {patient.birth_date:%d.%m.%Y}")
+        if addendum:  # contacts are in the first message of the thread
+            return "\n".join(lines)
         lines.append(f"Телефон: {c.user.phone or '—'}")
         tg = c.user.display_name or ""
         if c.user.username:
@@ -1234,8 +1428,10 @@ class Conversation:
         )
         self._reset(c)
         if handoff_id is None:
-            await self._on_complaint(c, text)
+            await self._on_free_text(c, text)
             return
+        if handoff := await c.db.get(Handoff, handoff_id):
+            handoff.updated_at = c.now
         c.turn.admin.append(
             AdminPost(f"Пациент (обращение № {handoff_id}): {text}", handoff_id, reply_to=last)
         )
