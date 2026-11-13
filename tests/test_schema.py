@@ -10,7 +10,9 @@ BOOK = {
     "booking": {"visit": "primary", "service": "x", "slot_policy": "nearest", "price_key": "p"},
     "source": "test",
 }
-HANDOFF = {"type": "handoff", "handoff_reason": "Взрослый: x", "source": "test"}
+HANDOFF = {
+    "type": "handoff", "handoff_reason": "Взрослый: x", "patient_reason": "Так.", "source": "test",
+}  # fmt: skip
 
 
 def scenario(**overrides: object) -> dict:

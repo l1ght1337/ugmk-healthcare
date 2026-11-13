@@ -92,11 +92,11 @@ async def test_exam_threat_is_a_crisis_caught_by_code(make_chat, kb: KnowledgeBa
 async def test_admin_twice_is_one_request(make_chat, db: Database) -> None:
     chat = make_chat()
     await ready_for_admin(chat)
-    assert "Передаю Ваше обращение администратору" in chat.text
+    assert "Я передал обращение № " in chat.text and "по телефону, который Вы указали" in chat.text
     posts = len(chat.admin)
     await chat.press(texts.MENU_ADMIN)
     (handoff,) = await handoffs(db)
-    assert texts.HANDOFF_ALREADY.format(number=handoff.id, when="") in chat.text
+    assert f"Ваше обращение № {handoff.id} уже у администратора — он свяжется с Вами" in chat.text
     assert len(chat.admin) == posts  # nothing new for the administrators
 
 
@@ -199,7 +199,10 @@ async def test_scenario_handoff_is_added_to_the_open_request(make_chat, db: Data
     await chat.press("Для себя")
     await chat.press("Нет, в другом месте")  # 04-09 → adult call centre: a scenario handoff
     (handoff,) = await handoffs(db)
-    assert texts.HANDOFF_ADDED.format(number=handoff.id, when="") in chat.text
+    assert (
+        "С такой ситуацией взрослых записывает на приём оператор взрослого колл-центра клиники, "
+        f"а не травмпункт. Я добавил это к Вашему обращению № {handoff.id}"
+    ) in chat.text
     added = chat.admin[-1]
     assert added.reply_to == 501 and added.handoff_id == handoff.id
     assert added.text.startswith(f"Дополнение к обращению № {handoff.id}")
@@ -213,7 +216,7 @@ async def test_closed_request_starts_a_new_one(make_chat, db: Database) -> None:
     assert await chat.conversation.close_handoff(first.id, "Администратор")
     assert not await chat.conversation.close_handoff(first.id, "Администратор")
     await chat.press(texts.MENU_ADMIN)
-    assert len(await handoffs(db)) == 2 and "Передаю Ваше обращение" in chat.text
+    assert len(await handoffs(db)) == 2 and "Я передал обращение № 2" in chat.text
 
 
 async def test_request_idle_for_a_day_closes_by_itself(make_chat, db: Database, clock) -> None:

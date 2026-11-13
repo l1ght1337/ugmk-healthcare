@@ -226,7 +226,11 @@ async def test_case_2_handoff_asks_consent_and_contact_then_reply_goes_back(
     await chat.press(texts.CONSENT_YES)
     assert chat.replies[-1].ask_contact
     await chat.contact("79123456789")
-    assert "Передаю Ваше обращение администратору. С Вами свяжутся." in chat.text
+    assert (
+        "С такой ситуацией ребёнка записывают на плановый приём к травматологу-ортопеду, а не в "
+        "травмпункт. Я передал обращение № 1 администратору — он свяжется с Вами по "
+        "телефону, который Вы указали."
+    ) in chat.text
     (post,) = chat.admin
     for part in (
         "Ребёнок: записать на ближайший плановый приём к травматологу-ортопеду",
@@ -261,7 +265,7 @@ async def test_handoff_outside_working_hours(make_chat, clock: Clock) -> None:
     await chat.press(texts.MENU_ADMIN)
     await chat.press(texts.CONSENT_YES)
     await chat.contact()
-    assert "С Вами свяжутся в рабочее время — с 08:00 до 20:00." in chat.text
+    assert "свяжется с Вами в рабочее время (с 08:00 до 20:00) по телефону" in chat.text
 
 
 async def test_no_consent_no_personal_data(make_chat, db: Database) -> None:

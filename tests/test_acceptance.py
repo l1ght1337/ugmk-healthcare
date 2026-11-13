@@ -80,7 +80,10 @@ def test_case_02_child_injury_over_7_days_goes_to_planned_visit(
     assert w.step.outcome.handoff_reason.startswith(
         "Ребёнок: записать на ближайший плановый приём к травматологу-ортопеду (не в травмпункт)"
     )
-    assert "Передаю Ваше обращение администратору" in render.outcome_message(w.step, clinic, NOW)
+    assert w.step.outcome.patient_reason == (
+        "С такой ситуацией ребёнка записывают на плановый приём к травматологу-ортопеду, "
+        "а не в травмпункт."
+    )
 
 
 def test_case_03_adult_already_seen_doctor_goes_to_call_center(run) -> None:

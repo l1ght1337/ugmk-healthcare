@@ -183,8 +183,9 @@ class Session(BaseModel):
     patient_id: int | None = None
     draft_name: list[str | None] | None = None
     resume: Literal["identify", "handoff"] | None = None
-    handoff_reason: str | None = None
+    handoff_reason: str | None = None  # for the administrators
     handoff_context: str | None = None
+    handoff_why: str | None = None  # for the patient: the outcome's patient_reason
     control_of: int | None = None
     anchor: date | None = None  # control visit: offer time around this day
     reschedule_of: int | None = None
@@ -947,9 +948,8 @@ class Conversation:
             c.user.guardian_at = c.now
         resume, c.s.resume = c.s.resume, None
         if resume == "handoff":
-            await self._handoff(
-                c, c.s.handoff_reason or texts.ASK_ADMIN_REASON, c.s.handoff_context
-            )
+            reason = c.s.handoff_reason or texts.ASK_ADMIN_REASON
+            await self._handoff(c, reason, c.s.handoff_context, c.s.handoff_why)
         else:
             await self._identify(c)
 
@@ -976,7 +976,7 @@ class Conversation:
 
     async def _on_offer_admin(self, c: Ctx, value: str) -> None:
         if value == "yes" and c.s.handoff_reason:
-            await self._handoff(c, c.s.handoff_reason, c.s.handoff_context)
+            await self._handoff(c, c.s.handoff_reason, c.s.handoff_context, c.s.handoff_why)
         else:
             await self._show_menu(c)
 
@@ -1033,7 +1033,7 @@ class Conversation:
             self._final(c, texts.FLOW_BROKEN, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
             return
         local = self._local(c.now)
-        text = render.outcome_message(done, self.clinic, local, include_handoff=False)
+        text = render.outcome_message(done, self.clinic, local)
         if done.kind == "book":
             if text:  # script phrases before the time stay in the chat
                 c.say(text, edit=c.first())
@@ -1042,10 +1042,12 @@ class Conversation:
         elif done.kind == "handoff":
             if text:
                 c.say(text, edit=c.first())
-            await self._handoff(c, done.outcome.handoff_reason or "Нужна помощь администратора")
+            reason = done.outcome.handoff_reason or "Нужна помощь администратора"
+            await self._handoff(c, reason, why=done.outcome.patient_reason)
         elif done.offer_admin:
             c.s.step = "offer_admin"
             c.s.handoff_reason = done.outcome.handoff_reason
+            c.s.handoff_why = done.outcome.patient_reason
             self._final(
                 c,
                 text,
@@ -1616,14 +1618,16 @@ class Conversation:
             lead = texts.INFO_DOWN if reading.unavailable else texts.INFO_UNKNOWN
             c.say(lead, self._ask_admin_buttons())
 
-    async def _handoff(self, c: Ctx, reason: str, context: str | None = None) -> None:
+    async def _handoff(
+        self, c: Ctx, reason: str, context: str | None = None, why: str | None = None
+    ) -> None:
         """Pass the request to ADMIN_CHAT_ID; consent and a phone number come first.
 
         Only after a button («Позвать администратора», «Передать вопрос администратору») or
         a scenario outcome. One open request per user — new ones are added to it; at most
         HANDOFF_DAILY_LIMIT (3) requests a day, then the clinic's phone.
         """
-        c.s.handoff_reason, c.s.handoff_context = reason, context
+        c.s.handoff_reason, c.s.handoff_context, c.s.handoff_why = reason, context, why
         if not self.settings.admin_chat_id:
             log.error("ADMIN_CHAT_ID is not set: cannot hand off %r", reason)
             c.s.step = "idle"
@@ -1640,7 +1644,7 @@ class Conversation:
                 text += texts.HANDOFF_LIMIT_PHONE.format(
                     phone=self.clinic.contacts.call_center_phone
                 )
-            c.s.step, c.s.handoff_reason, c.s.handoff_context = "idle", None, None
+            self._handoff_done(c)
             c.say(f"{text}\n\n{self.kb.common.more_help.text}", _menu())
             return
         if self._needs_consent(c):
@@ -1688,18 +1692,23 @@ class Conversation:
 
     async def _add_to_handoff(self, c: Ctx, handoff: Handoff) -> None:
         """The request is already with the administrators: add what is new, as a reply."""
-        when = render.handoff_when(self.clinic, self._local(c.now))
+        now, why = self._local(c.now), c.s.handoff_why
         note = self._handoff_note(c)
         if note in (handoff.last_note, f"{handoff.reason}|"):
-            text = texts.HANDOFF_ALREADY.format(number=handoff.id, when=when)
+            template = texts.HANDOFF_ALREADY
         else:
             handoff.last_note, handoff.updated_at = note, c.now
             thread = await self._first_admin_message(c, handoff.id)
             body = await self._admin_text(c, handoff, addendum=True)
             c.turn.admin.append(AdminPost(body, handoff.id, reply_to=thread))
-            text = texts.HANDOFF_ADDED.format(number=handoff.id, when=when)
-        c.s.step, c.s.handoff_reason, c.s.handoff_context = "idle", None, None
+            template = texts.HANDOFF_ADDED
+        text = render.handoff_message(self.clinic, now, handoff.id, why, template)
+        self._handoff_done(c)
         c.say(f"{text}\n\n{self.kb.common.more_help.text}", _menu())
+
+    def _handoff_done(self, c: Ctx) -> None:
+        c.s.step = "idle"
+        c.s.handoff_reason = c.s.handoff_context = c.s.handoff_why = None
 
     async def _send_handoff(self, c: Ctx) -> None:
         reason = c.s.handoff_reason or texts.ASK_ADMIN_REASON
@@ -1718,8 +1727,9 @@ class Conversation:
         c.turn.admin.append(
             AdminPost(await self._admin_text(c, handoff), handoff.id, buttons=close)
         )
-        text = render.handoff_message(self.clinic, self._local(c.now))
-        c.s.step, c.s.handoff_reason, c.s.handoff_context = "idle", None, None
+        why = c.s.handoff_why
+        text = render.handoff_message(self.clinic, self._local(c.now), handoff.id, why)
+        self._handoff_done(c)
         c.say(f"{text}\n\n{self.kb.common.more_help.text}", _menu(), remove_keyboard=False)
 
     async def _admin_text(self, c: Ctx, handoff: Handoff, *, addendum: bool = False) -> str:

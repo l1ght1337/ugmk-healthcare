@@ -195,6 +195,11 @@ class Outcome(_Model):
     say: tuple[str, ...] = Field(default=(), description="Operator phrases for the patient")
     destinations: tuple[Destination, ...] = ()
     handoff_reason: str | None = None
+    patient_reason: str | None = Field(
+        default=None,
+        description="Why the patient goes to an administrator and what happens next, in the "
+        "script's terms (from handoff_reason), shown with the handoff confirmation",
+    )
     booking: Booking | None = None
     source: str
     verify: str | None = Field(default=None, description="Needs confirmation from the clinic")
@@ -210,9 +215,11 @@ class Outcome(_Model):
             raise ValueError("book outcome must not have destinations")
         if self.type == "route" and not self.destinations:
             raise ValueError("route outcome needs destinations")
+        if self.patient_reason and not self.handoff_reason:
+            raise ValueError("patient_reason goes with handoff_reason")
         if self.type == "handoff":
-            if not self.handoff_reason:
-                raise ValueError("handoff outcome needs handoff_reason")
+            if not self.handoff_reason or not self.patient_reason:
+                raise ValueError("handoff outcome needs handoff_reason and patient_reason")
             if self.destinations:
                 raise ValueError("handoff with addresses must be a route with handoff_reason")
         return self

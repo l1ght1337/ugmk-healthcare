@@ -120,24 +120,29 @@ def place_line(place: Place) -> str:
 
 
 def handoff_when(clinic: ClinicData, now: datetime) -> str:
-    """« в рабочее время — с 08:00 до 20:00» outside the administrators' hours, else empty."""
+    """« в рабочее время (с 08:00 до 20:00)» outside the administrators' hours, else empty."""
     hours = clinic.contacts.admin_working_hours
     if hours.contains(now.time()):
         return ""
     return texts.HANDOFF_LATER.format(start=format_time(hours.start), end=format_time(hours.end))
 
 
-def handoff_message(clinic: ClinicData, now: datetime) -> str:
-    return texts.HANDOFF.format(when=handoff_when(clinic, now))
-
-
-def outcome_message(
-    done: Done, clinic: ClinicData, now: datetime, *, include_handoff: bool = True
+def handoff_message(
+    clinic: ClinicData, now: datetime, number: int, why: str | None = None, template: str = ""
 ) -> str:
+    """«С такой ситуацией … Я передал обращение № 5 администратору — он свяжется с Вами…».
+
+    ``why`` is the scenario outcome's patient_reason; the bot adds nothing of its own.
+    """
+    text = (template or texts.HANDOFF).format(number=number, when=handoff_when(clinic, now))
+    return f"{why} {text}" if why else text
+
+
+def outcome_message(done: Done, clinic: ClinicData, now: datetime) -> str:
     """What the patient reads when the scenario ends (before slots, for a booking).
 
-    ``include_handoff=False`` leaves out «Передаю Ваше обращение…»: the bot says it only
-    once the request has really gone to the administrators (after consent and contact).
+    A handoff is confirmed separately (handoff_message), once the request has really gone
+    to the administrators — after consent and contact — with its number.
     """
     parts: list[str] = []
     if done.kind == "emergency":
@@ -153,8 +158,6 @@ def outcome_message(
             parts[-1] = "\n".join([parts[-1], *lines])
         else:
             parts.append("\n".join(lines))
-    if done.kind == "handoff" and include_handoff:
-        parts.append(handoff_message(clinic, now))
     if done.offer_admin:
         parts.append(texts.OFFER_ADMIN)
     parts.extend(n.text for n in done.notices)

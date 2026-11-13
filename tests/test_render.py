@@ -33,13 +33,16 @@ def test_format_date() -> None:
     assert render.format_date(date(2026, 11, 13)) == "13 ноября (пятница)"
 
 
-def test_handoff_mentions_working_hours_only_outside_them(clinic: ClinicData) -> None:
-    assert render.handoff_message(clinic, NOW) == (
-        "Передаю Ваше обращение администратору. С Вами свяжутся."
+def test_handoff_gives_the_reason_the_number_and_the_next_step(clinic: ClinicData) -> None:
+    why = "С такой ситуацией записывают на плановый приём, а не в травмпункт."
+    assert render.handoff_message(clinic, NOW, 7, why) == (
+        "С такой ситуацией записывают на плановый приём, а не в травмпункт. Я передал "
+        "обращение № 7 администратору — он свяжется с Вами по телефону, который Вы указали."
     )
-    late = render.handoff_message(clinic, NOW.replace(hour=23))
+    late = render.handoff_message(clinic, NOW.replace(hour=23), 7)
     assert late == (
-        "Передаю Ваше обращение администратору. С Вами свяжутся в рабочее время — с 08:00 до 20:00."
+        "Я передал обращение № 7 администратору — он свяжется с Вами в рабочее время "
+        "(с 08:00 до 20:00) по телефону, который Вы указали."
     )
 
 

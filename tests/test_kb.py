@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.config import ClinicFlags, get_clinic_data
-from app.flow.loader import KB_DIR, KnowledgeBase, load_kb, verify_sources
+from app.flow.loader import KB_DIR, KnowledgeBase, digits, load_kb, verify_sources
 from app.flow.schema import AUDIENCES, Branch, Scenario
 
 
@@ -220,3 +220,23 @@ def test_shared_field_must_match(tmp_path: Path) -> None:
     )
     with pytest.raises(KnowledgeBaseError, match=r"differs from _common\.json"):
         load_kb(tmp_path)
+
+
+def test_patient_reason_follows_the_script_outcome(kb: KnowledgeBase) -> None:
+    """The reason the patient reads says what handoff_reason says — nothing of our own."""
+    seen = 0
+    for sc in kb.scenarios.values():
+        for name, outcome in sc.outcomes.items():
+            if not outcome.handoff_reason:
+                continue
+            why, reason = outcome.patient_reason, outcome.handoff_reason
+            assert why, (sc.id, name)
+            seen += 1
+            assert ("КЦ" in reason) == ("колл-центр" in why), (sc.id, name)
+            for word in ("педиатр", "хирург", "травматолог", "плановый"):
+                if word in reason:
+                    assert word in why, (sc.id, name, word)
+            gap = ("не указан" in reason or "не описан" in reason) and "плановый" not in reason
+            assert gap == ("подскажет администратор" in why), (sc.id, name)
+            assert not digits(why), (sc.id, name)  # no phones, addresses or prices
+    assert seen == 30
