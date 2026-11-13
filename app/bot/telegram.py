@@ -99,16 +99,17 @@ def markup(reply: Reply, *, styles: bool = True) -> Markup:
 
 def rich_card(card: Card) -> InputRichMessage:
     """The booking card as rich blocks: heading, fields, «Что взять с собой» list, notes."""
+    icons = texts.CARD_ICONS
     blocks: list[Any] = [
-        InputRichBlockSectionHeading(text=card.title, size=3),
+        InputRichBlockSectionHeading(text=f"{icons['title']} {card.title}", size=3),
         InputRichBlockParagraph(text=card.lead),
     ]
     blocks += [
-        InputRichBlockParagraph(text=[RichTextBold(text=f"{name}: "), value])
-        for name, value in card.fields
+        InputRichBlockParagraph(text=[RichTextBold(text=f"{icon} {name}: "), value])
+        for icon, name, value in card.fields
     ]
-    blocks += [InputRichBlockParagraph(text=p) for p in card.paragraphs]
-    blocks.append(InputRichBlockSectionHeading(text=card.list_title, size=4))
+    blocks += [InputRichBlockParagraph(text=f"{icons['price']} {p}") for p in card.paragraphs]
+    blocks.append(InputRichBlockSectionHeading(text=f"{icons['bring']} {card.list_title}", size=4))
     blocks.append(
         InputRichBlockList(
             items=[
@@ -211,6 +212,8 @@ class Delivery:
             if first is not None and first.edit and await self._replace(pressed, first):
                 replies = replies[1:]
                 if first.screen:
+                    if self._screens.get(pressed.chat.id) != pressed.message_id:
+                        await self._strip_screen(pressed.chat.id)  # «Изменить ответы», «Продолжить»
                     self._screens[pressed.chat.id] = pressed.message_id
                 else:
                     self._screens.pop(pressed.chat.id, None)

@@ -145,7 +145,7 @@ async def test_phrase_on_step(
         assert texts.MY_EMPTY in text
     elif must == m.ANSWER:
         assert any(a in text for a in m.ANSWERS) and now == "idle"
-        assert texts.MENU_BOOK in labels
+        assert labels == [texts.HELPED, texts.MENU_ADMIN, texts.MENU_HOME]
     elif must == m.ASIDE:
         assert any(a in chat.replies[0].text for a in m.ANSWERS), text
         assert now == was and after["dialog"] == before["dialog"]  # the booking goes on

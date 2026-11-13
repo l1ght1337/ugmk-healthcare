@@ -178,9 +178,17 @@ class Crisis(_Data):
     phrases: tuple[str, ...] = Field(min_length=1)
 
 
+class UnfinishedBooking(_Data):
+    """One reminder to a patient who started a booking and went silent; not at night."""
+
+    remind_after_minutes: int = Field(gt=0, le=240)
+    quiet_hours: WorkingHours
+
+
 class ClinicFlags(_Data):
     rabies_vaccine_available: bool
     control_visit_after_days: int = Field(gt=0, le=60)
+    unfinished_booking: UnfinishedBooking
     emergency: Emergency
     crisis: Crisis
 

@@ -46,7 +46,7 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     await chat.start()
     assert chat.text.startswith("Добрый день! Травмпункт «УГМК-Здоровье», я виртуальный помощник")
     assert texts.DEMO_GREETING in chat.text
-    assert chat.labels() == [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN]
+    assert chat.labels()[-4:] == [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN]
 
     await chat.press(texts.MENU_BOOK)
     await chat.say("вывихнул плечо")  # no LLM: the word list → arm, «упал, подвернул» topics
@@ -61,8 +61,12 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")
     info, days = chat.replies
-    assert info.text == "Можно записаться к травматологу-ортопеду: врач попробует вправить вывих."
-    assert [b.label for row in info.buttons for b in row] == [texts.MORE]  # the full phrase
+    assert info.text == (
+        "Ваши ответы: вывих; для себя; бытовая травма; в течение 7 дней; нет, не обращались.\n\n"
+        "Можно записаться к травматологу-ортопеду: врач попробует вправить вывих."
+    )
+    labels = [b.label for row in info.buttons for b in row]
+    assert labels == [texts.SUMMARY_EDIT, texts.MORE]  # change the answers; the full phrase
     assert info.edit and not info.screen
     assert days.text.startswith("Шаг 4 из 5 · День и время") and days.screen and not days.edit
     assert chat.days()[0].label == "Сегодня, 12.11"
@@ -91,7 +95,8 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     for part in (
         "Запись в травмпункт",
         "Иван Сергеевич записан на приём травматолога-ортопеда в травмпункт.",
-        f"Дата и время: четверг, 12 ноября, {later}",
+        "📅 Дата: четверг, 12 ноября",
+        f"🕒 Время: {later}",
         "Врач: ",
         "Адрес: ул. Шейнкмана, 113/2, вход через детское отделение",
         "Стоимость консультации 2000 рублей (демо-цена)",
@@ -342,7 +347,8 @@ async def test_questions_are_answered_from_kb_info(make_chat, kb) -> None:
     await chat.start()
     await chat.press(texts.MENU_ASK)
     await chat.say("Во сколько вы работаете?")
-    assert chat.text.startswith(answer)
+    assert chat.text == answer
+    await chat.press(texts.HELPED)  # under the answer: «Помогло», an administrator, the menu
     await chat.press(texts.MENU_ASK)
     await chat.say("Делаете МРТ колена?")
     assert chat.text == texts.INFO_UNKNOWN and chat.admin == []  # only by the button

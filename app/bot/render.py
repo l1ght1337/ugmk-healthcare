@@ -57,6 +57,11 @@ def format_day_time(moment: datetime) -> str:
     return f"{texts.WEEKDAYS[moment.weekday()]}, {day}, {moment:%H:%M}"
 
 
+def format_weekday_date(day: date) -> str:
+    """«пятница, 13 ноября» for the booking card."""
+    return f"{texts.WEEKDAYS[day.weekday()]}, {day.day} {texts.MONTHS_GENITIVE[day.month - 1]}"
+
+
 def day_label(day: date, today: date) -> str:
     """Day button: «Сегодня, 12.11», «Завтра, 13.11», «Сб, 14.11» (≤ 18 characters)."""
     if day == today:
@@ -332,7 +337,7 @@ class Card:
 
     title: str
     lead: str
-    fields: tuple[tuple[str, str], ...]
+    fields: tuple[tuple[str, str, str], ...]  # (icon, name, value): one line each
     paragraphs: tuple[str, ...]
     list_title: str
     items: tuple[str, ...]
@@ -340,10 +345,11 @@ class Card:
 
     def plain(self) -> str:
         """The same content as plain text: the fallback for clients without rich messages."""
-        lines = [self.title, "", self.lead, ""]
-        lines += [f"{name}: {value}" for name, value in self.fields]
-        lines += ["", *self.paragraphs]
-        lines += ["", f"{self.list_title}:"]
+        icons = texts.CARD_ICONS
+        lines = [f"{icons['title']} {self.title}", self.lead, ""]
+        lines += [f"{icon} {name}: {value}" for icon, name, value in self.fields]
+        lines += ["", *(f"{icons['price']} {p}" for p in self.paragraphs)]
+        lines += ["", f"{icons['bring']} {self.list_title}:"]
         lines += [f"• {item}" for item in self.items]
         text = "\n".join(lines)
         if self.notes:
@@ -394,6 +400,7 @@ def booking_card(
     )
     price = parts["price"].format(price=price_text(clinic, done.outcome.booking.price_key))
     center = clinic.contacts.trauma_center
+    icons = texts.CARD_ICONS
     notes = []
     if needs_night_parking(slot, clinic):
         notes.append(kb.common.parking_after_20.text)
@@ -403,9 +410,10 @@ def booking_card(
         title=texts.CARD_TITLE,
         lead=f"{lead}.",
         fields=(
-            (texts.CARD_WHEN, format_day_time(slot.start)),
-            (texts.CARD_DOCTOR, slot.doctor),
-            (texts.CARD_ADDRESS, f"{center.address}, {center.entrance}"),
+            (icons["date"], texts.CARD_DATE, format_weekday_date(slot.start.date())),
+            (icons["time"], texts.CARD_TIME, format_time(slot.start)),
+            (icons["doctor"], texts.CARD_DOCTOR, slot.doctor),
+            (icons["address"], texts.CARD_ADDRESS, f"{center.address}, {center.entrance}"),
         ),
         paragraphs=(price,),
         list_title=texts.CARD_BRING,

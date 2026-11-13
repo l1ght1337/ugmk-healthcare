@@ -85,6 +85,22 @@ def render_labels(kb: KnowledgeBase) -> str:
             [texts.PERIOD_MORNING, texts.PERIOD_DAY, texts.PERIOD_EVENING, texts.PERIOD_NIGHT],
         ),
         _row("Время (по четыре в ряд; сверху — врач смены)", ["13:30", "14:00", "14:30", "15:00"]),
+        _row(
+            "Приветствие: примеры над главным меню",
+            [label for _, label in texts.EXAMPLES],
+        ),
+        _row(
+            "Сводка ответов перед выбором времени",
+            [texts.SUMMARY_EDIT, texts.MORE],
+        ),
+        _row(
+            "Ответ на вопрос о травмпункте",
+            [f"{texts.HELPED_ICON} {texts.HELPED}", texts.MENU_ADMIN, texts.MENU_HOME],
+        ),
+        _row(
+            "Напоминание о брошенной записи (через 15 минут, не ночью)",
+            [texts.UNFINISHED_GO, texts.UNFINISHED_AGAIN],
+        ),
         _row("Контрольный приём: время около +10 дней", [texts.OTHER_DAY]),
         _row(
             "Пациент назвал врача, день или время: шаг «День и время»",

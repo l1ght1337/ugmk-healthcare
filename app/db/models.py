@@ -51,6 +51,7 @@ class User(Base):
     consent_at: Mapped[datetime | None]
     guardian_at: Mapped[datetime | None]  # «я законный представитель ребёнка»
     welcomed_at: Mapped[datetime | None]  # the welcome animation was shown (first /start)
+    active_at: Mapped[datetime | None]  # the patient's last message or button press
     session: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -143,6 +144,20 @@ class Handoff(Base):
     closed_at: Mapped[datetime | None]
     closed_by: Mapped[str | None] = mapped_column(String(128))
     last_note: Mapped[str | None] = mapped_column(String(512))  # what was sent last (no repeats)
+
+
+class AnswerRating(Base):
+    """«Помогло» or «Позвать администратора» under an answer to a question.
+
+    No user and no text: only what /stats will count, nothing to delete on /forget.
+    """
+
+    __tablename__ = "answer_ratings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    helped: Mapped[bool]
+    source: Mapped[str] = mapped_column(String(16))  # answer
 
 
 class AdminMessage(Base):

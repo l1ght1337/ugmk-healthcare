@@ -30,7 +30,16 @@ from app.bot import render, slots_view, texts, typed
 from app.bot.layout import DAY_COLUMNS, TIME_COLUMNS, grid, pack
 from app.bot.render import Card, Venue
 from app.config import ClinicData, Settings
-from app.db.models import AdminMessage, Booking, Handoff, Patient, Reminder, User, utcnow
+from app.db.models import (
+    AdminMessage,
+    AnswerRating,
+    Booking,
+    Handoff,
+    Patient,
+    Reminder,
+    User,
+    utcnow,
+)
 from app.db.session import Database
 from app.flow import topics
 from app.flow.age import find_child_age, parse_age_months
@@ -67,7 +76,7 @@ from app.flow.loader import KnowledgeBase
 from app.flow.safety import find_phrase
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import FactValue, Question, Scenario
-from app.flow.wishes import Parsed, Wish, short_name
+from app.flow.wishes import Parsed, Wish, dative, short_name
 from app.flow.wishes import parse as parse_wish
 from app.flow.words import days as days_word
 from app.flow.words import format_age
@@ -86,6 +95,8 @@ CRISIS_THREAD = timedelta(minutes=30)  # later crisis messages go under the same
 MAX_HISTORY = 12  # «Назад» steps kept per user
 CONTROL_DAYS_BEFORE = 3  # «Другой день» for a control visit starts a little before the target
 WISH_TTL = timedelta(hours=3)  # a wish named long ago is not carried into a new request
+UNFINISHED_WINDOW = timedelta(minutes=45)  # later than this the reminder is not sent at all
+EXAMPLE_ANKLE = ("ligament_rupture", "dislocation", "fracture")  # «Подвернул ногу»
 FREE_TIMES_SHOWN = 8  # «есть время вечером?» — the first times, then «и позже»
 DOCTOR_DAYS_SHOWN = 6  # «когда работает Ярунин?» — the nearest days
 
@@ -254,6 +265,7 @@ class Session(BaseModel):
     consent_child: bool = False  # the consent shown includes «законный представитель»
     wish: Wish | None = None  # the doctor, the day and the time the patient asked for
     for_whom: Literal["adult", "child"] | None = None  # «запишите ребёнка»: not asked again
+    nudged: bool = False  # the reminder about this unfinished booking was sent
     history: list[dict[str, Any]] = []  # earlier wizard screens, for «Назад»
 
 
@@ -493,6 +505,45 @@ class Conversation:
             await db.commit()
         return [t for t in turns if t.replies]
 
+    async def unfinished(self) -> list[Turn]:
+        """Patients who started a booking and went silent: one reminder each, not at night.
+
+        Called by the scheduler. The reminder goes 15 minutes after the last message
+        (config/clinic.yaml); if that moment falls into the quiet hours it is not sent at
+        all — a message in the morning about yesterday's booking would be out of place.
+        """
+        now = self.clock()
+        rule = self.clinic.clinic.unfinished_booking
+        if rule.quiet_hours.contains(self._local(now).time()):
+            return []
+        latest = now - timedelta(minutes=rule.remind_after_minutes)
+        async with self.db() as db:
+            ids = await db.scalars(
+                select(User.id).where(
+                    User.active_at <= latest, User.active_at > latest - UNFINISHED_WINDOW
+                )
+            )
+            waiting = ids.all()
+        buttons = (
+            (Button(texts.UNFINISHED_GO, "nd:go", "primary"),),
+            (Button(texts.UNFINISHED_AGAIN, "m:book"),),
+        )
+        turns = []
+        for user_id in waiting:
+            async with self._locks[user_id], self.db() as db:
+                user = await db.get(User, user_id)
+                if user is None or user.active_at is None or user.active_at > latest:
+                    continue  # the patient wrote meanwhile
+                s = Session.model_validate(user.session or {})
+                booking = s.wizard and s.step in WIZARD_STEPS and s.resume != "handoff"
+                if not booking or s.nudged:
+                    continue
+                s.nudged = True
+                user.session = s.model_dump(mode="json")
+                await db.commit()
+                turns.append(Turn([Reply(texts.UNFINISHED, buttons, chat_id=user.chat_id)]))
+        return turns
+
     def top_up_schedule(self) -> None:
         """The mock schedule grows by a day each day (called by the scheduler)."""
         top_up = getattr(self.schedule, "top_up", None)
@@ -527,6 +578,7 @@ class Conversation:
                 db.add(row)
             row.chat_id, row.username = user.chat_id, user.username
             row.display_name = user.display_name
+            row.active_at = self.clock()
             session = Session.model_validate(row.session or {})
             ctx = Ctx(db, row, session, Turn(), self.clock(), via_button=via_button, draft=draft)
             before = session.model_dump(mode="json")
@@ -575,12 +627,32 @@ class Conversation:
         text = common.greeting.text.format(
             part_of_day=common.greeting_for(self._local(c.now).time())
         )
+        doctor = dative(self.clinic.schedule.doctors[0])  # an example with a real doctor
+        text += "\n\n" + texts.GREETING_HINT.format(doctor=doctor)
         if self.settings.is_demo_booking:
             text += "\n\n" + texts.DEMO_GREETING
         first = c.user.welcomed_at is None  # the welcome animation — at the first /start only
         if first:
             c.user.welcomed_at = c.now
-        c.say(text, _menu(), media=WELCOME if first else None)
+        examples = pack([Button(label, f"ex:{key}") for key, label in texts.EXAMPLES])
+        c.say(text, [*examples, *_menu()], media=WELCOME if first else None)
+
+    async def _on_example(self, c: Ctx, key: str) -> None:
+        """An example button under the greeting: what a typed phrase would do, without the LLM."""
+        if key == "ankle":
+            self._reset(c)
+            self._topics_for(c, "limb", list(EXAMPLE_ANKLE), texts.ASK_COMPLAINT)
+        elif key == "dressing":
+            await self._begin(c, "dressing", {}, None)
+        elif key == "parking":  # script 03-3, by day and after 20:00
+            common = self.kb.common
+            text, more = self._shorten(f"{common.parking_day.text}\n\n{common.parking_night.text}")
+            self._reset(c)
+            c.s.handoff_reason = texts.QUESTION_REASON
+            c.s.handoff_context = dict(texts.EXAMPLES)[key]
+            c.say(text, [*more, *self._answer_buttons()], edit=c.first())
+        else:
+            c.say(texts.STALE, [_home()])
 
     async def _show_menu(self, c: Ctx) -> None:
         self._reset(c)
@@ -677,7 +749,7 @@ class Conversation:
         elif step == "birth":
             self._ask_birth(c)
         elif step == "contact":
-            c.say(texts.ASK_CONTACT, ask_contact=True)
+            self._ask_contact(c)
         else:
             await self._show_menu(c)
 
@@ -686,9 +758,9 @@ class Conversation:
             await self._show_menu(c)
             return
         *rest, snapshot = c.s.history
-        wish = c.s.wish  # a wish dropped or changed later is not brought back
+        wish, nudged = c.s.wish, c.s.nudged  # a wish dropped later is not brought back
         c.s = Session.model_validate(snapshot)
-        c.s.history, c.s.wish = rest, wish
+        c.s.history, c.s.wish, c.s.nudged = rest, wish, nudged
         c.back = True
         await self._render_screen(c)
 
@@ -1144,7 +1216,7 @@ class Conversation:
     async def _on_phone_text(self, c: Ctx, text: str) -> None:
         phone = parse_phone(text)
         if phone is None:
-            c.say(texts.ASK_CONTACT, ask_contact=True)
+            self._ask_contact(c)
             return
         await self._got_phone(c, phone)
 
@@ -1205,6 +1277,10 @@ class Conversation:
             "more": self._on_more,
             "way": self._on_way,
             "ws": self._on_wish,
+            "ex": self._on_example,
+            "sum": self._on_summary,
+            "fb": self._on_answer_rating,
+            "nd": self._on_unfinished,
         }.get(head)
         if handler is None:
             c.say(texts.STALE, [_home()])
@@ -1426,10 +1502,11 @@ class Conversation:
     def _shorten(self, text: str) -> tuple[str, list[list[Button]]]:
         """A long script phrase in two lines, with «Подробнее» for the whole of it."""
         text, ids = render.shorten(text, self.kb)
-        return text, [[Button(texts.MORE, f"more:{phrase}")] for phrase in ids]
+        return text, [[Button(texts.MORE, f"more:{'+'.join(ids)}")]] if ids else []
 
     async def _on_more(self, c: Ctx, phrase_id: str) -> None:
-        full = render.full_phrase(self.kb, phrase_id)
+        parts = [render.full_phrase(self.kb, one) for one in phrase_id.split("+")]
+        full = "\n\n".join(p for p in parts if p)  # one button for every long phrase above
         c.say(full or texts.STALE)  # below, the screen stays as it is
 
     def _ask_admin_buttons(self, label: str = texts.ASK_ADMIN_QUESTION) -> list[list[Button]]:
@@ -1476,8 +1553,11 @@ class Conversation:
         if done.kind != "book":  # the trauma centre does not book this: the wish is dropped
             c.s.wish = None
         if done.kind == "book":
-            if text:  # script phrases before the time stay in the chat
-                c.say(text, more, edit=c.first())
+            summary = self._summary(c)  # the answers and the wish, with «Изменить ответы»
+            parts = [p for p in (summary, text) if p]
+            edit = [[Button(texts.SUMMARY_EDIT, "sum:edit")]] if summary else []
+            if parts:  # the summary and the script phrases stay in the chat above the time
+                c.say("\n\n".join(parts), [*edit, *more], edit=c.first())
             c.s.day = c.s.day_from = None
             await self._offer_time(c)
         elif done.kind == "handoff":
@@ -1501,6 +1581,39 @@ class Conversation:
         else:
             c.s.step = "idle"
             self._final(c, f"{text}\n\n{self.kb.common.more_help.text}", [*more, *_menu()])
+
+    def _summary(self, c: Ctx) -> str | None:
+        """«Ваши ответы: вывих; для себя; бытовая травма; …» and the wish, before the time."""
+        d = c.s.dialog
+        if c.s.control_of is not None or not d.trail or d.scenario_id is None:
+            return None
+        parts = [self.kb.scenario(d.trail[0]).menu_label]
+        if d.audience == "child":
+            who = texts.SUMMARY_CHILD
+            parts.append(f"{who}, {format_age(d.age_months)}" if d.age_months is not None else who)
+        elif d.audience == "adult":
+            parts.append(texts.SUMMARY_ADULT if c.s.for_whom == "adult" else texts.SUMMARY_SELF)
+        for q in self.kb.scenario(d.scenario_id).questions:
+            label = _answer_label(q, d.facts)
+            if label and all(f.name in d.facts for f in q.fields if f.default is None):
+                parts.append(label)
+        # «Бытовая травма» → «бытовая травма»; «МРТ подтвердило» stays as it is
+        answers = "; ".join(p if p[1:2].isupper() else p[:1].lower() + p[1:] for p in parts)
+        lines = [texts.SUMMARY.format(answers=answers)]
+        if (wish := self._wish(c)) is not None:
+            lines.append(render.wish_line(wish, self._local(c.now).date()))
+        return "\n".join(lines)
+
+    async def _on_summary(self, c: Ctx, value: str) -> None:
+        """«Изменить ответы»: the scenario questions again; the topic and the patient stay."""
+        d = c.s.dialog
+        if value != "edit" or not d.trail or c.s.step not in TIME_STEPS or c.s.reschedule_of:
+            c.say(texts.STALE, [_home()])
+            return
+        first = d.trail[0]
+        c.s.day = c.s.period = c.s.day_from = c.s.slot_id = None
+        facts = topics.area_facts(self.kb, first, c.s.area)
+        await self._show(c, self.engine.start(d, first, facts))
 
     async def _repeat_buttons(self, c: Ctx) -> None:
         if c.s.step == "offer_admin":
@@ -1799,7 +1912,15 @@ class Conversation:
 
     def _ask_name(self, c: Ctx) -> None:
         c.s.step = "name"
-        self._screen(c, f"{self.kb.common.identify.text}\n{texts.ASK_NAME}")
+        text = f"{self.kb.common.identify.text}\n{texts.ASK_NAME}\n{texts.WHY_NAME}"
+        self._screen(c, text)
+
+    def _ask_contact(self, c: Ctx) -> None:
+        """The phone, with why it is asked (the consent for a handoff has said it already)."""
+        text = texts.ASK_CONTACT
+        if c.s.resume != "handoff":
+            text += "\n" + texts.WHY_PHONE
+        c.say(text, ask_contact=True)
 
     async def _identify(self, c: Ctx) -> None:
         """Script step 4: consent → patient (name, birth date) → phone → booking."""
@@ -1828,7 +1949,7 @@ class Conversation:
             return
         if c.user.phone is None:
             c.s.resume, c.s.step = "identify", "contact"
-            c.say(texts.ASK_CONTACT, ask_contact=True)
+            self._ask_contact(c)
             return
         await self._book(c)
 
@@ -2484,7 +2605,8 @@ class Conversation:
         reading = await read_question(self.assistant, text, known, on_partial=c.draft)
         self._reset(c)
         if reading.answer and not reading.offer_admin:
-            c.say(f"{reading.answer}\n\n{self.kb.common.more_help.text}", _menu())
+            c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
+            c.say(reading.answer, self._answer_buttons())
             return
         if not reading.answer and not reading.unavailable and self._is_request(c, text):
             c.say(texts.REQUEST_UNCLEAR, _menu())  # a request, not a question without data
@@ -2496,6 +2618,29 @@ class Conversation:
         else:
             lead = texts.INFO_DOWN if reading.unavailable else texts.INFO_UNKNOWN
             c.say(lead, self._ask_admin_buttons())
+
+    def _answer_buttons(self) -> list[list[Button]]:
+        """Under an answer: «Помогло», or an administrator if it did not."""
+        helped = Button(f"{texts.HELPED_ICON} {texts.HELPED}", "fb:yes", "success")
+        return [[helped], [Button(texts.MENU_ADMIN, "fb:admin")], _home()]
+
+    async def _on_answer_rating(self, c: Ctx, value: str) -> None:
+        """Kept for /stats: whether the answer helped. No user and no text are stored."""
+        helped = value == "yes"
+        c.db.add(AnswerRating(helped=helped, source="answer", created_at=c.now))
+        if helped:
+            self._reset(c)
+            c.say(texts.HELPED_THANKS, _menu())
+            return
+        reason = c.s.handoff_reason or texts.QUESTION_REASON
+        await self._handoff(c, reason, c.s.handoff_context)
+
+    async def _on_unfinished(self, c: Ctx, _: str) -> None:
+        """«Продолжить» under the reminder: the step the patient stopped at."""
+        if c.s.step in WIZARD_STEPS:
+            await self._render_screen(c)
+        else:
+            await self._show_menu(c)
 
     def _is_request(self, c: Ctx, text: str) -> bool:
         """«Запишите…», or a booking with a doctor, a day or a time: not a question."""
@@ -2538,7 +2683,7 @@ class Conversation:
             return
         if c.user.phone is None:
             c.s.resume, c.s.step = "handoff", "contact"
-            c.say(texts.ASK_CONTACT, ask_contact=True)
+            self._ask_contact(c)
             return
         await self._send_handoff(c)
 

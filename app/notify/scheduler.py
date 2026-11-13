@@ -32,6 +32,11 @@ def start_scheduler(
                 await deliver(turn)
         except Exception:
             log.exception("sending notifications failed; will retry on the next tick")
+        try:  # a booking started and left: one reminder, not at night
+            for turn in await conversation.unfinished():
+                await deliver(turn)
+        except Exception:
+            log.exception("reminding about unfinished bookings failed")
         try:
             conversation.top_up_schedule()  # cheap: rewrites the CSV only when a day passed
         except Exception:
