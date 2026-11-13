@@ -6,6 +6,8 @@ Sources:
 * «kb/info», «config» — the answer is in the справка (kb/info/*.md) or config/*.yaml,
   answered by DeepSeek from that text only; ``facts`` are fragments that must be there;
 * «сценарий» — a complaint: the scenario from kb/scenarios leads the patient;
+* «расписание» — built by code from the schedule provider (data/schedule.csv now, «Медиалог»
+  later), without DeepSeek: who is on duty, when a doctor works, free time, a booking wish;
 * «шаблон» — a fixed bot phrase (app/bot/texts.py) or a menu screen;
 * «нет данных» — nothing in the data: «У меня нет этой информации» and «Передать вопрос
   администратору»; every such question is listed in docs/clinic_requests.md.
@@ -21,7 +23,8 @@ from pathlib import Path
 DOC = Path(__file__).resolve().parent.parent / "docs" / "faq_matrix.md"
 
 KB, CONFIG, SCENARIO, TEMPLATE, NO_DATA = "kb/info", "config", "сценарий", "шаблон", "нет данных"
-DATA_SOURCES = (KB, CONFIG, SCENARIO)
+SCHEDULE = "расписание"
+DATA_SOURCES = (KB, CONFIG, SCENARIO, SCHEDULE)
 
 INFO_UNKNOWN = "«У меня нет этой информации» + кнопка «Передать вопрос администратору»"
 
@@ -37,6 +40,7 @@ class Faq:
     scenario: str | None = None  # сценарий: the scenario route picks
     action: str | None = None  # menu_action / a typed command
     command: bool = False  # caught by the word list in code (no DeepSeek)
+    expect: str | None = None  # расписание: a fragment of the answer built by code
     live: bool = False  # the group's live DeepSeek test (tests/test_llm_live.py)
 
 
@@ -79,10 +83,26 @@ FAQS: tuple[Faq, ...] = (
       "Записывают на определённое время, когда приём состоится без ожидания или ожидание "
       "будет незначительным.",
       facts=("приём состоится без ожидания или ожидание будет незначительным",)),
-    q(G1, "Можно записаться именно к Кузнецову?", KB,
-      "Выбрать конкретного врача нельзя: время и врача бот предлагает из расписания, при "
-      "выборе времени видно, кто в смене.",
-      facts=("выбрать конкретного врача нельзя",)),
+    q(G1, "Можно записаться именно к Кузнецову?", SCHEDULE,
+      "Запись с пожеланием: «Пожелание: к Кузнецову Н. А.», дальше обычные вопросы; на шаге "
+      "«День и время» — только время этого врача. Если врач в нужный день не дежурит или "
+      "времени нет, бот говорит это и даёт кнопки: ближайшее время у врача, этот же день у "
+      "другого врача, другой день.",
+      kind="wish", expect="Пожелание: к Кузнецову Н. А."),
+    q(G1, "Запишите к Ярунину на завтра", SCHEDULE,
+      "То же: «Пожелание: к Ярунину А. А., завтра, …»; шаг «День и время» открывается сразу "
+      "на завтрашнем дне.",
+      kind="wish", expect="Пожелание: к Ярунину А. А., завтра"),
+    q(G1, "Кто принимает завтра?", SCHEDULE,
+      "Врачи смен на этот день из расписания и кнопка «Записаться на этот день».",
+      kind="schedule", expect="в травмпункте принимают:"),
+    q(G1, "Когда работает Ярунин?", SCHEDULE,
+      "Ближайшие дни и часы приёма врача из расписания и кнопка «Записаться к этому врачу».",
+      kind="schedule", expect="принимает в ближайшие дни:"),
+    q(G1, "Есть время сегодня вечером?", SCHEDULE,
+      "Свободное время на этот день и время суток из расписания (или «свободного времени "
+      "нет» и ближайшее) и кнопка «Записаться на это время».",
+      kind="schedule", expect="вечером"),
     q(G1, "Можно записать ребёнка?", KB,
       "Да: записать можно себя, ребёнка (до 18 лет) или другого взрослого.",
       facts=("Записать можно себя, ребёнка (до 18 лет) или другого взрослого",)),
@@ -292,7 +312,9 @@ def render_doc() -> str:
         "",
         "Источник ответа: **kb/info** и **config** — справка и настройки клиники (DeepSeek "
         "отвечает только по ним); **сценарий** — сценарий из `kb/scenarios`; **шаблон** — "
-        "постоянная фраза бота или экран меню; **нет данных** — бот честно говорит «У меня "
+        "постоянная фраза бота или экран меню; **расписание** — ответ собирает код из "
+        "расписания, без DeepSeek (кто дежурит, когда работает врач, свободное время, запись "
+        "с пожеланием врача, дня и времени); **нет данных** — бот честно говорит «У меня "
         "нет этой информации» и предлагает передать вопрос администратору (список таких "
         "вопросов — в `docs/clinic_requests.md`).",
         "",

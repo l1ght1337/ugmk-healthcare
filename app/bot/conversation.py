@@ -55,6 +55,8 @@ from app.flow.loader import KnowledgeBase
 from app.flow.safety import find_phrase
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import FactValue, Question, Scenario
+from app.flow.wishes import Parsed, Wish, short_name
+from app.flow.wishes import parse as parse_wish
 from app.flow.words import days as days_word
 from app.flow.words import format_age
 from app.flow.words import years as years_word
@@ -63,7 +65,7 @@ from app.llm.masking import KnownPerson
 from app.llm.reader import read_answer, read_question, read_text
 from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, plan
 from app.schedule.base import ScheduleProvider, Slot, SlotUnavailable
-from app.schedule.rules import all_slots
+from app.schedule.rules import all_slots, eligible
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +73,9 @@ HANDOFF_IDLE = timedelta(days=1)  # an open request with no activity for a day i
 CRISIS_THREAD = timedelta(minutes=30)  # later crisis messages go under the same note
 MAX_HISTORY = 12  # «Назад» steps kept per user
 CONTROL_DAYS_BEFORE = 3  # «Другой день» for a control visit starts a little before the target
+WISH_TTL = timedelta(hours=3)  # a wish named long ago is not carried into a new request
+FREE_TIMES_SHOWN = 8  # «есть время вечером?» — the first times, then «и позже»
+DOCTOR_DAYS_SHOWN = 6  # «когда работает Ярунин?» — the nearest days
 
 DraftSink = Callable[[str], Awaitable[None]]
 
@@ -187,6 +192,12 @@ STAGE_OF: dict[str, int] = {
     "birth": 5,
 }
 WIZARD_STEPS = frozenset(STAGE_OF)
+TIME_STEPS = frozenset({"days", "periods", "times"})
+START_STEPS = frozenset({"complaint", "topic", "describe"})  # the scenario is not chosen yet
+# Steps where a text is about anything: «сегодня вечером» there may be a wish. On the other
+# steps the text answers a question («Когда была получена травма?» — «в пятницу»).
+FREE_STEPS = frozenset({"idle", *START_STEPS, "info", "offer_admin", "payment"})
+WISH_SHOWN_UNTIL = 4  # the wish line stays on screen up to «День и время»
 # Steps where the text is data (age, name, phone…): «отмени запись» there is not a command.
 DATA_STEPS = frozenset({"age", "name", "birth", "contact", "admin_reply", "visit_question"})
 MENU_ITEM = {"book": "book", "my_bookings": "my", "ask": "ask", "admin": "admin"}
@@ -221,6 +232,7 @@ class Session(BaseModel):
     visit_booking: int | None = None
     reply_handoff: int | None = None
     consent_child: bool = False  # the consent shown includes «законный представитель»
+    wish: Wish | None = None  # the doctor, the day and the time the patient asked for
     history: list[dict[str, Any]] = []  # earlier wizard screens, for «Назад»
 
 
@@ -551,11 +563,31 @@ class Conversation:
     # --- screens -----------------------------------------------------------------------
 
     def _header(self, c: Ctx) -> str | None:
-        """«Шаг 2 из 5 · Для кого запись» while booking from «Записаться» or a complaint."""
+        """«Шаг 2 из 5 · Для кого запись» and the patient's wish, while booking."""
         stage = STAGE_OF.get(c.s.step)
-        if not c.s.wizard or stage is None or c.s.resume == "handoff":
+        if stage is None or c.s.resume == "handoff":
             return None
-        return texts.STEP.format(n=stage, total=len(texts.STAGES), name=texts.STAGES[stage - 1])
+        lines = []
+        if c.s.wizard:
+            name = texts.STAGES[stage - 1]
+            lines.append(texts.STEP.format(n=stage, total=len(texts.STAGES), name=name))
+        wish = self._wish(c)
+        booking = c.s.wizard or c.s.reschedule_of is not None
+        if wish is not None and booking and stage <= WISH_SHOWN_UNTIL:
+            lines.append(render.wish_line(wish, self._local(c.now).date()))
+        return "\n".join(lines) or None
+
+    def _wish(self, c: Ctx) -> Wish | None:
+        """The wish in force: not too old, and its day is not in the past."""
+        wish = c.s.wish
+        if wish is None:
+            return None
+        if wish.noted is not None and c.now - wish.noted > WISH_TTL:
+            wish = Wish()
+        elif wish.day is not None and wish.day < self._local(c.now).date():
+            wish = wish.without("day")
+        c.s.wish = None if wish.empty else wish
+        return c.s.wish
 
     def _screen(
         self,
@@ -624,8 +656,9 @@ class Conversation:
             await self._show_menu(c)
             return
         *rest, snapshot = c.s.history
+        wish = c.s.wish  # a wish dropped or changed later is not brought back
         c.s = Session.model_validate(snapshot)
-        c.s.history = rest
+        c.s.history, c.s.wish = rest, wish
         c.back = True
         await self._render_screen(c)
 
@@ -653,9 +686,22 @@ class Conversation:
             c.say(render.emergency_message(self.clinic), _menu())
             return
         step = c.s.step
-        if step not in DATA_STEPS and (action := find_command(text)) is not None:
-            await self._command(c, action)  # the same screen as the menu button
+        if step in DATA_STEPS:  # the text is data: an age, a name, a phone number
+            await self._on_step_text(c, step, text)
             return
+        found = self._read_wish(c, text)
+        action = find_command(text)
+        if action is not None and action != "book":
+            await self._command(c, action, found.wish)  # the same screen as the menu button
+            return
+        if await self._on_wish_text(c, found):
+            return
+        if action == "book":  # «хочу записаться» — and the wish named just before, if any
+            self._start_booking(c, self._wish(c))
+            return
+        await self._on_step_text(c, step, text)
+
+    async def _on_step_text(self, c: Ctx, step: str, text: str) -> None:
         handlers: dict[str, Callable[[Ctx, str], Awaitable[None]]] = {
             "age": self._on_age,
             "question": self._on_answer_text,
@@ -706,7 +752,9 @@ class Conversation:
             area = reading.area or topics.guess_area(text) or c.s.area
             self._topics_for(c, area, reading.candidates, reading.clarify or texts.ASK_COMPLAINT)
         elif reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS:
-            await self._command(c, reading.action)
+            await self._command(c, reading.action, self._wish(c))
+        elif reading.kind == "schedule_question":  # a wording the word list did not catch
+            await self._answer_schedule(c, self._read_wish(c, text))
         elif reading.kind == "medical_question":  # no advice and no diagnosis (rule 1)
             self._reset(c)
             book = Button(texts.MENU_BOOK, "m:book", "primary")
@@ -737,8 +785,9 @@ class Conversation:
 
     def _topics_for(self, c: Ctx, area: str | None, candidates: list[str], ask: str) -> None:
         """A complaint without a clear scenario: the narrowest fitting topic menu."""
+        wish = c.s.wish
         self._reset(c)
-        c.s.wizard, c.s.area = True, area
+        c.s.wizard, c.s.area, c.s.wish = True, area, wish
         menu = topics.best_menu(self.kb, area, candidates)
         if menu is not None:
             self._menu_screen(c, menu)
@@ -922,6 +971,7 @@ class Conversation:
             "fg": self._on_forget,
             "more": self._on_more,
             "way": self._on_way,
+            "ws": self._on_wish,
         }.get(head)
         if handler is None:
             c.say(texts.STALE)
@@ -930,9 +980,7 @@ class Conversation:
 
     async def _on_menu(self, c: Ctx, item: str) -> None:
         if item == "book":
-            self._reset(c)
-            c.s.wizard = True
-            self._complaint_screen(c)
+            self._start_booking(c)
         elif item == "ask":
             self._reset(c)
             c.s.step = "info"
@@ -1102,9 +1150,9 @@ class Conversation:
         self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], child_age: int | None
     ) -> None:
         """Start a scenario of the wizard; the body area may already answer a question."""
-        area = c.s.area
+        area, wish = c.s.area, c.s.wish
         self._reset(c)
-        c.s.wizard, c.s.area = True, area
+        c.s.wizard, c.s.area, c.s.wish = True, area, wish
         facts = {**topics.area_facts(self.kb, scenario_id, area), **facts}
         if child_age is not None:
             c.s.step = "child_confirm"
@@ -1152,9 +1200,16 @@ class Conversation:
     def _ask_admin_buttons(self, label: str = texts.ASK_ADMIN_QUESTION) -> list[list[Button]]:
         return [[Button(label, "h:yes", "primary")], _home()]
 
-    async def _command(self, c: Ctx, action: str) -> None:
-        """A menu command typed as text (app/flow/commands.py) or found by route."""
-        if action in MENU_ITEM:
+    async def _command(self, c: Ctx, action: str, wish: Wish | None = None) -> None:
+        """A menu command typed as text (app/flow/commands.py) or found by route.
+
+        ``wish`` — the day, time or doctor named with it: «перенеси запись на завтра».
+        """
+        if action == "book":
+            self._start_booking(c, wish)
+        elif action == "my_bookings":
+            await self._my_bookings(c, wish)
+        elif action in MENU_ITEM:
             await self._on_menu(c, MENU_ITEM[action])
         elif action == "forget":
             await self._forget_ask(c)
@@ -1177,6 +1232,8 @@ class Conversation:
             return
         local = self._local(c.now)
         text, more = self._shorten(render.outcome_message(done, self.clinic, local))
+        if done.kind != "book":  # the trauma centre does not book this: the wish is dropped
+            c.s.wish = None
         if done.kind == "book":
             if text:  # script phrases before the time stay in the chat
                 c.say(text, more, edit=c.first())
@@ -1240,20 +1297,26 @@ class Conversation:
             return None
         return done.outcome.booking, done.scenario
 
-    async def _free(self, c: Ctx) -> tuple[BookingSpec, list[Slot]] | None:
+    async def _free(self, c: Ctx, *, wished: bool = True) -> tuple[BookingSpec, list[Slot]] | None:
+        """Free slots the 04-09 rules allow; then, of those, what fits the patient's wish."""
         found = await self._booking_spec(c)
         if found is None:
             return None
         spec, _ = found
         slots = await all_slots(self.schedule, spec, now=c.now, config=self.clinic.schedule)
-        return spec, slots
+        wish = self._wish(c) if wished else None
+        return spec, slots_view.matching(slots, wish, self.settings.tz)
 
     def _no_slots(self, c: Ctx) -> None:
         c.s.step = "idle"
         self._final(c, texts.NO_SLOTS, [[Button(texts.MENU_ADMIN, "m:admin")], _home()])
 
     async def _offer_time(self, c: Ctx) -> None:
-        """First a day; a control visit opens straight on the time around +10 days."""
+        """First a day; a wish or a control visit opens straight on the right day."""
+        wish = self._wish(c)
+        if wish is not None:
+            await self._open_wish(c, wish)
+            return
         if c.s.anchor is not None:
             free = await self._free(c)
             days = slots_view.days_with_slots(free[1], self.settings.tz) if free else []
@@ -1263,6 +1326,109 @@ class Conversation:
                 await self._show_periods(c)
                 return
         await self._show_days(c)
+
+    async def _open_wish(self, c: Ctx, wish: Wish) -> None:
+        """Step 4 with a wish: the wished day and time at once, or a plain «no» with ways out."""
+        free = await self._free(c, wished=False)
+        if free is None:
+            await self._show_menu(c)
+            return
+        spec, allowed = free  # the 04-09 rules come first; the wish only narrows them
+        tz = self.settings.tz
+        fitting = slots_view.matching(allowed, wish, tz)
+        c.s.day = c.s.period = c.s.day_from = None
+        if wish.day is None:
+            if fitting:
+                await self._show_days(c)
+            elif wish.has_time and slots_view.matching(allowed, wish.without_time(), tz):
+                c.say(texts.WISH_TIME_NEVER.format(time=render.wish_time(wish)))
+                c.s.wish = wish.without_time() if wish.doctor else None
+                await self._show_days(c)
+            else:
+                await self._wish_unmet(c, wish, spec, allowed)
+            return
+        day_times = slots_view.on_day(fitting, wish.day, tz)
+        if day_times:
+            c.s.day = wish.day
+            period = wish.period or (slots_view.period_of(wish.at).id if wish.at else None)
+            if period and slots_view.in_period(day_times, period, tz):
+                c.s.period = period
+                await self._show_times(c)
+            else:
+                await self._show_periods(c)
+            return
+        loose = wish.without_time()
+        if wish.has_time and slots_view.on_day(
+            slots_view.matching(allowed, loose, tz), wish.day, tz
+        ):
+            day = render.sentence(render.wish_day(wish.day, self._local(c.now).date()))
+            c.say(texts.WISH_TIME_GONE.format(day=day, time=render.wish_time(wish)))
+            c.s.wish, c.s.day = loose, wish.day
+            await self._show_periods(c)
+            return
+        await self._wish_unmet(c, wish, spec, allowed)
+
+    async def _last_day(self, c: Ctx) -> date:
+        """The last day the schedule is open for."""
+        slots = await self.schedule.slots(c.now, c.now + timedelta(days=366))
+        today = self._local(c.now).date()
+        return max((slots_view.local(s, self.settings.tz).date() for s in slots), default=today)
+
+    async def _wish_unmet(
+        self, c: Ctx, wish: Wish, spec: BookingSpec, allowed: Sequence[Slot]
+    ) -> None:
+        """The wish cannot be met: said plainly, with the ways out as buttons."""
+        tz, today = self.settings.tz, self._local(c.now).date()
+        c.s.step = "days"
+        short = short_name(wish.doctor) if wish.doctor else None
+        rows: list[list[Button]] = []
+        if wish.day is None:  # the doctor has no free time in the coming days at all
+            text = texts.WISH_DOCTOR_NONE.format(doctor=short) if short else texts.NO_SLOTS
+            if short and allowed:
+                rows.append([Button(texts.WISH_ANOTHER_DOCTOR, "ws:doctor", "primary")])
+            rows.append([Button(texts.MENU_ADMIN, "m:admin")])
+            self._screen(c, text, rows=rows)
+            return
+        day = render.sentence(render.wish_day(wish.day, today))
+        every = await self.schedule.slots(*slots_view.day_bounds(wish.day, tz))
+        if not every:
+            last = render.day_month(await self._last_day(c))
+            text = texts.WISH_DAY_CLOSED.format(date=render.day_month(wish.day), last=last)
+        elif short:
+            on_duty = [
+                s for s in every if s.doctor == wish.doctor and eligible(s, spec.slot_policy)
+            ]
+            template = texts.WISH_DOCTOR_FULL if on_duty else texts.WISH_DOCTOR_OFF[spec.visit]
+            text = template.format(day=day, doctor=short)
+        else:
+            text = texts.WISH_DAY_FULL.format(day=day)
+        other_day = wish.without("day")
+        nearest = slots_view.matching(allowed, other_day, tz) or slots_view.matching(
+            allowed, other_day.without_time(), tz
+        )
+        if nearest:
+            when = slots_view.nearest_when(nearest[0], today, tz)
+            label = texts.WISH_NEAREST_DOCTOR if short else texts.NEAREST
+            rows.append([Button(label.format(when=when), f"s:{nearest[0].id}", "primary")])
+        if short and slots_view.on_day(allowed, wish.day, tz):
+            label = texts.WISH_OTHER_DOCTOR.format(day=render.day_label(wish.day, today))
+            rows.append([Button(label, "ws:doctor")])
+        rows.append([Button(texts.OTHER_DAY, "ws:day")])
+        if short or wish.has_time:
+            rows.append([Button(texts.WISH_CLEAR, "ws:clear")])
+        self._screen(c, text, rows=rows)
+
+    def _time_rows(self, c: Ctx) -> list[list[Button]]:
+        """Under a day's times: «Другой день» for a wished day or a control visit, the wish off."""
+        wish = self._wish(c)
+        rows = []
+        if wish is not None and wish.day is not None:
+            rows.append([Button(texts.OTHER_DAY, "ws:day")])
+        elif c.s.anchor is not None:
+            rows.append([Button(texts.OTHER_DAY, "d:other")])
+        if wish is not None:
+            rows.append([Button(texts.WISH_CLEAR, "ws:clear")])
+        return rows
 
     def _nearest(self, c: Ctx, slots: Sequence[Slot]) -> list[list[Button]]:
         """«Ближайшее: сегодня, 14:30» — the first time by the 04-09 rules, one tap."""
@@ -1290,6 +1456,8 @@ class Conversation:
         if (later := slots_view.later_page_start(days, page)) is not None:
             nav.append(Button(texts.LATER, f"d:from:{later:%Y%m%d}"))
         rows = [nav] if nav else []
+        if self._wish(c) is not None:
+            rows.append([Button(texts.WISH_CLEAR, "ws:clear")])
         rows.append([Button(texts.MENU_ADMIN, "m:admin")])  # no convenient day: a person helps
         top = self._nearest(c, free[1])
         self._screen(c, texts.DAY_PICK, buttons, top=top, rows=rows, columns=DAY_COLUMNS)
@@ -1334,7 +1502,7 @@ class Conversation:
         c.s.step, c.s.period = "periods", None
         lines = [*self._day_header(c, shown, slots), "", texts.PERIOD_PICK]
         buttons = [Button(p.label, f"pr:{p.id}") for p in periods]
-        rows = [[Button(texts.OTHER_DAY, "d:other")]] if c.s.anchor is not None else []
+        rows = self._time_rows(c)
         # «Ближайшее» belongs to the first screen of the choice: the day picker, or here for a
         # control visit (no day picker; the 04-09 rules leave no night times)
         top = self._nearest(c, [s for s in slots if s in shown]) if c.s.anchor else []
@@ -1355,8 +1523,16 @@ class Conversation:
         c.s.step = "times"
         lines = [*self._day_header(c, shown, slots), "", texts.TIME_PICK]
         buttons = [Button(f"{slots_view.local(s, tz):%H:%M}", f"s:{s.id}") for s in shown]
-        rows = [[Button(texts.OTHER_DAY, "d:other")]] if c.s.anchor is not None else []
-        self._screen(c, "\n".join(lines), buttons, rows=rows, columns=TIME_COLUMNS)
+        top = []
+        wish = self._wish(c)
+        if wish is not None and wish.at is not None:  # «в 14:30»: the nearest time first
+            near = slots_view.closest(shown, wish.at, tz)
+            label = texts.WISH_NEAR_TIME.format(
+                wanted=f"{wish.at:%H:%M}", time=f"{slots_view.local(near, tz):%H:%M}"
+            )
+            top.append([Button(label, f"s:{near.id}", "primary")])
+        rows = self._time_rows(c)
+        self._screen(c, "\n".join(lines), buttons, top=top, rows=rows, columns=TIME_COLUMNS)
 
     # --- identification and booking ----------------------------------------------------
 
@@ -1558,7 +1734,8 @@ class Conversation:
             return None
         return booking
 
-    async def _my_bookings(self, c: Ctx) -> None:
+    async def _my_bookings(self, c: Ctx, wish: Wish | None = None) -> None:
+        """``wish`` — «перенеси запись на завтра»: «Перенести» opens that day at once."""
         self._reset(c)
         rows = await c.db.scalars(
             select(Booking)
@@ -1571,7 +1748,12 @@ class Conversation:
         if not bookings:
             c.say(texts.MY_EMPTY, _menu())
             return
-        c.say(texts.MY_TITLE)
+        title = texts.MY_TITLE
+        if wish is not None and not wish.empty:
+            c.s.wish = wish
+            words = render.wish_words(wish, self._local(c.now).date())
+            title += "\n" + texts.WISH_MOVE.format(wish=words)
+        c.say(title)
         for b in bookings:
             patient = await c.db.get(Patient, b.patient_id)
             start = self._local(b.start_at)
@@ -1599,10 +1781,11 @@ class Conversation:
         start = self._local(booking.start_at)
         when = {"date": render.format_date(start.date()), "time": f"{start:%H:%M}"}
         if action == "move":  # the card or the reminder stays; the day picker comes below
+            wish = self._wish(c)  # «перенеси запись на завтра»
             self._reset(c)
-            c.s.reschedule_of = booking.id
+            c.s.reschedule_of, c.s.wish = booking.id, wish
             c.say(texts.MOVE_PICK)
-            await self._show_days(c)
+            await self._offer_time(c)
         elif action == "cancel":
             c.say(
                 texts.CANCEL_ASK.format(**when),
@@ -1829,6 +2012,224 @@ class Conversation:
                 c.turn.reaction = "❤"
         self._reset(c)
         c.say(f"{texts.RATED} {self.kb.common.more_help.text}", _menu())
+
+    # --- wishes: the doctor, the day and the time the patient asked for ---------------------
+
+    def _read_wish(self, c: Ctx, text: str) -> Parsed:
+        """The wish in a text, read by code before masking and before DeepSeek."""
+        step = c.s.step
+        context = "time" if step in TIME_STEPS else "free" if step in FREE_STEPS else "strict"
+        today = self._local(c.now).date()
+        found = parse_wish(text, self.clinic.schedule.doctors, today, context=context)  # type: ignore[arg-type]
+        if not found.wish.empty:
+            found.wish.noted = c.now
+        return found
+
+    def _start_booking(self, c: Ctx, wish: Wish | None = None) -> None:
+        """«Записаться»: the wizard from «Что случилось?»; the wish waits for step 4."""
+        self._reset(c)
+        c.s.wizard = True
+        c.s.wish = None if wish is None or wish.empty else wish
+        self._complaint_screen(c)
+
+    async def _on_wish_text(self, c: Ctx, found: Parsed) -> bool:
+        """A wish or a question about the schedule in a text. True — the text is dealt with.
+
+        The wish is a filter over the schedule, not a way around the scenario: «Что
+        случилось?», «Для кого запись?» and the scenario questions stay.
+        """
+        if found.question is not None:
+            await self._answer_schedule(c, found)
+            return True
+        if found.wish.empty and not found.unknown_doctor:
+            return False
+        step = c.s.step
+        wish = (self._wish(c) or Wish()).merge(found.wish)
+        if step in TIME_STEPS:  # choosing the time: the wish is applied at once
+            if found.unknown_doctor:
+                self._no_such_doctor(c)
+            if found.wish.day is None and c.s.day is not None:  # «вечером» on a day's screen
+                wish = wish.merge(Wish(day=c.s.day))
+            c.s.wish = None if wish.empty else wish
+            await self._offer_time(c)
+            return True
+        under_way = step in WIZARD_STEPS and step not in START_STEPS
+        if found.unknown_doctor:
+            if found.pure and not under_way:
+                self._reset(c)
+                c.s.wish = None if wish.empty else wish
+                self._no_such_doctor(c, choose=True)
+                return True
+            self._no_such_doctor(c)
+        c.s.wish = None if wish.empty else wish
+        if not found.pure:
+            return False  # the rest of the message goes on: a complaint, an answer, a question
+        if under_way:
+            await self._render_screen(c)
+        else:
+            self._start_booking(c, c.s.wish)
+        return True
+
+    def _no_such_doctor(self, c: Ctx, *, choose: bool = False) -> None:
+        """«К Иванову»: no such doctor; the doctors from the data, each as a button."""
+        doctors = self.clinic.schedule.doctors
+        text = "\n".join([texts.NO_SUCH_DOCTOR, *(f"• {d}" for d in doctors)])
+        rows = pack([Button(short_name(d), f"ws:doc:{i}") for i, d in enumerate(doctors)])
+        if choose:
+            rows += [[Button(texts.ANY_DOCTOR, "ws:book")], _home()]
+        c.say(text, rows)
+
+    async def _on_wish(self, c: Ctx, value: str) -> None:
+        """Buttons about the wish: a doctor from the list, «Убрать пожелание», the ways out."""
+        action, _, ref = value.partition(":")
+        wish = self._wish(c)
+        if action == "book":  # under an answer about the schedule
+            self._start_booking(c, wish)
+            return
+        if action == "doc":
+            doctors = self.clinic.schedule.doctors
+            if not ref.isdigit() or int(ref) >= len(doctors):
+                c.say(texts.STALE)
+                return
+            wish = (wish or Wish()).merge(Wish(doctor=doctors[int(ref)], noted=c.now))
+            if c.s.step in TIME_STEPS:
+                c.s.wish = wish
+                await self._offer_time(c)
+            elif c.s.step in WIZARD_STEPS and c.s.step not in START_STEPS:
+                c.s.wish = wish
+                await self._render_screen(c)
+            else:
+                self._start_booking(c, wish)
+            return
+        if c.s.step not in TIME_STEPS:
+            c.say(texts.STALE)
+            return
+        if wish is not None and action == "doctor":  # the same day, the doctor on duty
+            wish = wish.without("doctor")
+        elif wish is not None and action == "day":  # «Другой день»: the doctor stays
+            wish = wish.without("day")
+        else:  # «Убрать пожелание»
+            wish = None
+        c.s.wish = None if wish is None or wish.empty else wish
+        c.s.day = c.s.period = c.s.day_from = None
+        await self._offer_time(c)
+
+    # --- questions about the schedule: answered by code from the provider ------------------
+
+    async def _answer_schedule(self, c: Ctx, found: Parsed) -> None:
+        """«Кто принимает завтра?», «когда работает Ярунин?», «есть время сегодня вечером?».
+
+        Under the answer — a booking button that carries what the schedule can give: the
+        day, the doctor or the time asked about.
+        """
+        asked = found.wish
+        question = found.question or ("doctor" if asked.doctor else "free")  # None: by route
+        if question == "who":
+            text, wish = await self._who_is_on(c, asked)
+            label = texts.BOOK_THIS_DAY if wish.day else texts.MENU_BOOK
+        elif question == "doctor" and asked.doctor:
+            text, wish = await self._doctor_days(c, asked)
+            label = texts.BOOK_THIS_DOCTOR
+        else:
+            text, wish = await self._free_time(c, asked)
+            label = texts.BOOK_THIS_TIME if wish.day or wish.has_time else texts.MENU_BOOK
+        if c.s.step in WIZARD_STEPS or c.s.reschedule_of is not None:
+            c.say(text)  # booking is under way: the answer, then the same step again
+            await self._render_screen(c)
+            return
+        self._reset(c)
+        if not wish.empty:
+            c.s.wish = wish.model_copy(update={"noted": c.now})
+        c.say(text, [[Button(label, "ws:book", "primary")], _home()])
+
+    async def _shifts_from_now(self, c: Ctx, day: date) -> list[Slot]:
+        """Every slot of the day, free or taken; a shift that is over by now is left out."""
+        slots = await self.schedule.slots(*slots_view.day_bounds(day, self.settings.tz))
+        ends: dict[tuple[str, bool], datetime] = {}
+        for s in slots:
+            key = (s.doctor, s.repeat_cabinet)
+            ends[key] = max(ends.get(key, s.end), s.end)
+        return [s for s in slots if ends[(s.doctor, s.repeat_cabinet)] > c.now]
+
+    async def _who_is_on(self, c: Ctx, asked: Wish) -> tuple[str, Wish]:
+        """(the doctors on duty that day, the wish for the booking button)."""
+        today = self._local(c.now).date()
+        day = asked.day or today
+        slots = await self._shifts_from_now(c, day)
+        if not slots:
+            last = render.day_month(await self._last_day(c))
+            return texts.SHIFTS_NONE.format(date=render.day_month(day), last=last), Wish()
+        title = texts.SHIFTS_TITLE.format(day=render.sentence(render.wish_day(day, today)))
+        lines = slots_view.shifts_text(slots, self.clinic.schedule, self.settings.tz)
+        return "\n".join([title, *lines]), asked.merge(Wish(day=day))
+
+    async def _doctor_days(self, c: Ctx, asked: Wish) -> tuple[str, Wish]:
+        """(when the doctor sees patients, the wish for the booking button)."""
+        assert asked.doctor is not None
+        tz, today = self.settings.tz, self._local(c.now).date()
+        last = await self._last_day(c)
+        lines = []
+        day = today
+        while day <= last and len(lines) < DOCTOR_DAYS_SHOWN:
+            spans = slots_view.doctor_spans(await self._shifts_from_now(c, day), asked.doctor, tz)
+            if spans:
+                label = render.day_label(day, today).lower()
+                lines.append(texts.DOCTOR_DAY_LINE.format(day=label, spans=spans))
+            day += timedelta(days=1)
+        coming = [texts.DOCTOR_DAYS.format(doctor=asked.doctor), *lines]
+        if not lines:
+            coming = [texts.DOCTOR_NO_DAYS.format(doctor=asked.doctor)]
+        if asked.day is None:
+            return "\n".join(coming), asked
+        name = render.sentence(render.wish_day(asked.day, today))
+        short = short_name(asked.doctor)
+        spans = slots_view.doctor_spans(await self._shifts_from_now(c, asked.day), asked.doctor, tz)
+        if spans:
+            return texts.DOCTOR_ON_DAY.format(day=name, doctor=short, spans=spans), asked
+        off = texts.DOCTOR_OFF_DAY.format(day=name, doctor=short)
+        return "\n".join([off, *coming]), Wish(doctor=asked.doctor)
+
+    async def _free_time(self, c: Ctx, asked: Wish) -> tuple[str, Wish]:
+        """(free time for a first visit, the wish for the booking button).
+
+        The «nearest» rule of a first visit is used: a repeat visit has its own windows, so
+        the exact time is shown after the scenario questions.
+        """
+        tz, today = self.settings.tz, self._local(c.now).date()
+        spec = BookingSpec(
+            visit="primary", service="", slot_policy="nearest", price_key="primary_visit"
+        )
+        allowed = await all_slots(self.schedule, spec, now=c.now, config=self.clinic.schedule)
+        only_doctor = Wish(doctor=asked.doctor)
+        of_doctor = slots_view.matching(allowed, only_doctor, tz)
+        fitting = slots_view.matching(allowed, asked, tz)
+
+        def with_doctor(text: str, shown: Sequence[Slot]) -> str:
+            day_slots = slots_view.on_day(allowed, slots_view.local(shown[0], tz).date(), tz)
+            doctors = slots_view.doctors_text(shown, day_slots, self.clinic.schedule, tz)
+            return "\n".join([text, doctors, texts.FREE_NOTE])
+
+        def nearest(slots: Sequence[Slot]) -> str:
+            return slots_view.nearest_label(slots[0], today, tz) + "."
+
+        if asked.day is None:
+            if fitting:
+                return with_doctor(nearest(fitting), fitting[:1]), asked
+            if of_doctor:
+                return with_doctor(nearest(of_doctor), of_doctor[:1]), only_doctor
+            return texts.NO_SLOTS, Wish()
+        when = render.sentence(render.wish_day(asked.day, today)) + ","
+        if time_words := render.wish_time(asked):
+            when += f" {time_words}"
+        windows = self.clinic.schedule.repeat_windows
+        shown = slots_view.times_of_day(fitting, asked.day, spec.slot_policy, windows, tz)
+        if not shown:  # said plainly; the button does not carry a time that is not there
+            text = texts.FREE_NONE.format(when=when)
+            return (f"{text}\n{nearest(of_doctor)}" if of_doctor else text), only_doctor
+        times = ", ".join(f"{slots_view.local(s, tz):%H:%M}" for s in shown[:FREE_TIMES_SHOWN])
+        if len(shown) > FREE_TIMES_SHOWN:
+            times = texts.FREE_MORE.format(times=times)
+        return with_doctor(texts.FREE_ON.format(when=when, times=times), shown), asked
 
     # --- questions and administrators ------------------------------------------------------
 

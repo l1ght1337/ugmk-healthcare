@@ -261,3 +261,15 @@ async def test_control_visit_time_starts_about_ten_days_later(
         schedule, booking("repeat_window"), now=NOW, config=clinic.schedule, not_before=later
     )
     assert slots and all(s.start >= later for s in slots)
+
+
+async def test_slots_lists_taken_time_too(schedule: MockSchedule) -> None:
+    """«Кто принимает завтра?» is answered from every slot, not only from the free ones."""
+    start = NOW.replace(hour=0, minute=0) + timedelta(days=1)
+    every = await schedule.slots(start, start + timedelta(days=1))
+    free = await schedule.free_slots(start, start + timedelta(days=1))
+    assert len(every) == 48 + 24  # the main cabinet around the clock, «Травматолог 2» 8–20
+    assert len(free) < len(every) and {s.id for s in free} <= {s.id for s in every}
+    assert [s.start for s in every] == sorted(s.start for s in every)
+    await schedule.book(free[0].id)
+    assert free[0].id in {s.id for s in await schedule.slots(start, start + timedelta(days=1))}

@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.bot import texts
 from app.config import ScheduleConfig, WorkingHours
 from app.flow.schema import SlotPolicy
+from app.flow.wishes import Wish
 from app.schedule.base import Slot
 from app.schedule.rules import window_distance
 
@@ -37,6 +38,7 @@ PERIOD_IDS = frozenset(p.id for p in PERIODS)
 
 DAYS_PER_PAGE = 6
 NEAR_WINDOW_TIMES = 8  # sick leave open: «любое свободное время, близкое к» the windows
+NOT_BEFORE = time(6)  # «до 12» is about the morning, not the night before it
 
 
 def local(slot: Slot, tz: ZoneInfo) -> datetime:
@@ -107,16 +109,19 @@ def in_period(slots: Sequence[Slot], period: str | None, tz: ZoneInfo) -> list[S
     return [s for s in slots if period_of(local(s, tz).time()).id == period]
 
 
-def nearest_label(slot: Slot, today: date, tz: ZoneInfo) -> str:
-    """«Ближайшее: сегодня, 14:30» / «Ближайшее: сб, 14.11, 09:00»."""
+def nearest_when(slot: Slot, today: date, tz: ZoneInfo) -> str:
+    """«сегодня, 14:30» / «сб, 14.11, 09:00»."""
     start = local(slot, tz)
     if start.date() == today:
-        when = f"{texts.TODAY.lower()}, {start:%H:%M}"
-    elif (start.date() - today).days == 1:
-        when = f"{texts.TOMORROW.lower()}, {start:%H:%M}"
-    else:
-        when = f"{texts.WEEKDAYS_SHORT[start.weekday()].lower()}, {start:%d.%m, %H:%M}"
-    return texts.NEAREST.format(when=when)
+        return f"{texts.TODAY.lower()}, {start:%H:%M}"
+    if (start.date() - today).days == 1:
+        return f"{texts.TOMORROW.lower()}, {start:%H:%M}"
+    return f"{texts.WEEKDAYS_SHORT[start.weekday()].lower()}, {start:%d.%m, %H:%M}"
+
+
+def nearest_label(slot: Slot, today: date, tz: ZoneInfo) -> str:
+    """«Ближайшее: сегодня, 14:30» / «Ближайшее: сб, 14.11, 09:00»."""
+    return texts.NEAREST.format(when=nearest_when(slot, today, tz))
 
 
 def _shift_span(moment: datetime, config: ScheduleConfig) -> str:
@@ -162,3 +167,103 @@ def doctors_text(
             texts.REPEAT_CABINET_DOCTOR.format(cabinet=config.demo.repeat_cabinet, doctor=doctor)
         )
     return "\n".join(lines)
+
+
+# --- the wish as a filter over the slots the 04-09 rules allow ----------------------------
+
+
+def fits(slot: Slot, wish: Wish, tz: ZoneInfo) -> bool:
+    """The doctor and the time of day of the wish; the day is where the picker opens."""
+    if wish.doctor and slot.doctor != wish.doctor:
+        return False
+    moment = local(slot, tz).time()
+    if wish.period and period_of(moment).id != wish.period:
+        return False
+    if wish.start and moment < wish.start:
+        return False
+    if wish.end:
+        if moment >= wish.end:
+            return False
+        if wish.start is None and wish.end > NOT_BEFORE and moment < NOT_BEFORE:
+            return False
+    return True
+
+
+def matching(slots: Sequence[Slot], wish: Wish | None, tz: ZoneInfo) -> list[Slot]:
+    return [s for s in slots if wish is None or fits(s, wish, tz)]
+
+
+def on_day(slots: Sequence[Slot], day: date, tz: ZoneInfo) -> list[Slot]:
+    return [s for s in slots if local(s, tz).date() == day]
+
+
+def closest(slots: Sequence[Slot], moment: time, tz: ZoneInfo) -> Slot | None:
+    """The time nearest to «в 14:30» among the offered ones."""
+
+    def gap(slot: Slot) -> int:
+        start = local(slot, tz).time()
+        return abs(start.hour * 60 + start.minute - moment.hour * 60 - moment.minute)
+
+    return min(slots, key=lambda s: (gap(s), s.start)) if slots else None
+
+
+# --- who is on duty: every slot of a day, free or taken, as spans --------------------------
+
+
+def _span_text(start: datetime, end: datetime) -> str:
+    """«08:00–20:00», «с 20:00» (till midnight), «до 08:00» (from midnight)."""
+    from_midnight = start.time() == time(0)
+    till_midnight = end.time() == time(0) and end.date() > start.date()
+    if from_midnight and till_midnight:
+        return texts.SPAN_ALL_DAY
+    if from_midnight:
+        return texts.SHIFT_UNTIL.format(time=f"{end:%H:%M}")
+    if till_midnight:
+        return texts.SHIFT_FROM.format(time=f"{start:%H:%M}")
+    return f"{start:%H:%M}–{end:%H:%M}"
+
+
+def spans(slots: Sequence[Slot], tz: ZoneInfo) -> list[tuple[datetime, str]]:
+    """Slots that follow one another, merged: [(start, «08:00–20:00»), …] in time order."""
+    merged: list[list[datetime]] = []
+    for slot in sorted(slots, key=lambda s: s.start):
+        start, end = local(slot, tz), slot.end.astimezone(tz)
+        if merged and merged[-1][1] >= start:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, _span_text(start, end)) for start, end in merged]
+
+
+def shifts_text(day_slots: Sequence[Slot], config: ScheduleConfig, tz: ZoneInfo) -> list[str]:
+    """«• 08:00–20:00 — Ярунин …» for a day, then the cabinet for repeat visits."""
+    main: list[tuple[datetime, str, str]] = []
+    doctors = list(dict.fromkeys(s.doctor for s in day_slots))
+    for doctor in doctors:
+        own = [s for s in day_slots if s.doctor == doctor and not s.repeat_cabinet]
+        main += [(start, span, doctor) for start, span in spans(own, tz)]
+    lines = [texts.SHIFT_LINE.format(span=span, doctor=doctor) for _, span, doctor in sorted(main)]
+    for doctor in doctors:
+        second = [s for s in day_slots if s.doctor == doctor and s.repeat_cabinet]
+        for _, span in spans(second, tz):
+            lines.append(
+                texts.SHIFTS_REPEAT.format(
+                    cabinet=config.demo.repeat_cabinet, doctor=doctor, span=span
+                )
+            )
+    return lines
+
+
+def doctor_spans(day_slots: Sequence[Slot], doctor: str, tz: ZoneInfo) -> str | None:
+    """«08:00–20:00» or «08:00–20:00, повторные приёмы» for one doctor on one day."""
+    parts = [span for _, span in spans([s for s in day_slots if s.doctor == doctor], tz)]
+    if not parts:
+        return None
+    own = [s for s in day_slots if s.doctor == doctor]
+    text = ", ".join(parts)
+    return texts.REPEAT_ONLY.format(span=text) if all(s.repeat_cabinet for s in own) else text
+
+
+def day_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    start = datetime.combine(day, time(0), tzinfo=tz)
+    return start, start + timedelta(days=1)

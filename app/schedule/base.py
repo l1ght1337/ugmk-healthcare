@@ -28,6 +28,10 @@ class ScheduleProvider(ABC):
         """Free slots starting in [start, end), ordered by start."""
 
     @abstractmethod
+    async def slots(self, start: datetime, end: datetime) -> list[Slot]:
+        """Every slot starting in [start, end), free or taken: who is on duty and when."""
+
+    @abstractmethod
     async def get(self, slot_id: str) -> Slot | None: ...
 
     @abstractmethod

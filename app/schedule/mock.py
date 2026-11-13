@@ -71,6 +71,10 @@ class MockSchedule(ScheduleProvider):
         found = [s for s in self._slots.values() if start <= s.start < end and self._is_free(s.id)]
         return sorted(found, key=lambda s: (s.start, s.repeat_cabinet))
 
+    async def slots(self, start: datetime, end: datetime) -> list[Slot]:
+        found = [s for s in self._slots.values() if start <= s.start < end]
+        return sorted(found, key=lambda s: (s.start, s.repeat_cabinet))
+
     async def get(self, slot_id: str) -> Slot | None:
         return self._slots.get(slot_id)
 

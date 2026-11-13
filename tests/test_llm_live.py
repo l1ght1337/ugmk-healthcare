@@ -105,6 +105,24 @@ async def test_route_kinds(assistant: Assistant, text: str, kind: str, area: str
         assert result.area == area, result
 
 
+WISHES = [
+    # task 1: the doctor reaches DeepSeek as «[ВРАЧ]», the request must stay a request
+    ("Запиши меня к ярунину на завтра", "menu_action", "book", None),
+    ("подвернул ногу, можно к Билалову в субботу утром?", "complaint", None, "limb"),
+    ("Ударился головой, запишите к Ярунину", "complaint", None, "head"),
+]
+
+
+@pytest.mark.parametrize(("text", "kind", "action", "area"), WISHES, ids=[w[0] for w in WISHES])
+async def test_route_with_a_wish(
+    assistant: Assistant, text: str, kind: str, action: str | None, area: str | None
+) -> None:
+    result = await assistant.route(text)
+    assert (result.kind, result.action) == (kind, action), result
+    if area:
+        assert result.area == area, result
+
+
 async def test_asking_for_a_human(assistant: Assistant) -> None:
     result = await assistant.route("Соедините, пожалуйста, с администратором")
     assert (result.kind, result.action) == ("menu_action", "admin"), result

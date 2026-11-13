@@ -17,6 +17,7 @@ from tests.faq_cases import (
     KB,
     NO_DATA,
     SCENARIO,
+    SCHEDULE,
     TEMPLATE,
     Faq,
     no_data_questions,
@@ -73,7 +74,7 @@ def _answer(faq: Faq) -> dict | None:
 
 @pytest.mark.parametrize("faq", FAQS, ids=lambda f: f.question)
 async def test_the_bot_answers_as_the_matrix_says(make_chat, kb: KnowledgeBase, faq: Faq) -> None:
-    replies = [] if faq.command else [_route(faq)]
+    replies = [] if faq.command or faq.source == SCHEDULE else [_route(faq)]
     if (answer := _answer(faq)) is not None:
         replies.append(answer)
     fake = FakeDeepSeek(*replies)
@@ -82,6 +83,8 @@ async def test_the_bot_answers_as_the_matrix_says(make_chat, kb: KnowledgeBase, 
     await chat.say(faq.question)
     if faq.command:
         assert find_command(faq.question) == faq.action and fake.requests == []
+    if faq.source == SCHEDULE:
+        assert fake.requests == []
     await _check(chat, faq)
 
 
@@ -90,6 +93,9 @@ async def _check(chat: Chat, faq: Faq) -> None:
     if faq.source in (KB, CONFIG):
         assert text.startswith(f"{faq.facts[0]}."), text  # the answer is shown, it is grounded
         assert texts.INFO_UNKNOWN not in text
+    elif faq.source == SCHEDULE:  # built by code from the schedule: DeepSeek is not asked
+        assert faq.expect and faq.expect in text, text
+        assert texts.INFO_UNKNOWN not in text and labels
     elif faq.kind == "clinic_question":  # no data
         assert text == texts.INFO_UNKNOWN and labels[0] == texts.ASK_ADMIN_QUESTION
         assert chat.admin == []  # only by the button
@@ -117,7 +123,7 @@ async def _check(chat: Chat, faq: Faq) -> None:
         assert texts.CONSENT_HANDOFF in text
     else:
         raise AssertionError(f"no check for {faq}")
-    assert faq.source in (KB, CONFIG, SCENARIO, TEMPLATE, NO_DATA)
+    assert faq.source in (KB, CONFIG, SCENARIO, SCHEDULE, TEMPLATE, NO_DATA)
 
 
 async def test_feedback_goes_to_the_admins_with_the_text_after_the_button(

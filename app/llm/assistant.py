@@ -19,9 +19,10 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
-from app.config import get_settings
+from app.config import get_clinic_data, get_settings
 from app.flow.loader import KnowledgeBase
 from app.flow.schema import AREAS, FactValue, Question, Scenario
+from app.flow.wishes import mark_doctors
 from app.llm.catalogue import render_catalogue, render_info
 from app.llm.client import DeepSeekClient, LLMUnavailable
 from app.llm.guards import grounded, grounded_prefix, safe_clarify
@@ -42,6 +43,7 @@ class _Out(BaseModel):
 TextKind = Literal[
     "complaint",
     "menu_action",
+    "schedule_question",
     "medical_question",
     "clinic_question",
     "about_bot",
@@ -103,6 +105,8 @@ class RouteResult(BaseModel):
 
     * complaint — an injury → a scenario (``scenario``) or topics of the body ``area``;
     * menu_action — «когда у меня приём», «хочу записаться» → the menu screen (``action``);
+    * schedule_question — «кто принимает в субботу?», «есть время вечером?» → answered by
+      code from the schedule provider (the day, time and doctor are read by app/flow/wishes);
     * medical_question — «какое обезболивающее», «это перелом?» → no advice, an offer to book;
     * about_bot — «ты человек?», «где мои данные» → who the bot is and where data is kept;
     * feedback — a complaint about the service or thanks → an offer to pass it on;
@@ -145,14 +149,17 @@ class Assistant:
         kb: KnowledgeBase,
         info: str | None = None,
         today: Callable[[], date] | None = None,
+        doctors: tuple[str, ...] | None = None,
     ):
         self.client = client
         self.kb = kb
         self._info = info if info is not None else render_info()
         self.today = today or (lambda: datetime.now(get_settings().tz).date())
+        self._doctors = doctors if doctors is not None else get_clinic_data().schedule.doctors
 
     def _mask(self, text: str, known: KnownPerson | None) -> str:
-        return mask(text, known, self.today())
+        """A doctor's name becomes «[ВРАЧ]» first: route must see a request for a doctor."""
+        return mask(mark_doctors(text, self._doctors), known, self.today())
 
     async def warm_up(self) -> bool:
         """One call per system prompt at startup, so the first patients hit the DeepSeek cache."""

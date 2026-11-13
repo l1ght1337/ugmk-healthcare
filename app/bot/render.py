@@ -16,6 +16,7 @@ from app.config import ClinicData
 from app.flow.engine import AskPatient, AskQuestion, Done, Place
 from app.flow.loader import KnowledgeBase
 from app.flow.schema import Audience, Choice, Scenario
+from app.flow.wishes import Wish, dative
 from app.schedule.base import Slot
 
 MALE_PATRONYMIC = ("вич", "ич", "оглы", "улы", "уулу")
@@ -63,6 +64,57 @@ def day_label(day: date, today: date) -> str:
     if day == today + timedelta(days=1):
         return f"{texts.TOMORROW}, {day:%d.%m}"
     return f"{texts.WEEKDAYS_SHORT[day.weekday()]}, {day:%d.%m}"
+
+
+def day_month(day: date) -> str:
+    """«15 декабря»."""
+    return f"{day.day} {texts.MONTHS_GENITIVE[day.month - 1]}"
+
+
+def wish_day(day: date, today: date) -> str:
+    """«завтра, 13 ноября», «в субботу, 14 ноября» — the day of a wish, in words."""
+    text = f"{day.day} {texts.MONTHS_GENITIVE[day.month - 1]}"
+    if day == today:
+        return texts.WISH_TODAY.format(date=text)
+    if day == today + timedelta(days=1):
+        return texts.WISH_TOMORROW.format(date=text)
+    return f"{texts.WEEKDAYS_ON[day.weekday()]}, {text}"
+
+
+def wish_time(wish: Wish) -> str | None:
+    """«утром», «после 18:00», «около 14:30»."""
+    parts = []
+    if wish.period:
+        parts.append(texts.WISH_PERIODS[wish.period])
+    if wish.start and wish.end:
+        parts.append(
+            texts.WISH_BETWEEN.format(start=f"{wish.start:%H:%M}", end=f"{wish.end:%H:%M}")
+        )
+    elif wish.start:
+        parts.append(texts.WISH_AFTER.format(time=f"{wish.start:%H:%M}"))
+    elif wish.end:
+        parts.append(texts.WISH_BEFORE.format(time=f"{wish.end:%H:%M}"))
+    if wish.at:
+        parts.append(texts.WISH_AT.format(time=f"{wish.at:%H:%M}"))
+    return ", ".join(parts) or None
+
+
+def wish_words(wish: Wish, today: date) -> str:
+    """«к Ярунину А. А., завтра, 13 ноября, утром»."""
+    parts = [dative(wish.doctor)] if wish.doctor else []
+    if wish.day:
+        parts.append(wish_day(wish.day, today))
+    if time_words := wish_time(wish):
+        parts.append(time_words)
+    return ", ".join(parts)
+
+
+def wish_line(wish: Wish, today: date) -> str:
+    return texts.WISH.format(wish=wish_words(wish, today))
+
+
+def sentence(text: str) -> str:
+    return text[:1].upper() + text[1:]
 
 
 def booked_word(patronymic: str | None) -> str:

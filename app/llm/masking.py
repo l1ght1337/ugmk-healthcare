@@ -22,7 +22,8 @@ DATE = "[ДАТА]"
 EMAIL = "[EMAIL]"
 NUMBER = "[НОМЕР]"
 LOGIN = "[ЛОГИН]"
-PLACEHOLDERS = (NAME, PHONE, DATE, EMAIL, NUMBER, LOGIN)
+DOCTOR = "[ВРАЧ]"  # a trauma centre doctor named by the patient (app/flow/wishes.py)
+PLACEHOLDERS = (NAME, PHONE, DATE, EMAIL, NUMBER, LOGIN, DOCTOR)
 
 
 @dataclass(frozen=True)

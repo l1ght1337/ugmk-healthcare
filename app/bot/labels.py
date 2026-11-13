@@ -86,6 +86,36 @@ def render_labels(kb: KnowledgeBase) -> str:
         ),
         _row("Время (по четыре в ряд; сверху — врач смены)", ["13:30", "14:00", "14:30", "15:00"]),
         _row("Контрольный приём: время около +10 дней", [texts.OTHER_DAY]),
+        _row(
+            "Пациент назвал врача, день или время: шаг «День и время»",
+            [texts.OTHER_DAY, texts.WISH_CLEAR],
+        ),
+        _row(
+            "Пожелание выполнить нельзя (врач не дежурит, времени нет)",
+            [
+                texts.WISH_NEAREST_DOCTOR.format(when="вс, 15.11, 20:00"),
+                texts.WISH_OTHER_DOCTOR.format(day="Завтра, 14.11"),
+                texts.OTHER_DAY,
+                texts.WISH_CLEAR,
+            ],
+        ),
+        _row(
+            "Время названо точно («в 14:30»)",
+            [texts.WISH_NEAR_TIME.format(wanted="14:30", time="15:00")],
+        ),
+        _row(
+            "Такого врача нет: врачи из расписания",
+            ["Кузнецов Н. А.", "Ярунин А. А.", texts.ANY_DOCTOR, texts.MENU_HOME],
+        ),
+        _row(
+            "Ответ на вопрос о расписании",
+            [
+                texts.BOOK_THIS_DAY,
+                texts.BOOK_THIS_DOCTOR,
+                texts.BOOK_THIS_TIME,
+                texts.MENU_HOME,
+            ],
+        ),
         _row("Карточка записи", [texts.MOVE, texts.CANCEL]),
         _row("Длинная фраза скрипта (коротко)", [texts.MORE]),
         _row("Напоминание за 2 часа", [texts.HOW_TO_GET, texts.CONFIRM, texts.MOVE, texts.CANCEL]),

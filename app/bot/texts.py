@@ -335,6 +335,59 @@ SHIFT_FROM = "с {time}"
 SHIFT_UNTIL = "до {time}"
 REPEAT_CABINET_DOCTOR = "Повторный приём в кабинете «{cabinet}»: {doctor}"
 
+# --- wishes: the doctor, the day and the time the patient asked for (app/flow/wishes.py) ----
+WISH = "Пожелание: {wish}"
+WISH_TODAY = "сегодня, {date}"
+WISH_TOMORROW = "завтра, {date}"
+WISH_PERIODS = {"morning": "утром", "day": "днём", "evening": "вечером", "night": "ночью"}
+WISH_AFTER = "после {time}"
+WISH_BEFORE = "до {time}"
+WISH_BETWEEN = "с {start} до {end}"
+WISH_AT = "около {time}"
+WISH_CLEAR = "Убрать пожелание"
+WISH_MOVE = "При переносе сразу покажу время по пожеланию: {wish}."
+WISH_NEAR_TIME = "Ближе всего к {wanted}: {time}"
+NO_SUCH_DOCTOR = "Такого врача в травмпункте нет. У нас принимают:"
+ANY_DOCTOR = "Любой врач"
+# the wish cannot be met: said plainly, with the ways out as buttons
+WISH_DOCTOR_OFF = {
+    "primary": "{day}, {doctor} не дежурит.",
+    "repeat": "{day}, {doctor} не ведёт повторный приём.",
+}
+WISH_DOCTOR_FULL = "{day}, {doctor} принимает, но свободного времени уже нет."
+WISH_DAY_FULL = "{day}, свободного времени нет."
+WISH_DAY_CLOSED = "Запись на {date} пока не открыта: расписание есть по {last}."
+WISH_TIME_GONE = (
+    "{day}, {time} свободного времени по Вашему пожеланию нет. Есть другое время в этот день:"
+)
+WISH_TIME_NEVER = (
+    "В ближайшие дни {time} свободного времени по Вашему пожеланию нет. Показываю другое время."
+)
+WISH_DOCTOR_NONE = "{doctor}: свободного времени в ближайшие дни нет."
+WISH_NEAREST_DOCTOR = "Ближайшее у врача: {when}"
+WISH_OTHER_DOCTOR = "{day} — другой врач"
+WISH_ANOTHER_DOCTOR = "Выбрать другого врача"
+
+# questions about the schedule: answered by code from the schedule provider
+SHIFTS_TITLE = "{day}, в травмпункте принимают:"
+SHIFT_LINE = "• {span} — {doctor}"
+SHIFTS_REPEAT = "Повторные приёмы, кабинет «{cabinet}»: {doctor} ({span})"
+SHIFTS_NONE = "Расписания на {date} пока нет: оно есть по {last}."
+SPAN_ALL_DAY = "круглосуточно"
+REPEAT_ONLY = "{span}, повторные приёмы"
+DOCTOR_DAYS = "{doctor} принимает в ближайшие дни:"
+DOCTOR_DAY_LINE = "• {day} — {spans}"
+DOCTOR_ON_DAY = "{day}, {doctor} принимает: {spans}."
+DOCTOR_OFF_DAY = "{day}, {doctor} не принимает."
+DOCTOR_NO_DAYS = "{doctor}: в расписании на ближайшие дни приёма нет."
+FREE_ON = "{when} есть свободное время: {times}."
+FREE_NONE = "{when} свободного времени нет."
+FREE_MORE = "{times} и позже"
+FREE_NOTE = "Точное время покажу после вопросов о травме."
+BOOK_THIS_DAY = "Записаться на этот день"
+BOOK_THIS_DOCTOR = "Записаться к этому врачу"
+BOOK_THIS_TIME = "Записаться на это время"
+
 CARD_TITLE = "Запись в травмпункт"
 CARD_WHEN = "Дата и время"
 CARD_DOCTOR = "Врач"
