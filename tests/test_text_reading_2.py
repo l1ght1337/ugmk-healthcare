@@ -96,7 +96,7 @@ def test_a_refused_time_is_no_wish(doctors) -> None:
     assert parse("только не завтра", doctors, TODAY).wish.empty
 
 
-# --- «не раньше 5», «не позже 12» are bounds, not refusals (15.11) ----------------------------
+# --- «не раньше 5», «не позже 12» are bounds, not refusals (14.11) ----------------------------
 
 
 @pytest.mark.parametrize(
@@ -129,7 +129,7 @@ def test_bounds_with_not_keep_the_day(doctors) -> None:
     assert parse("не раньше 5 дней назад упал", doctors, TODAY).wish.empty  # a number of days
 
 
-# --- two bounds in one message are one window (16.11) --------------------------------------------
+# --- two bounds in one message are one window (14.11) --------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -186,7 +186,7 @@ def test_bounds_that_make_no_window_keep_the_first(doctors) -> None:
         "мне больно наступать на ногу",
         "я сломал руку, сколько стоит приём?",
         "порезал себе палец",
-        "запишите меня",  # «меня» is the patient here too (15.11)
+        "запишите меня",  # «меня» is the patient here too (14.11)
         "запиши меня к Ярунину на завтра",
         "Здравствуйте, запишите меня, пожалуйста",
         "можно записать меня на завтра?",

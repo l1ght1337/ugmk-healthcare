@@ -526,7 +526,7 @@ def test_care_lines_are_one_per_scenario_and_only_where_the_spravka_has_them(kb)
 
 
 def test_care_lines_read_as_the_bot_speaking() -> None:
-    """The patient reads them word for word: no «бот», no «сценарий» (16.11)."""
+    """The patient reads them word for word: no «бот», no «сценарий» (14.11)."""
     from app.flow.loader import care_lines
 
     lines = care_lines()

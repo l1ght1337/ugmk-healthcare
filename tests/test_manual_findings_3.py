@@ -1,4 +1,4 @@
-"""The dialogs from the customer's check of 899d068 (16.11): cancelling by text, the word
+"""The dialogs from the customer's check of 899d068 (14.11): cancelling by text, the word
 order of a full name, a second booking of the same patient.
 
 The clinic clock is Thursday, 12 November 2026, 12:00.

@@ -419,7 +419,7 @@ async def test_route_leads_to_the_menu_or_back_from_steps_with_buttons(
         assert (chat.replies[-1].text, chat.replies[-1].buttons) != (shown.text, shown.buttons)
 
 
-# --- a request to cancel never gets the plain list of bookings again (16.11, item 1) ---------
+# --- a request to cancel never gets the plain list of bookings again (14.11, item 1) ---------
 
 CANCEL_PHRASES = (
     "отмени запись",
