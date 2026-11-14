@@ -271,6 +271,11 @@ class Scenario(_Model):
     guard_question: str | None = Field(
         default=None, description="«Уточните, пожалуйста: это укол чужой иглой?» — «Да» / «Нет»"
     )
+    guard_no: dict[str, FactValue] = Field(
+        default={},
+        description="What «Нет» to ``guard_question`` answers in a booking scenario that has "
+        "such a field: 05-01 — assault=false, so «Как получена травма?» is not asked twice",
+    )
     entry: tuple[Branch, ...] = Field(min_length=1)
     questions: tuple[Question, ...] = ()
     outcomes: dict[str, Outcome] = Field(min_length=1)
@@ -306,6 +311,8 @@ class Scenario(_Model):
             raise ValueError("guard_words are for a routing scenario (section 5)")
         if bool(self.guard_words) != bool(self.guard_question):
             raise ValueError("guard_words and guard_question go together")
+        if self.guard_no and not self.guard_words:
+            raise ValueError("guard_no goes with guard_words")
         question_ids = [q.id for q in self.questions]
         if len(set(question_ids)) != len(question_ids):
             raise ValueError("duplicate question ids")

@@ -7,6 +7,11 @@
   "kind": "routing",
   "body_areas": ["neck_back"],
   "router_hint": "Неврология: защемление, потянул шею, спину и т. д.",
+  "guard_words": [
+    "защемило", "защемление", "защемления", "защемлением", "прострел", "прострела",
+    "прострелом", "прострелило"
+  ],
+  "guard_question": "Уточните, пожалуйста: это защемление в шее или спине?",
   "entry": [
     {"when": {"audience": "child"}, "outcome": "child"},
     {"when": {"audience": "adult"}, "outcome": "adult"}

@@ -365,8 +365,9 @@ class Talk(BaseModel):
     other: bool = False  # «Другая»: the booking after the route is about another injury
     # asked once: dropped when another person is named, on «Изменить», by a booking made
     who: Who | None = None
-    # the section 5 scenario whose guard_words a complaint had; «Нет» to its question
-    guard: str | None = None
+    # the section 5 scenarios whose guard_words a complaint had, to ask about one after
+    # another; «Нет» to the question of a scenario is kept: not asked twice
+    guards: list[str] = []
     guard_no: list[str] = []
     danger: Danger | None = None  # on: by a phrase or an «emergency» outcome; off: «Меню»
     danger_said: str | None = None  # it was on: a booking made later tells the administrators
@@ -1249,9 +1250,9 @@ class Conversation:
             return
         step = c.s.step
         if step in FREE_STEPS:  # a complaint may be here: «наступила на иглу от шприца»
-            found = topics.guard_scenario(self.kb, text)
-            if found is not None and found not in c.s.talk.guard_no:
-                c.s.talk.guard = found
+            found = topics.guard_scenarios(self.kb, text)
+            if new := [g for g in found if g not in c.s.talk.guard_no]:
+                c.s.talk.guards = new
         c.for_whom, c.more = find_audience(text), names_several(text)
         if (other := after_me(text)) is not None and await self._upcoming(c):
             # «мужа после меня»: the writer is booked already
@@ -1821,12 +1822,15 @@ class Conversation:
     ) -> bool:
         """A booking scenario for a complaint with the guard words of a section 5 scenario
         («наступила на иглу от шприца» read as «Порез, швы») is not started silently: the
-        scenario's own question is asked first. Its own scenario gives the route at once."""
-        guard = c.s.talk.guard
-        if guard is None or guard not in self.kb.scenarios:
+        question of that scenario is asked first — of each such scenario, one after another.
+        Its own scenario gives the route at once."""
+        guards = [g for g in c.s.talk.guards if g in self.kb.scenarios]
+        if scenario_id in guards or self.kb.scenario(scenario_id).kind != "booking":
+            c.s.talk.guards = []  # the scenario of the words itself, or another route
             return False
-        if scenario_id == guard or self.kb.scenario(scenario_id).kind != "booking":
+        if not guards:
             return False
+        c.s.talk.guards = guards
         area, wish, (for_whom, kept) = c.s.area, c.s.wish, self._for_whom(c)
         self._reset(c, booking=True)
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
@@ -1836,7 +1840,7 @@ class Conversation:
         return True
 
     def _guard_screen(self, c: Ctx) -> None:
-        guard = self.kb.scenarios.get(c.s.talk.guard or "")
+        guard = self.kb.scenarios.get(next(iter(c.s.talk.guards), ""))
         if guard is None or not guard.guard_question:
             self._complaint_screen(c)
             return
@@ -1845,20 +1849,27 @@ class Conversation:
         self._screen(c, guard.guard_question, buttons)
 
     async def _on_guard(self, c: Ctx, value: str) -> None:
-        """«Да» — the route of that scenario; «Нет» — the booking, and not asked again."""
-        scenario, guard = c.s.pending_scenario, c.s.talk.guard
-        if c.s.step != "guard" or scenario is None or guard is None or value not in ("yes", "no"):
+        """«Да» — the route of that scenario; «Нет» — the next guard, or the booking; the
+        question of a scenario is not asked again in the conversation."""
+        scenario, guards = c.s.pending_scenario, c.s.talk.guards
+        if c.s.step != "guard" or scenario is None or not guards or value not in ("yes", "no"):
             c.say(texts.STALE, [_home()])
             return
         facts, age, picked = c.s.pending_facts, c.s.child_age, c.s.picked
         c.s.pending_scenario, c.s.pending_facts, c.s.child_age = None, {}, None
-        c.s.talk.guard = None
+        guard, c.s.talk.guards = guards[0], guards[1:]
         if value == "yes":
+            c.s.talk.guards = []
             await self._begin(c, guard, {}, age)
             return
         c.s.talk.guard_no.append(guard)
-        await self._begin(c, scenario, facts, age)
-        c.s.picked = picked
+        # «Нет» answers the scenario's own question about that as well: «Как получена
+        # травма?» of 04-07 is not asked after «Нет» to the words of 05-01
+        fields = self.kb.scenario(scenario).fields()
+        answered = {k: v for k, v in self.kb.scenario(guard).guard_no.items() if k in fields}
+        await self._begin(c, scenario, {**facts, **answered}, age)
+        if c.s.step != "guard":
+            c.s.picked = picked
 
     def _same_asked(
         self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], child_age: int | None
@@ -3248,7 +3259,7 @@ class Conversation:
         text, more = self._shorten(render.outcome_message(done, self.clinic, local))
         if done.kind != "book":  # the trauma centre does not book this: the wish is dropped
             c.s.wish, c.s.ended_at = None, c.now
-            c.s.talk.guard = None  # a route or a handoff: the words of section 5 are answered
+            c.s.talk.guards = []  # a route or a handoff: the words of section 5 are answered
         if done.kind == "route" and done.scenario.kind == "booking":
             # «ожог лица — в ожоговый центр»: the patient may come back with another answer
             c.s.talk.answered = Routed(dialog=c.s.dialog.model_copy(deep=True), at=c.now)
@@ -3802,7 +3813,7 @@ class Conversation:
             c.say(place.address, venue=place)
         self._reset(c, booking=True)  # the second patient, if one was named, is offered next
         c.s.talk.who = None  # the booking is made: the next one is asked «для кого»
-        c.s.talk.guard = None
+        c.s.talk.guards = []
         c.s.step, c.s.booking_id = "payment", booking.id
         c.say(
             render.payment_question(done),

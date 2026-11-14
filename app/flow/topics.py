@@ -85,13 +85,17 @@ def guess_area(text: str) -> Area | None:
     return found[0] if len(found) == 1 else None
 
 
+def guard_scenarios(kb: KnowledgeBase, text: str) -> list[str]:
+    """The section 5 scenarios whose ``guard_words`` a complaint has, in the order of the
+    scripts: «подрался, в глаз попали» — 05-01, then 05-06. The words are whole words, as
+    the scenario writes them out."""
+    found = [s for s in kb.scenarios.values() if s.guard_words and find_phrase(text, s.guard_words)]
+    return [s.id for s in sorted(found, key=lambda s: [int(n) for n in s.number.split(".")])]
+
+
 def guard_scenario(kb: KnowledgeBase, text: str) -> str | None:
-    """The section 5 scenario whose ``guard_words`` a complaint has: «наступила на иглу от
-    шприца» — 05-07. The words are whole words, as the scenario writes them out."""
-    for scenario in kb.scenarios.values():
-        if scenario.guard_words and find_phrase(text, scenario.guard_words):
-            return scenario.id
-    return None
+    """The first of them: «наступила на иглу от шприца» — 05-07."""
+    return next(iter(guard_scenarios(kb, text)), None)
 
 
 def guess_candidates(text: str) -> list[str]:

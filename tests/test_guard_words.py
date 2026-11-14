@@ -53,8 +53,57 @@ def test_the_needle_scenario_has_its_words_and_its_question(kb: KnowledgeBase) -
         assert word in needle.guard_words, word
 
 
-def test_only_the_needle_scenario_has_words_so_far(kb: KnowledgeBase) -> None:
-    assert [s.id for s in kb.scenarios.values() if s.guard_words] == ["needle_injury"]
+GUARDED = {
+    "criminal_trauma": "Уточните, пожалуйста: травма получена при нападении, в драке или сбила "
+    "машина?",
+    "genital_trauma": "Уточните, пожалуйста: это травма половых органов?",
+    "head_trauma": "Уточните, пожалуйста: это травма головы?",
+    "eye_trauma": "Уточните, пожалуйста: это травма глаза?",
+    "needle_injury": QUESTION,
+    "inflammation": "Уточните, пожалуйста: это нарыв или нагноение?",
+    "neurology": "Уточните, пожалуйста: это защемление в шее или спине?",
+}
+BROAD = ("голова", "голову", "нос", "спина", "спину", "грудь", "ребра", "гной", "гноится", "пах")
+
+
+def test_the_first_step_of_the_words_is_switched_on(kb: KnowledgeBase) -> None:
+    """The narrow words and «глаз»; the broad ones wait for a rule about negations."""
+    found = {s.id: s.guard_question for s in kb.scenarios.values() if s.guard_words}
+    assert found == GUARDED
+    every = {w for s in kb.scenarios.values() for w in s.guard_words}
+    assert not every & set(BROAD)
+
+
+@pytest.mark.parametrize(
+    ("said", "scenario"),
+    [
+        ("меня вчера избили, порезали руку", "criminal_trauma"),
+        ("подрался на улице, палец опух", "criminal_trauma"),
+        ("сбила машина на переходе, болит нога", "criminal_trauma"),
+        ("удар пришёлся в мошонку", "genital_trauma"),
+        ("ударилась виском об угол шкафа", "head_trauma"),
+        ("упал, у ребёнка сотрясение наверное", "head_trauma"),
+        ("в глаз отлетела стружка", "eye_trauma"),
+        ("на пальце нарыв после пореза", "inflammation"),
+        ("подняла коробку, прострелило поясницу", "neurology"),
+    ],
+)
+def test_the_words_of_the_other_scenarios(kb: KnowledgeBase, said: str, scenario: str) -> None:
+    assert topics.guard_scenarios(kb, said) == [scenario]
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["упал, болит голова и нога", "потянул спину на тренировке", "ударился грудью, болят рёбра",
+     "из носа кровь шла", "рана не гноится", "потянул мышцу в паху"],
+)  # fmt: skip
+def test_the_broad_words_are_not_switched_on(kb: KnowledgeBase, said: str) -> None:
+    assert topics.guard_scenarios(kb, said) == []
+
+
+def test_several_scenarios_in_the_order_of_the_scripts(kb: KnowledgeBase) -> None:
+    said = "подрался, в глаз попали, ещё и на шприц наступил"
+    assert topics.guard_scenarios(kb, said) == ["criminal_trauma", "eye_trauma", "needle_injury"]
 
 
 @pytest.mark.parametrize(
@@ -169,3 +218,65 @@ async def test_back_from_the_question_returns_to_the_start(make_chat, kb: Knowle
     assert chat.replies[-1].text.endswith(QUESTION) and chat.labels() == YES_NO
     await chat.press(texts.BACK)
     assert texts.ASK_COMPLAINT in chat.text
+
+
+# --- the other scenarios of section 5 (the first step, 14.11.2026) ------------------------------
+
+MUNICIPAL = "Любой муниципальный травмпункт"
+
+
+async def test_an_assault_in_a_scenario_that_does_not_ask_about_it(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    """«Порез, швы» has no «Как получена травма?»: the words of 05-01 are the only guard."""
+    chat = make_chat(assistant=FakeDeepSeek(CUT).assistant(kb))
+    await chat.start()
+    await chat.say("меня вчера избили, порезали руку стеклом")
+    assert chat.replies[-1].text.endswith(GUARDED["criminal_trauma"])
+    await chat.press(texts.GUARD_YES)
+    assert MUNICIPAL in chat.text and await bookings(chat.conversation.db) == []
+
+
+async def test_no_to_the_assault_is_not_asked_again_by_the_scenario(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    """04-07 asks «Как получена травма?» itself: «Нет» to the guard is its answer."""
+    wrong = complaint("fracture", facts={"assault": False})  # DeepSeek read «подрался» as home
+    chat = make_chat(assistant=FakeDeepSeek(wrong).assistant(kb))
+    await chat.start()
+    await chat.say("я подрался, кажется сломал палец на руке")
+    assert chat.replies[-1].text.endswith(GUARDED["criminal_trauma"])
+    await chat.press(texts.GUARD_NO)
+    assert "Как получена травма?" not in chat.text and "Шаг 3 из 5" in chat.text
+    assert (await session(chat))["dialog"]["facts"]["assault"] is False
+
+
+async def test_yes_to_the_assault_is_the_route_whatever_deepseek_said(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    wrong = complaint("fracture", facts={"assault": False})
+    chat = make_chat(assistant=FakeDeepSeek(wrong).assistant(kb))
+    await chat.start()
+    await chat.say("я подрался, кажется сломал палец на руке")
+    await chat.press(texts.GUARD_YES)
+    assert MUNICIPAL in chat.text
+
+
+async def test_two_guards_are_asked_one_after_another(make_chat, kb: KnowledgeBase) -> None:
+    chat = make_chat(assistant=FakeDeepSeek(CUT).assistant(kb))
+    await chat.start()
+    await chat.say("я подрался, в глаз попали, и руку порезал")
+    assert chat.replies[-1].text.endswith(GUARDED["criminal_trauma"])
+    await chat.press(texts.GUARD_NO)
+    assert chat.replies[-1].text.endswith(GUARDED["eye_trauma"])
+    await chat.press(texts.GUARD_NO)
+    assert texts.ASK_AUDIENCE in chat.text and "Уточните" not in chat.text  # the booking
+
+
+async def test_the_eye_is_the_route_of_the_eye(make_chat, kb: KnowledgeBase) -> None:
+    chat = make_chat(assistant=FakeDeepSeek(CUT).assistant(kb))
+    await chat.start()
+    await chat.say("я порезал бровь, и в глаз попало стекло")
+    assert chat.replies[-1].text.endswith(GUARDED["eye_trauma"])
+    await chat.press(texts.GUARD_YES)
+    assert "ЦГБ № 23" in chat.text
