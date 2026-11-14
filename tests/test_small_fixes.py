@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.bot import texts
-from app.flow.commands import keeps_booking
+from app.flow.commands import keeps_booking, says_no_more
 from app.flow.loader import KnowledgeBase
 from tests.fake_deepseek import FakeDeepSeek
 from tests.test_conversation import book_dislocation, bookings
@@ -111,3 +111,54 @@ async def test_another_reply_in_between_starts_anew(make_chat) -> None:
     await chat.say("спасибо")
     await chat.say("позовите администратора")
     assert "уже у администратора" in chat.text  # the first time after something else
+
+
+# --- after run 4 (not checked by a live run) ---------------------------------------------------
+# questions: «а зачем переносить? мне 13 ноября в 11:00 подходит» showed the booking three
+# times. criminal: «Нет. Всё, поеду сам» to «Могу я ещё чем-нибудь Вам помочь?» got the same
+# question once more.
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["а зачем переносить? мне 13 ноября в 11:00 подходит. просто хотела убедиться, что запись "
+     "на меня", "не надо ничего переносить", "переносить не хочу, меня всё устраивает"],
+)  # fmt: skip
+def test_no_move_wanted_keeps_the_booking(said: str) -> None:
+    assert keeps_booking(said)
+
+
+@pytest.mark.parametrize("said", ["а можно перенести на завтра?", "зачем отменили мою запись?"])
+def test_a_move_or_a_cancel_is_not_keeping(said: str) -> None:
+    assert not keeps_booking(said)
+
+
+async def test_why_move_is_one_line_and_not_the_booking_again(make_chat) -> None:
+    chat = make_chat()
+    await book_dislocation(chat)
+    await chat.press(texts.PAYMENT_SELF)
+    (booking,) = await bookings(chat.conversation.db)
+    date, time = when(booking)
+    kept = texts.KEPT_WHEN.format(date=date, time=time)
+    await chat.say("а зачем переносить? мне это время подходит, просто хотела убедиться")
+    assert chat.text == kept
+    await chat.say("а зачем переносить? мне это время подходит, я же говорю")
+    assert chat.text != kept  # not the same line twice in a row
+
+
+@pytest.mark.parametrize("said", ["нет", "Нет, всё.", "Нет. Всё, поеду сам.", "нет, спасибо"])
+async def test_no_to_anything_else_is_a_goodbye(make_chat, kb: KnowledgeBase, said: str) -> None:
+    chat = make_chat(assistant=FakeDeepSeek().assistant(kb))
+    await chat.start()
+    await chat.press(texts.MENU_ASK)
+    await chat.press(texts.MENU_HOME)
+    assert chat.text == kb.common.more_help.text  # «Могу я ещё чем-нибудь Вам помочь?»
+    await chat.say(said)
+    assert chat.text == kb.common.goodbye.text and chat.labels() == MENU
+    await chat.say(said)
+    assert chat.text != kb.common.goodbye.text  # nor the goodbye twice in a row
+
+
+@pytest.mark.parametrize("said", ["нет, запишите меня на завтра", "нет, а сколько стоит приём?"])
+def test_no_with_a_request_is_not_the_end(said: str) -> None:
+    assert not says_no_more(said)

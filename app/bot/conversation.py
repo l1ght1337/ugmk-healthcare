@@ -65,6 +65,7 @@ from app.flow.commands import (
     names_several,
     refuses_new_booking,
     same_or_other,
+    says_no_more,
     says_self,
     waits_for_call,
     wants_all,
@@ -1384,8 +1385,9 @@ class Conversation:
         if step not in ("idle", "payment") or not keeps_booking(text):
             return False
         upcoming = await self._upcoming(c)
-        if not upcoming:
+        if not upcoming or c.s.talk.line == "kept":  # not the same line twice in a row
             return False
+        c.line = "kept"
         line = texts.KEPT
         if len(upcoming) == 1:
             start = self._local(upcoming[0].start_at)
@@ -1883,6 +1885,7 @@ class Conversation:
         """«Привет», «спасибо», «ок», «пока»: a polite reply, never «я помогаю только с…»."""
         if talk == "bye":
             self._reset(c)
+            c.line = "bye"
             c.say(self.kb.common.goodbye.text, self._main_menu(c))
         elif c.s.step in WIZARD_STEPS or c.s.reschedule_of is not None:
             c.say(texts.GOING_ON)  # booking is under way: the same step
@@ -1947,7 +1950,10 @@ class Conversation:
                     c.s.period = None
                     await self._show_periods(c)
                 return True
-        if step in ("idle", "payment") and yes_no(text) is not None:
+        if step == "idle" and says_no_more(text) and c.s.talk.line != "bye":
+            await self._small_talk(c, "bye")  # «нет» to «Могу я ещё чем-нибудь Вам помочь?»
+            return True
+        if step in ("idle", "payment") and (yes_no(text) is not None or says_no_more(text)):
             await self._show_menu(c)
             return True
         return False

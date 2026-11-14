@@ -492,6 +492,7 @@ _ASKS_FOR = re.compile(
     r"вывих\w*|травм\w+|упал\w*|ушиб\w*)\b"
 )
 SMALL_TALK_WORDS = 16  # a longer message says more than «спасибо, буду ждать»
+NO_MORE_WORDS = 6  # «Нет. Всё, поеду сам»
 LONG_BYE_WORDS = 30  # …unless it ends with the goodbye: «…пойду сама разбираться. До свидания»
 _BYE_AT_END = re.compile(rf"{_BYE.pattern}$")
 # Two patients in one message: «меня и сына», «для себя и для мужа», «обоих», «двоих детей».
@@ -663,6 +664,16 @@ def same_or_other(text: str) -> str | None:
     return "same" if same else "other"
 
 
+def says_no_more(text: str) -> bool:
+    """«Нет», «нет, всё», «нет, спасибо», «Нет. Всё, поеду сам» — the answer to «Могу я ещё
+    чем-нибудь Вам помочь?»; «нет, запишите на завтра» asks for something."""
+    t = normalize(text)
+    words = t.split()
+    if not words or words[0] not in ("нет", "неа") or len(words) > NO_MORE_WORDS:
+        return False
+    return "?" not in text and _ASKS_FOR.search(t) is None
+
+
 def names_parent(text: str) -> bool:
     """«А если мама сама запишет?», «папа рядом» — on the screen of a patient of 15–17."""
     return _PARENT.search(normalize(text)) is not None
@@ -769,6 +780,12 @@ _KEEPS = re.compile(
     r"|\bничего\s+не\s+(?:переношу|перенос\w+|меня\w+|отменя\w+)\b"
     r"|\bзапис\w+\s+(?:\w+\s+){0,2}?остается\b"
 )
+# a move the patient does not want: «зачем переносить?», «не надо ничего переносить»
+_NO_MOVE = re.compile(
+    r"\bзачем\s+(?:\w+\s+)?перенос\w+"
+    r"|\bне\s+(?:надо|нужно|хочу|буду|собира\w+)\s+(?:\w+\s+)?перенос\w+"
+    r"|\bперенос\w+\s+не\s+(?:надо|нужно|хочу|буду)\b"
+)
 # «значит запись на 13 ноября осталась» — said, not asked
 _STAYED = re.compile(r"\bзапис\w+\s+(?:\w+\s+){0,4}?(?:осталась|остались|сохранилась|в\s+силе)\b")
 
@@ -778,6 +795,8 @@ def keeps_booking(text: str) -> bool:
     на 13 ноября осталась» — about a booking the patient has: it stays. Not an order to
     cancel or to move one, and not a question («запись осталась?»)."""
     t = normalize(text)
+    if _NO_MOVE.search(t) and re.search(rf"\b{_CANCEL}\b", t) is None:
+        return True  # «а зачем переносить? мне это время подходит»
     if re.search(rf"\b(?:{_CANCEL}|{_MOVE})\b", t) or _MOVE_INTENT.search(t):
         return False
     if _KEEPS.search(t):
