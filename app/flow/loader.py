@@ -63,10 +63,11 @@ def doctor_posts(doctors: Sequence[str], kb_dir: Path = KB_DIR) -> dict[str, str
 
 # What the trauma centre does with an injury, said when the patient asks «что делать?» next to
 # the complaint: scenario → the beginning of its line in kb/info/uslugi.md. The code picks the
-# line and shows it word for word; injuries without a line get no such phrase.
+# line and shows it word for word, so the line must read as the bot speaking (no «бот», no
+# «сценарий»); injuries without a line get no such phrase.
 CARE_LINES = {
     "cut_sutures": "Доктор в травмпункте может сделать только хирургический шов",
-    "dressing": "Перевязки:",
+    "dressing": "Чистые и ожоговые перевязки",
     "cast_apply": "Наложение «обычного» гипса",
     "cast_removal": "Наложение «обычного» гипса",
     "orthosis": "Наложение «обычного» гипса",

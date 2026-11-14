@@ -460,6 +460,41 @@ def _by_the_clock(wish: Wish, loose: bool, today: date, now: time | None) -> Non
         wish.at, wish.start, wish.end = _later(wish.at), _later(wish.start), _later(wish.end)
 
 
+def _other_bound(wish: Wish, window: tuple[time | None, time | None]) -> bool:
+    """The wish has one bound of a window and ``window`` is the other one."""
+    if wish.at is not None or wish.period is not None:
+        return False
+    start, end = window
+    return (wish.start is None) != (wish.end is None) and (
+        (wish.start is None and start is not None and end is None)
+        or (wish.end is None and end is not None and start is None)
+    )
+
+
+def _join_bounds(wish: Wish, mention: _Mention, loose: bool) -> bool:
+    """«Не раньше 10 и не позже 14» is one window, as «с 10 до 14». Returns its ``loose``.
+
+    Named together, the bounds are read so that the start is earlier than the end: «не
+    раньше 10 и не позже 2» is 10:00–14:00. With both hours bare the window stays loose, as
+    «с 3 до 6» does. Bounds that make no window («не раньше 18 и не позже 12») leave the
+    first one as it was.
+    """
+    assert mention.window is not None
+    first_is_start = wish.start is not None
+    start = wish.start if first_is_start else mention.window[0]
+    end = mention.window[1] if first_is_start else wish.end
+    start_loose, end_loose = (loose, mention.loose) if first_is_start else (mention.loose, loose)
+    assert start is not None and end is not None
+    fixed = False
+    if start >= end and end_loose:  # the end is in the afternoon
+        end, fixed = _later(end), True
+        assert end is not None
+    if start >= end:
+        return loose
+    wish.start, wish.end = start, end
+    return start_loose and end_loose and not fixed
+
+
 def _days(t: str, today: date, taken: list[tuple[int, int]]) -> list[_Mention]:
     found: list[_Mention] = []
 
@@ -732,6 +767,8 @@ def parse(
         elif mention.window is not None and not wish.has_time:
             wish.start, wish.end = mention.window
             loose = mention.loose
+        elif mention.window is not None and _other_bound(wish, mention.window):
+            loose = _join_bounds(wish, mention, loose)
         elif mention.at is not None and not (wish.at or window):
             wish.at = mention.at
             loose = mention.loose

@@ -125,8 +125,47 @@ def test_bounds_with_not_keep_the_day(doctors) -> None:
     wish = parse("не позже 12 завтра", doctors, TODAY).wish
     assert (wish.day, wish.end) == (date(2026, 11, 13), time(12))
     wish = parse("в субботу не раньше 10 и не позже 14", doctors, TODAY).wish
-    assert (wish.day, wish.start) == (date(2026, 11, 14), time(10))
+    assert (wish.day, wish.start, wish.end) == (date(2026, 11, 14), time(10), time(14))
     assert parse("не раньше 5 дней назад упал", doctors, TODAY).wish.empty  # a number of days
+
+
+# --- two bounds in one message are one window (16.11) --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "now", "start", "end"),
+    [
+        ("не раньше 10 и не позже 14", time(10), time(10), time(14)),  # was «с 22:00»
+        ("не раньше 10 и не позже 14", time(22), time(10), time(14)),
+        ("не раньше 10 и не позже 14", None, time(10), time(14)),
+        ("не позже 14 и не раньше 10", time(10), time(10), time(14)),  # in any order
+        ("завтра не раньше 10 и не позже 2", time(10), time(10), time(14)),  # the start is earlier
+        ("не раньше 4 дня и не позже 6", time(10), time(16), time(18)),
+        ("после 18 и до 20", time(10), time(18), time(20)),
+        ("после 9 утра, но не позже 12", time(10), time(9), time(12)),
+        # both without «утра / вечера»: the rule of «с 3 до 6»
+        ("завтра после 3 и до 6", time(10), time(15), time(18)),
+        ("после 3 и до 6", time(10), time(15), time(18)),
+        ("после 3 и до 6", time(2), time(3), time(6)),
+        ("завтра не раньше 9 и не позже 11", time(10), time(9), time(11)),
+    ],
+)
+def test_two_bounds_are_one_window(doctors, text: str, now, start: time, end: time) -> None:
+    wish = parse(text, doctors, TODAY, now=now).wish
+    assert (wish.start, wish.end) == (start, end), (text, now)
+    assert wish.at is None and wish.period is None
+
+
+def test_two_bounds_read_as_from_to(doctors) -> None:
+    for now in (time(4), time(10), time(16)):
+        joined = parse("завтра не раньше 10 и не позже 14", doctors, TODAY, now=now).wish
+        plain = parse("завтра с 10 до 14", doctors, TODAY, now=now).wish
+        assert (joined.day, joined.start, joined.end) == (plain.day, plain.start, plain.end)
+
+
+def test_bounds_that_make_no_window_keep_the_first(doctors) -> None:
+    wish = parse("не раньше 18 и не позже 12", doctors, TODAY, now=time(10)).wish
+    assert (wish.start, wish.end) == (time(18), None)
 
 
 # --- 2. «меня» is a booking for oneself -------------------------------------------------------

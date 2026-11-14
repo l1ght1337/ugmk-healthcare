@@ -489,7 +489,7 @@ async def test_book_me_with_someone_is_asked_about(make_chat, text: str) -> None
 
 CARE = {
     "cut_sutures": ("порезал палец, чем обработать?", "Доктор в травмпункте может сделать только"),
-    "dressing": ("нужна перевязка, что делать с повязкой?", "Перевязки: чистые и ожоговые"),
+    "dressing": ("нужна перевязка, что делать с повязкой?", "Чистые и ожоговые перевязки"),
     "cast_apply": ("сказали наложить гипс, что делать?", "Наложение «обычного» гипса"),
     "cast_removal": ("пора снять гипс, можно ли его мочить?", "Наложение «обычного» гипса"),
     "orthosis": ("нужен ортез на колено, что делать?", "Наложение «обычного» гипса"),
@@ -523,3 +523,17 @@ def test_care_lines_are_one_per_scenario_and_only_where_the_spravka_has_them(kb)
     assert set(lines) == set(CARE)
     assert len({lines[s] for s in ("cast_apply", "cast_removal", "orthosis", "scotchcast")}) == 1
     assert all(line and not line.startswith("-") for line in lines.values())
+
+
+def test_care_lines_read_as_the_bot_speaking() -> None:
+    """The patient reads them word for word: no «бот», no «сценарий» (16.11)."""
+    from app.flow.loader import care_lines
+
+    lines = care_lines()
+    for line in lines.values():
+        low = line.lower()
+        assert "бот" not in low and "сценари" not in low and "ответ клиники" not in low, line
+    assert lines["dressing"] == (
+        "Чистые и ожоговые перевязки делают в травмпункте, гнойные — у хирурга: куда "
+        "обратиться, подскажу по ходу записи."
+    )
