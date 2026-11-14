@@ -50,6 +50,7 @@ from app.flow.commands import (
     asks_advice,
     asks_when_admin,
     asks_where_to_go,
+    danger_question,
     find_audience,
     find_command,
     find_navigation,
@@ -330,6 +331,14 @@ class Who(BaseModel):
     name: str | None = None  # the child's first name, if it was said: «Ваня»
 
 
+class Danger(BaseModel):
+    """The «угроза жизни» state: no booking starts or goes on while it is on."""
+
+    phrase: str  # what switched it on: a phrase of emergency.phrases, or the scenario's words
+    scenario: str | None = None  # the scenario whose outcomes have addresses for this case
+    outcomes: dict[str, str] = {}  # «adult» / «child» / «any» → the outcome with them
+
+
 class Talk(BaseModel):
     """What is remembered for the whole conversation, whatever the step.
 
@@ -342,6 +351,8 @@ class Talk(BaseModel):
     other: bool = False  # «Другая»: the booking after the route is about another injury
     # asked once: dropped when another person is named, on «Изменить», by a booking made
     who: Who | None = None
+    danger: Danger | None = None  # on: by a phrase or an «emergency» outcome; off: «Меню»
+    danger_said: str | None = None  # it was on: a booking made later tells the administrators
     line: str | None = None  # the template said last turn: not the same one twice in a row
 
 
@@ -902,6 +913,8 @@ class Conversation:
 
     def _main_menu(self, c: Ctx) -> list[list[Button]]:
         """The main menu; «Продолжить запись» first while a booking left for it is fresh."""
+        if c.s.talk.danger is not None:  # «угроза жизни»: no «Записаться в травмпункт»
+            return self._danger_buttons()
         rows = _menu()
         if self._paused_fresh(c):
             rows.insert(0, [Button(texts.RESUME, "m:resume", "primary")])
@@ -910,7 +923,9 @@ class Conversation:
     async def _greet(self, c: Ctx) -> None:
         self._pause(c)  # /start in the middle of a booking keeps it, as the menu does
         self._reset(c)
-        c.s.talk = Talk(at=c.now)  # /start: a new conversation
+        self._danger_off(c)  # /start is a way out of «угроза жизни», as «Меню» is
+        # a new conversation; that the state was on is kept for a booking made after it
+        c.s.talk = Talk(at=c.now, danger_said=c.s.talk.danger_said)
         common = self.kb.common
         text = common.greeting.text.format(
             part_of_day=common.greeting_for(self._local(c.now).time())
@@ -944,6 +959,7 @@ class Conversation:
             c.say(texts.STALE, [_home()])
 
     async def _show_menu(self, c: Ctx) -> None:
+        self._danger_off(c)  # «Меню» is the way out of the «угроза жизни» state
         self._pause(c)
         self._reset(c)
         c.say(self.kb.common.more_help.text, self._main_menu(c), edit=c.first())
@@ -1198,9 +1214,16 @@ class Conversation:
         if find_phrase(text, self.clinic.clinic.crisis.phrases):
             await self._crisis(c, text)
             return
-        if find_phrase(text, self.clinic.clinic.emergency.phrases):
-            self._reset(c)
-            c.say(render.emergency_message(self.clinic), self._main_menu(c))
+        said = find_phrase(text, self.clinic.clinic.emergency.phrases)
+        handing = c.s.step in MESSAGE_STEPS or (
+            c.s.resume == "handoff" and c.s.step in ("consent", "contact")
+        )  # the consent and the phone of «Позвать администратора» are read as usual
+        if c.s.talk.danger is not None and said is None and not handing:
+            # «отмени запись» is not a booking: a visit the patient has can be cancelled
+            cancels = find_command(text) == "my_bookings" and wants_cancel(text)
+            handing = cancels and not wants_move(text) and bool(await self._upcoming(c))
+        if said is not None or (c.s.talk.danger is not None and not handing):
+            await self._danger_text(c, text, said)
             return
         step = c.s.step
         c.for_whom, c.more = find_audience(text), names_several(text)
@@ -1510,6 +1533,118 @@ class Conversation:
         c.s.handoff_context, c.s.handoff_why = text, done.outcome.patient_reason
         c.say(f"{route}\n\n{texts.QUESTIONS_TO_ADMIN}", self._ask_admin_buttons())
         return True
+
+    # --- the «угроза жизни» state (config/clinic.yaml, emergency) -----------------------------
+
+    def _danger_buttons(self) -> list[list[Button]]:
+        """«Позвать администратора» and «Меню»: nothing that books."""
+        return [[Button(texts.MENU_ADMIN, "m:admin")], [Button(texts.MENU, "m:home")]]
+
+    def _with_line(self, text: str) -> str:
+        """The clinic's own ambulance line after the text, once the clinic gives it."""
+        line = self.clinic.contacts.ambulance_line_phone
+        return f"{text} {texts.AMBULANCE_LINE.format(phone=line)}" if line else text
+
+    def _danger_set(
+        self,
+        c: Ctx,
+        phrase: str,
+        scenario: str | None = None,
+        outcomes: dict[str, str] | None = None,
+    ) -> None:
+        """Switch the state on: the booking under way and the one left for the menu are gone."""
+        talk = c.s.talk
+        self._reset(c)
+        c.s.paused = c.s.paused_at = None
+        talk.danger = Danger(phrase=phrase, scenario=scenario, outcomes=outcomes or {})
+        c.s.talk = talk
+
+    def _danger_off(self, c: Ctx) -> None:
+        danger = c.s.talk.danger
+        if danger is not None:
+            c.s.talk.danger, c.s.talk.danger_said = None, danger.phrase
+
+    def _danger_allows(self, c: Ctx, head: str, rest: str) -> bool:
+        """A button that works while the state is on: the menu, an administrator and the
+        consent on the way to him, the visits the patient has — but not a move of one."""
+        if head == "m":
+            return rest in ("home", "admin", "my")
+        if head == "c":
+            return c.s.resume == "handoff"
+        if head == "b":
+            return not rest.startswith("move")
+        return head in ("h", "ar", "fg", "rate", "v", "r", "way", "more", "fb")
+
+    def _danger_places(self, c: Ctx) -> str | None:
+        """The addresses the scripts have for this case (an open fracture, a bite with the
+        signs): for the one the talk is about, or for an adult and for a child."""
+        danger = c.s.talk.danger
+        scenario = self.kb.scenarios.get(danger.scenario or "") if danger else None
+        if danger is None or scenario is None:
+            return None
+
+        def lines(key: str) -> list[str]:
+            outcome = scenario.outcomes.get(danger.outcomes.get(key, ""))
+            places = outcome.destinations if outcome else ()
+            return [
+                render.place_line(Place(self.kb.facilities[p.facility], p.label, p.note))
+                for p in places
+            ]
+
+        who = c.s.talk.who
+        if "any" in danger.outcomes:
+            found = lines("any")
+        elif who is not None:
+            found = lines("child" if who.audience == "child" else "adult")
+        else:
+            found = [texts.DANGER_ADULTS, *lines("adult"), texts.DANGER_CHILDREN, *lines("child")]
+        return "\n".join(found) or None
+
+    async def _danger_say(self, c: Ctx, kind: str) -> None:
+        """One of the templates, by the words of the question; the same line is not said
+        twice in a row — the next one is taken."""
+        places = self._danger_places(c) if kind == "where" else None
+        where = texts.DANGER_WHERE
+        if places:
+            where = f"{texts.ROUTE_GO}\n{places}\n\n{texts.DANGER_WHERE_KNOWN}"
+        said = {
+            "first": texts.DANGER_FIRST,
+            "insists": texts.DANGER_NO_BOOKING,
+            "where": where,
+            "how_long": texts.DANGER_HOW_LONG,
+            "called": texts.DANGER_CALLED,
+            "other": texts.DANGER_OTHER,
+        }
+        order = [kind, *(k for k in ("other", "first", "insists") if k != kind)]
+        key = next(k for k in order if f"danger:{k}" != c.s.talk.line)
+        c.line = f"danger:{key}"
+        c.say(self._with_line(said[key]), self._danger_buttons())
+
+    async def _danger_text(self, c: Ctx, text: str, said: str | None) -> None:
+        """A text while the state is on, or the phrase that switches it on."""
+        emergency = self.clinic.clinic.emergency
+        if c.s.talk.danger is None:
+            assert said is not None
+            route = next((r for r in emergency.routes if said in r.phrases), None)
+            outcomes = {"adult": route.adult, "child": route.child} if route else None
+            if c.for_whom is None:  # «у сына кость торчит»: whose addresses to name later
+                self._said_who(c, find_audience(text))
+            self._danger_set(c, said, route.scenario if route else None, outcomes)
+            await self._danger_say(c, "first")
+            return
+        if said is None and find_phrase(text, emergency.over):  # «кровь остановилась»
+            self._danger_off(c)
+            self._reset(c)
+            c.say(self.kb.common.more_help.text, self._main_menu(c))
+            return
+        if said is None and find_navigation(text) == "home":
+            await self._show_menu(c)
+            return
+        if said is None and (find_command(text) == "admin" or wants_handoff(text)):
+            await self._handoff(c, texts.ASK_ADMIN_REASON, text)
+            return
+        self._reset(c)  # whatever step it was: nothing goes on
+        await self._danger_say(c, danger_question(text))
 
     # --- after a route (rule 5): the same injury is not booked ------------------------------
 
@@ -2524,9 +2659,15 @@ class Conversation:
         if handler is None:
             c.say(texts.STALE, [_home()])
             return
+        if c.s.talk.danger is not None and not self._danger_allows(c, head, rest):
+            await self._danger_say(c, "insists")  # an old button does not book either
+            return
         await handler(c, rest)
 
     async def _on_menu(self, c: Ctx, item: str) -> None:
+        if c.s.talk.danger is not None and item not in ("admin", "my", "home"):
+            await self._danger_say(c, "insists")  # /book, /ask: nothing is booked
+            return
         if item == "book":
             self._start_booking(c)
         elif item == "resume":
@@ -3032,6 +3173,12 @@ class Conversation:
                     [Button(texts.HANDOFF_NO, "h:no")],
                 ],
             )
+        elif done.kind == "emergency":  # 04-11, the signs: the «угроза жизни» state
+            answers = texts.DANGER_BY_SCENARIO.format(
+                number=done.scenario.number, title=done.scenario.title
+            )
+            self._danger_set(c, answers, done.scenario.id, {"any": done.outcome_id})
+            self._final(c, text, [*more, *self._danger_buttons()])
         else:
             c.s.step = "idle"
             self._final(
@@ -3505,6 +3652,15 @@ class Conversation:
         if self._cards_on():
             text = await self._admin_booking(c, booking)
             c.turn.admin.append(AdminPost(text, booking_id=booking.id))
+        elif c.s.talk.danger_said and self.settings.admin_chat_id:
+            # no cards in the admin chat: the phrase still reaches the administrators
+            note = texts.DANGER_BOOKED.format(
+                number=booking.id,
+                when=render.format_day_time(self._local(booking.start_at)),
+                doctor=booking.doctor,
+                phrase=c.s.talk.danger_said,
+            )
+            c.turn.admin.append(AdminPost(note))
         c.say(self.kb.common.identify_thanks.text, remove_keyboard=True)
         c.say("", media=BOOKED, media_only=True)
         if photo := self.clinic.schedule.doctor_photos.get(slot.doctor):
@@ -3566,7 +3722,7 @@ class Conversation:
         telegram = c.user.display_name or ""
         if c.user.username:
             telegram += f" @{c.user.username}"
-        return texts.ADMIN_BOOKING.format(
+        card = texts.ADMIN_BOOKING.format(
             number=booking.id,
             demo=texts.ADMIN_BOOKING_DEMO if booking.demo else "",
             when=render.format_day_time(self._local(booking.start_at)),
@@ -3578,6 +3734,9 @@ class Conversation:
             payment=texts.PAYMENT_KIND.get(booking.payment, booking.payment),
             telegram=f"{telegram.strip() or '—'} (id {c.user.id})",
         )
+        if c.s.talk.danger_said:  # the «угроза жизни» state was on in this conversation
+            card += "\n" + texts.DANGER_WAS.format(phrase=c.s.talk.danger_said)
+        return card
 
     def _unpin(self, c: Ctx, booking: Booking) -> None:
         if booking.chat_message_id:
@@ -4459,6 +4618,11 @@ class Conversation:
             c.s.step = "idle"
             c.say(texts.ADMIN_UNAVAILABLE, self._main_menu(c))
             return
+        hours = self.clinic.contacts.admin_working_hours
+        if c.s.talk.danger is not None and not hours.contains(self._local(c.now).time()):
+            # said at once, before the consent and the phone: nobody answers until the morning
+            later = texts.DANGER_ADMIN_LATER.format(start=f"{hours.start:%H:%M}")
+            c.say(self._with_line(later))
         current = await self._open_handoff(c)
         if current is not None:
             await self._add_to_handoff(c, current)
@@ -4575,6 +4739,10 @@ class Conversation:
             lines = [texts.ADMIN_ADDENDUM.format(number=handoff.id), f"Причина: {reason}"]
         else:
             lines = [f"Обращение № {handoff.id} из бота травмпункта", f"Причина: {reason}"]
+        if (danger := c.s.talk.danger) is not None:
+            lines.insert(0, texts.DANGER_ADMIN_MARK.format(phrase=danger.phrase))
+        elif c.s.talk.danger_said:
+            lines.append(texts.DANGER_WAS.format(phrase=c.s.talk.danger_said))
         dialog = c.s.dialog
         if dialog.scenario_id:
             scenario = self.kb.scenario(dialog.scenario_id)

@@ -400,6 +400,39 @@ _WAITING = re.compile(
     r"\b(?:буду|будем)\s+ждать\b|\bжду\s+(?:звонка|ответа)\b|\bвопросов\s+(?:больше\s+)?нет\b"
     r"|\bна\s+этом\s+все\b"
 )
+_DANGER_QUESTIONS: tuple[tuple[DangerQuestion, re.Pattern[str]], ...] = (
+    (
+        "where",
+        re.compile(
+            r"\bкуда\b|\bкак\w+\s+больниц\w*|\bадрес\w*\b"
+            r"|\bгде\s+(?:\w+\s+){0,2}?(?:больниц\w*|примут|принимают)\b"
+        ),
+    ),
+    (
+        "how_long",
+        re.compile(
+            r"\b(?:сколько|долго)\s+(?:\w+\s+){0,2}?ждать\b|\bчерез\s+сколько\b|\bкак\s+скоро\b"
+            r"|\bкогда\s+(?:\w+\s+){0,2}?(?:приедет|приедут|приезжает)\b"
+            r"|\b(?:приедет|приедут)\s+(?:\w+\s+){0,2}?когда\b"
+        ),
+    ),
+    (
+        "insists",
+        re.compile(
+            r"\bзапис\w+|\bзапиш\w+|\bне\s+буду\s+(?:\w+\s+)?(?:звонить|вызывать)\b"
+            r"|\bне\s+(?:хочу|надо|нужно|нужна)\s+(?:\w+\s+)?скор\w+|\bбез\s+скор\w+"
+            r"|\bв\s+травмпункт\w*\b|\bк\s+врачу\b|\bна\s+прием\b|\bпримите\b|\bпринимайте\b"
+        ),
+    ),
+    (
+        "called",
+        re.compile(
+            r"\b(?:вызвал\w*|вызвали|вызываю|вызову)\b|\b(?:позвонил\w*|звоню|позвоню|набрал\w*)\b"
+            r"|\bскор\w+\s+(?:\w+\s+)?(?:едет|едут|в\s+пути|приехал\w*)\b|\bедут\b"
+            r"|\b(?:спасибо|хорошо|ладно|понял\w*|ок|окей|ясно)\b"
+        ),
+    ),
+)
 _GO = (
     r"(?:ехать|поехать|идти|пойти|везти|повезти|приезжать|приехать|приходить|прийти|обращаться|"
     r"обратиться|деваться|податься)"
@@ -567,6 +600,20 @@ def asks_when_admin(text: str) -> bool:
         return True
     doctor = re.search(r"\b(?:врач\w*|доктор\w*)\b", t)
     return _WHEN_ANSWER.search(t) is not None and doctor is None
+
+
+DangerQuestion = Literal["where", "how_long", "insists", "called", "other"]
+
+
+def danger_question(text: str) -> DangerQuestion:
+    """What a message asks in the «угроза жизни» state: «куда ехать?» → where, «сколько
+    ждать?» → how_long, «записывайте», «не буду звонить» → insists, «вызвал скорую»,
+    «спасибо» → called; anything else — other."""
+    t = normalize(text)
+    for kind, pattern in _DANGER_QUESTIONS:
+        if pattern.search(t):
+            return kind
+    return "other"
 
 
 def asks_where_to_go(text: str) -> bool:

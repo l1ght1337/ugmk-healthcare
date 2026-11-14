@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.bot import render, texts
+from app.bot import texts
 from app.bot.conversation import UserRef
 from app.config import PROJECT_ROOT, ClinicData, Emergency
 from app.db.models import Booking, Patient, User
@@ -191,8 +191,9 @@ async def test_emergency_phrases_work_on_every_step(
             (await s.get(User, chat.user.id)).session = saved
             await s.commit()
         await chat.say(said)
-        assert chat.text == render.emergency_message(clinic), (said, step)
-        assert fake.requests == [] and texts.MENU_BOOK in chat.labels(), (said, step)
+        assert chat.text == texts.DANGER_FIRST, (said, step)
+        assert fake.requests == [], (said, step)
+        assert chat.labels() == [texts.MENU_ADMIN, texts.MENU], (said, step)  # nothing books
 
 
 async def test_a_bruised_toe_is_not_an_emergency(make_chat, kb: KnowledgeBase) -> None:

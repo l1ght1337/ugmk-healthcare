@@ -169,9 +169,21 @@ class Contacts(_Data):
 EVERYDAY_WORDS = frozenset({"больно", "сильно", "срочно", "плохо", "упала", "ударился", "опухло"})
 
 
+class EmergencyRoute(_Data):
+    """Phrases of the list the scripts have addresses for: «кость торчит» — 04-07."""
+
+    phrases: tuple[str, ...] = Field(min_length=1)
+    scenario: str
+    adult: str  # the outcome with the addresses for an adult
+    child: str
+
+
 class Emergency(_Data):
     reply: str
     phrases: tuple[str, ...] = Field(min_length=1)
+    # «кровь остановилась», «ложная тревога»: the «угроза жизни» state is switched off
+    over: tuple[str, ...] = ()
+    routes: tuple[EmergencyRoute, ...] = ()
 
     @field_validator("phrases")
     @classmethod

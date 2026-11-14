@@ -34,6 +34,40 @@ HANDOFF = (
 HANDOFF_LATER = " в рабочее время (с {start} до {end})"
 OFFER_ADMIN = "Если удобнее, я могу передать Ваше обращение администратору — с Вами свяжутся."
 EMERGENCY_ALSO = "Также можно обратиться:"
+# The «угроза жизни» state of a conversation (config/clinic.yaml, emergency; the customer's
+# wording of 14.11.2026, docs/clinic_requests.md item 65). The code picks the line by the
+# words of the question; the same line is never said twice in a row.
+DANGER_FIRST = "С такими жалобами нужна скорая помощь: позвоните 103 или 112 прямо сейчас."
+DANGER_NO_BOOKING = (
+    "Записать Вас сейчас я не могу: травмпункт принимает по записи на время, а с такими "
+    "жалобами ждать времени приёма нельзя. Скорая — 103 или 112."
+)
+DANGER_WHERE = (
+    "Адреса больницы для такого случая в моих данных нет. Скорая отвезёт туда, где примут: "
+    "103 или 112."
+)
+# … where the scripts have addresses (an open fracture, a bite with the signs): after them
+DANGER_WHERE_KNOWN = "Скорая отвезёт туда, где примут: 103 или 112."
+DANGER_ADULTS = "Взрослым:"
+DANGER_CHILDREN = "Детям:"
+DANGER_HOW_LONG = (
+    "Сколько ждать скорую, скажет диспетчер 103. Запись в травмпункт при таких жалобах я не "
+    "оформляю."
+)
+DANGER_CALLED = "Хорошо. Когда понадобится запись в травмпункт — напишите."
+DANGER_OTHER = (
+    "Я бот и не могу оценить Ваше состояние, поэтому не записываю. Номера скорой: 103 или 112. "
+    "Могу передать Ваше сообщение администратору."
+)
+# «Позвать администратора» outside the administrators' hours: before the consent and the phone
+DANGER_ADMIN_LATER = (
+    "Администратор ответит только после {start}. Не ждите его — звоните 103 или 112."
+)
+# for the administrators: the first line of a request, and a line with a booking made later
+DANGER_ADMIN_MARK = "⚠️ угроза жизни: {phrase}"
+DANGER_WAS = "В разговоре была фраза из списка угрозы жизни: «{phrase}»"
+DANGER_BOOKED = "Запись № {number} ({when}, {doctor}). " + DANGER_WAS
+DANGER_BY_SCENARIO = "опасные признаки по сценарию {number} «{title}»"
 AMBULANCE_LINE = "Линия скорой помощи клиники: {phone}."
 ROUTE_LEAD = "С такой травмой Вам нужно обратиться:"  # script branch has no phrase
 

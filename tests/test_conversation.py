@@ -301,8 +301,8 @@ async def test_case_20_emergency_interrupts_any_step(make_chat) -> None:
     await chat.start()
     await chat.press(texts.MENU_BOOK)
     await chat.say("Кровь хлещет, не останавливается")
-    assert chat.text == "При угрозе жизни звоните 103 или 112."
-    assert texts.MENU_BOOK in chat.labels()
+    assert chat.text == texts.DANGER_FIRST  # the «угроза жизни» state: tests/test_danger.py
+    assert chat.labels() == [texts.MENU_ADMIN, texts.MENU]  # no «Записаться в травмпункт»
 
 
 async def test_child_age_from_complaint_is_confirmed_with_buttons(make_chat, kb) -> None:

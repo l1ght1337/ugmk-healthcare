@@ -365,3 +365,17 @@ async def test_the_route_and_a_booking_after_it_is_a_violation_too(env: sim.Env)
 
 def test_the_rule_is_in_the_report_table() -> None:
     assert sim.ROUTED_BOOKED in sim.RULES
+
+
+async def test_the_danger_state_is_a_plain_refusal_for_a_patient_due_an_ambulance(
+    env: sim.Env,
+) -> None:
+    patient = ScriptedPatient(
+        "срочно! порезал руку сильно, кровь не останавливается, что делать??",
+        "да не буду я звонить, мне записаться надо!",
+        "скажите хотя бы куда ехать, в какую больницу",
+        ("press", "Позвать администратора"),
+    )
+    dialog = await play(BY_KEY["bleeding"], patient, env)
+    assert dialog.steps[0].replies[0].text == texts.DANGER_FIRST
+    assert dialog.steps[-1].bookings == [] and check(dialog, env.kb, env.clinic) == []

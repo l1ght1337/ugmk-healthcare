@@ -471,6 +471,13 @@ REFUSALS = (
     texts.ASIDE_UNKNOWN,
     texts.NO_SLOTS,
     texts.OTHER_DEPARTMENT_NO_PHONE,
+    # the «угроза жизни» state: an ambulance, no booking
+    texts.DANGER_FIRST,
+    texts.DANGER_NO_BOOKING,
+    texts.DANGER_WHERE,
+    texts.DANGER_WHERE_KNOWN,
+    texts.DANGER_HOW_LONG,
+    texts.DANGER_OTHER,
 )
 EXPLAINED = ("не дежурит", "не ведёт", "свободного времени", "не открыта", "Такого врача")
 WISH_BUTTONS = (
