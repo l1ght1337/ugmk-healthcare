@@ -84,6 +84,8 @@ from app.flow.identity import (
     age_in_months,
     find_full_name,
     find_phone,
+    has_patronymic,
+    name_is_known,
     normalize_phone,
     parse_birth_date,
 )
@@ -241,6 +243,7 @@ StepName = Literal[
     "consent",
     "patient",
     "name",
+    "name_ok",
     "birth",
     "contact",
     "payment",
@@ -269,6 +272,7 @@ STAGE_OF: dict[str, int] = {
     "consent": 5,
     "patient": 5,
     "name": 5,
+    "name_ok": 5,  # «Пациент: Ли Вэй — верно?»
     "birth": 5,
     "contact": 5,
     "teen": 5,  # 15–17 and «для себя»: an administrator, or a parent takes over
@@ -292,7 +296,7 @@ MENU_ITEM = {"book": "book", "my_bookings": "my", "ask": "ask", "admin": "admin"
 COMMAND_ACTIONS = frozenset({*MENU_ITEM, "forget", "about_bot"})
 NAV_ACTIONS = frozenset({"home", "back"})  # route: «хочу на стартовый экран», «верни вопрос»
 # Steps answered by a button: a text there is read by route before the bot gives a hint.
-BUTTON_STEPS = frozenset({*TIME_STEPS, "second", "consent", "patient", "child_confirm"})
+BUTTON_STEPS = frozenset({*TIME_STEPS, "second", "consent", "patient", "child_confirm", "name_ok"})
 
 
 class Session(BaseModel):
@@ -989,6 +993,8 @@ class Conversation:
             await self._identify(c)
         elif step == "name":
             self._ask_name(c)
+        elif step == "name_ok":
+            self._name_ok_screen(c)
         elif step == "birth":
             self._ask_birth(c)
         elif step == "contact":
@@ -1417,7 +1423,7 @@ class Conversation:
         today = self._local(c.now).date()
         valid = {
             "age": lambda: parse_age_months(text) is not None,
-            "name": lambda: find_full_name(text) is not None,
+            "name": lambda: self._read_name(c, text) is not None,
             "birth": lambda: parse_birth_date(text, today) is not None,
             "contact": lambda: find_phone(text) is not None,
         }[step]()
@@ -1551,6 +1557,7 @@ class Conversation:
             "whom": self._on_whom_text,
             "first": self._on_first_text,
             "name": self._on_name,
+            "name_ok": self._on_name_ok_text,
             "birth": self._on_birth,
             "contact": self._on_phone_text,
             "info": self._on_free_text,
@@ -1842,8 +1849,62 @@ class Conversation:
         else:
             await self._show(c, step)
 
-    async def _on_name(self, c: Ctx, text: str) -> None:
+    def _read_name(self, c: Ctx, text: str) -> tuple[str, str, str | None] | None:
+        """The full name typed on the name step — or None.
+
+        A name with a patronymic is a name. Two or three words without one are not, if
+        another reader of the bot understands them: a question, «да» / «не знаю», a wish for
+        a day, a time or a doctor, a complaint, a request for advice («болит нога», «завтра
+        утром», «что делать»).
+        """
         name = find_full_name(text)
+        if name is None or has_patronymic(name):
+            return name
+        local = self._local(c.now)
+        doctors = self.clinic.schedule.doctors
+        wish = parse_wish(text, doctors, local.date(), context="time", now=local.time())
+        understood = (
+            "?" in text
+            or yes_no(text) is not None
+            or is_unsure(text)
+            or says_self(text)
+            or asks_advice(text)
+            or not wish.wish.empty
+            or wish.question is not None
+            or wish.unknown_doctor
+            or topics.guess_area(text) is not None
+            or bool(topics.guess_candidates(text))
+        )
+        return None if understood else name
+
+    def _name_ok_screen(self, c: Ctx) -> None:
+        c.s.step = "name_ok"
+        name = " ".join(part for part in c.s.draft_name or [] if part)
+        buttons = [
+            Button(texts.NAME_YES, "nm:yes", "primary"),
+            Button(texts.NAME_AGAIN, "nm:again"),
+        ]
+        self._screen(c, texts.NAME_CONFIRM.format(name=name), buttons)
+
+    async def _on_name_ok(self, c: Ctx, value: str) -> None:
+        if c.s.step != "name_ok" or not c.s.draft_name:
+            c.say(texts.STALE, [_home()])
+        elif value == "yes":
+            self._ask_birth(c)
+        else:
+            c.s.draft_name = None
+            self._ask_name(c)
+
+    async def _on_name_ok_text(self, c: Ctx, text: str) -> None:
+        """Another name typed on «Пациент: … — верно?» replaces the one asked about."""
+        if self._read_name(c, text) is not None:
+            await self._on_name(c, text)
+            return
+        c.say(texts.HINT_BUTTONS)
+        await self._render_screen(c)
+
+    async def _on_name(self, c: Ctx, text: str) -> None:
+        name = self._read_name(c, text)
         if name is None:
             c.s.name_asks += 1
             if c.s.name_asks < 2:
@@ -1853,6 +1914,9 @@ class Conversation:
                 c.say(texts.NAME_HELP, rows)
             return
         c.s.draft_name, c.s.name_asks = list(name), 0
+        if not name_is_known(name):  # no word of the list of names, no patronymic: asked
+            self._name_ok_screen(c)
+            return
         self._ask_birth(c)
 
     def _ask_birth(self, c: Ctx) -> None:
@@ -2059,6 +2123,7 @@ class Conversation:
             "sec": self._on_second,
             "mo": self._on_whom,
             "tn": self._on_teen,
+            "nm": self._on_name_ok,
             "pf": self._on_first,
             "pe": self._on_person,
         }.get(head)

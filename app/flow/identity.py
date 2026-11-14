@@ -73,6 +73,21 @@ def parse_full_name(text: str) -> tuple[str, str, str | None] | None:
     return words[0], words[1], patronymic  # not clear: as it is written
 
 
+def has_patronymic(name: tuple[str, str, str | None]) -> bool:
+    """The third word is a patronymic by its ending or its particle — not just a third word."""
+    third = name[2]
+    if third is None:
+        return False
+    words = third.split()
+    return _is_patronymic(words[-1]) or _key(words[-1]) in _PATRONYMIC_PARTICLES
+
+
+def name_is_known(name: tuple[str, str, str | None]) -> bool:
+    """A patronymic, or a first name of the list among the words: taken as it is. Otherwise
+    the bot asks «Пациент: Ли Вэй — верно?» — any two words could be typed there."""
+    return has_patronymic(name) or any(_key(word) in _FIRST_NAMES for word in name[:2])
+
+
 # Words next to a name that are not a part of it: «меня зовут …», «пациент — …», «ладно, …».
 _NOT_NAME_WORDS = (
     "я меня мне мы мои мой моя мое зовут это вот пациент пациента пациентка пациентку фио "

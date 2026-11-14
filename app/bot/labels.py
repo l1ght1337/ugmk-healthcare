@@ -233,6 +233,10 @@ def render_labels(kb: KnowledgeBase) -> str:
             [texts.MENU_ADMIN],
         ),
         _row(
+            "ФИО без отчества и без известного имени: «Пациент: Ли Вэй — верно?»",
+            [texts.NAME_YES, texts.NAME_AGAIN, texts.BACK, texts.MENU],
+        ),
+        _row(
             "ФИО не разобрано второй раз подряд: «Не получается разобрать ФИО…»",
             [texts.MENU_ADMIN, texts.BACK, texts.MENU],
         ),

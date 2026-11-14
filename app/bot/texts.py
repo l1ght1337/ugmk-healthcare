@@ -363,6 +363,10 @@ NAME_HELP = (
     "Не получается разобрать ФИО. Напишите, пожалуйста, одним сообщением только три слова: "
     "фамилию, имя и отчество. Или позовите администратора."
 )
+# a name with no word of the list of first names and no patronymic: asked, not taken silently
+NAME_CONFIRM = "Пациент: {name} — верно?"
+NAME_YES = "Да, верно"
+NAME_AGAIN = "Ввести заново"
 # how the full name was read (any word order): shown above the request for the birth date
 PATIENT_IS = "Пациент: {name}. Если неверно, нажмите «Назад»."
 ASK_BIRTH = "Дата рождения пациента — например, 12.03.2015."
