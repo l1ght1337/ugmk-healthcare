@@ -89,10 +89,12 @@ async def to_cut(chat) -> None:
 @pytest.mark.parametrize(
     ("said", "reading"),
     [
-        ("А в травмпункт меня всё-таки примут? У меня же рана на стопе, это травма ноги.", CUT),
-        ("А рану мне хоть обработают?", UNCLEAR),
-        ("А рану мне хоть обработают? Чем её пока мазать?", MEDICAL),
+        # no injury and no body part named: the talk is about the injury of the route
+        ("А в травмпункт меня всё-таки примут?", CUT),
         ("Так вы меня всё-таки не запишете? Я же написала, что случилось.", UNCLEAR),
+        ("А что мне теперь делать-то?", MEDICAL),
+        # the words of the route's own scenario: the same injury, whatever else is named
+        ("А в травмпункт меня всё-таки примут? У меня же рана на стопе, там же игла была", CUT),
     ],
 )
 async def test_a_question_after_the_route_gets_the_route_not_step_one(
@@ -108,6 +110,58 @@ async def test_a_question_after_the_route_gets_the_route_not_step_one(
     assert (await session(chat))["step"] == "offer_admin"
 
 
+# --- an injury or a body part named after the route: the same one or another? --------------
+# «А с вывихом пальца можно записаться?» must not get the route of the needle once more.
+
+SAME_SCREEN = [texts.SAME_INJURY, texts.OTHER_INJURY, texts.MENU]
+
+
+@pytest.mark.parametrize(
+    ("said", "reading"),
+    [
+        ("а с вывихом пальца можно записаться?", complaint("dislocation")),
+        ("а с вывихом пальца можно записаться?", UNCLEAR),
+        ("А в травмпункт меня всё-таки примут? У меня же рана на стопе, это травма ноги.", CUT),
+        ("А рану мне хоть обработают?", UNCLEAR),
+        ("А рану мне хоть обработают? Чем её пока мазать?", MEDICAL),
+        ("ещё плечо болит, упал вчера", UNCLEAR),
+    ],
+)
+async def test_an_injury_named_after_the_route_is_asked_same_or_other(
+    make_chat, kb: KnowledgeBase, said: str, reading: dict
+) -> None:
+    chat = make_chat(assistant=FakeDeepSeek(reading, {"found": False}).assistant(kb))
+    await needle_route(chat)
+    await chat.say(said)
+    screen = chat.replies[-1]
+    assert screen.text.endswith(texts.SAME_OR_OTHER) and chat.labels() == SAME_SCREEN
+    assert AIDS not in screen.text and (await session(chat))["step"] == "same"
+
+
+async def test_another_injury_named_in_a_question_is_booked(make_chat, kb: KnowledgeBase) -> None:
+    chat = make_chat(assistant=FakeDeepSeek(UNCLEAR).assistant(kb))
+    await needle_route(chat)
+    await chat.say("а с вывихом пальца можно записаться?")
+    await chat.press(texts.OTHER_INJURY)
+    assert texts.ASK_AUDIENCE in chat.text  # «вывих» by the word list: the scenario goes on
+    assert (await session(chat))["dialog"]["scenario_id"] == "dislocation"
+
+
+async def test_the_same_injury_is_not_asked_about_on_every_message(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    fake = FakeDeepSeek(UNCLEAR, UNCLEAR, {"found": False}, MEDICAL)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await needle_route(chat)
+    await chat.say("А рану мне хоть обработают?")
+    await chat.press(texts.SAME_INJURY)
+    assert chat.replies[-1].text == NOT_HERE
+    await chat.say("Но рана же на ноге, это травма ноги!")
+    assert texts.SAME_OR_OTHER not in chat.text and AIDS in chat.text  # the route, not asked
+    await chat.say("А чем рану пока мазать?")
+    assert texts.SAME_OR_OTHER not in chat.text and "Шаг" not in chat.text
+
+
 async def test_the_route_is_remembered_through_a_question_in_between(
     make_chat, kb: KnowledgeBase
 ) -> None:
@@ -118,7 +172,7 @@ async def test_the_route_is_remembered_through_a_question_in_between(
     await needle_route(chat)
     await chat.say("а вы круглосуточно работаете?")
     assert chat.replies[0].text == "Круглосуточно."
-    await chat.say("А в травмпункт меня всё-таки примут? У меня же рана на стопе.")
+    await chat.say("А в травмпункт меня всё-таки примут?")
     assert chat.replies[-1].text == NOT_HERE
 
 
@@ -270,7 +324,7 @@ async def test_go_or_wait_after_the_route_is_a_template(make_chat, kb: Knowledge
     await needle_route(chat)
     await handed(chat)
     said = []
-    for text in GO_OR_WAIT:
+    for text in GO_OR_WAIT[:6]:  # the last one names the wound: asked «та же или другая?»
         await chat.say(text)
         (only,) = chat.replies
         said.append(only.text)

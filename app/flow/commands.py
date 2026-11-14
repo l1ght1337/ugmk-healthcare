@@ -466,12 +466,17 @@ _THAT_PLACE = re.compile(
     rf"\b(?:эту|этой|этот|этом|этого|той|том|ту|тот|того)\s+{_PLACE_NOUN}"
     rf"|\b{_PLACE_NOUN}\s+(?:эту|этой|этот|этом|этого|той|том|ту|тот|того)\b"
 )
-_THERE = re.compile(r"\b(?:туда|там|оттуда)\b")
+_VISIT = (
+    r"(?:принима\w+|примут|возьмут|приехать|приезжать|ехать|прийти|приходить|идти|попасть|"
+    r"добраться|обращаться|запис\w+|работа\w+|круглосуточн\w+|очеред\w+|документ\w+|платн\w+|"
+    r"бесплатн\w+|адрес\w*|телефон\w*)"
+)
 _HOW_THERE = re.compile(r"\bкак\s+(?:туда|там)\b|\b(?:туда|там)\s+как\b")  # «а туда как?»
-_VISIT_WORD = re.compile(
-    r"\b(?:принима\w+|примут|возьмут|приехать|приезжать|ехать|попасть|добраться|обращаться|"
-    r"запис\w+|работа\w+|круглосуточн\w+|очеред\w+|документ\w+|платн\w+|бесплатн\w+|адрес\w*|"
-    r"телефон\w*)\b"
+# «там круглосуточно принимают?», «туда можно сегодня прийти?» — the word about a visit
+# stands next to «там»; «меня примут? … там же игла была» is about the wound
+_VISIT_THERE = re.compile(
+    rf"\b(?:туда|там|оттуда)\s+(?:\w+\s+){{0,3}}?{_VISIT}\b"
+    rf"|\b{_VISIT}\s+(?:\w+\s+){{0,2}}?(?:туда|там)\b"
 )
 PLACE_WORD = 5  # shorter words of a place's name do not name it («ул», «пер», «46»)
 _PLACE_COMMON = frozenset(
@@ -654,9 +659,7 @@ def asks_about_there(text: str, places: Sequence[str]) -> bool:
     записи?» — about the place of a route (``places`` — «Центр борьбы со СПИДом, ул. Ясная,
     46»), not about the trauma centre. «Там болит, где ударился» is about the injury."""
     t = re.sub(r"\bне\s+туда\b", " ", normalize(text))  # «боюсь везти не туда»
-    if _THAT_PLACE.search(t) or _HOW_THERE.search(t):
-        return True
-    if _THERE.search(t) and _VISIT_WORD.search(t):
+    if _THAT_PLACE.search(t) or _HOW_THERE.search(t) or _VISIT_THERE.search(t):
         return True
     return any(re.search(rf"\b(?:на|в|во|до|к|у|около)\s+{stem}\w*", t) for stem in _stems(places))
 

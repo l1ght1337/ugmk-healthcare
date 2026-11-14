@@ -363,6 +363,7 @@ class Talk(BaseModel):
     answered: Routed | None = None
     notes: dict[str, str] = {}  # booking id → lines for its card in the admin chat
     other: bool = False  # «Другая»: the booking after the route is about another injury
+    same: bool = False  # «Та же»: an injury named later is that one, not asked again
     # asked once: dropped when another person is named, on «Изменить», by a booking made
     who: Who | None = None
     # the section 5 scenarios whose guard_words a complaint had, to ask about one after
@@ -1771,6 +1772,8 @@ class Conversation:
             return False
         if wants_handoff(text) or find_command(text) == "admin":
             return False  # «передайте вопрос администратору»: a request, not a question
+        if self._injury_named(c, text):
+            return False  # «а с вывихом пальца можно записаться?»: the same one or another
         if asks_where_to_go(text):
             waits = mentions_call(text) or await self._open_handoff(c) is not None
             await self._route_line(c, done, "no_wait" if waits else "go", text)
@@ -1800,6 +1803,11 @@ class Conversation:
             return False  # a complaint, or «что делать?» in the talk about that injury
         routed = c.s.talk.routed
         assert routed is not None
+        if self._injury_named(c, text, reading.scenario_id):
+            if reading.kind == "complaint" and reading.scenario_id:
+                return False  # _begin asks «та же травма или другая?» before that scenario
+            self._same_words(c, text)  # no scenario named: asked here, by the words
+            return True
         infant = INFANT_SCENARIO in routed.dialog.trail
         asks = is_question(text) or reading.question or reading.advice
         asks = asks or reading.kind == "medical_question"
@@ -1816,6 +1824,35 @@ class Conversation:
             c.say(texts.MEDICAL_ASIDE)  # «как понять, угроза жизни или нет?»: no advice
         await self._route_line(c, done, "not_here", text)
         return True
+
+    def _injury_named(self, c: Ctx, text: str, scenario_id: str | None = None) -> bool:
+        """A message after a route names an injury or a body part, and nothing says it is
+        the injury of the route: «а с вывихом пальца можно записаться?». Then the bot asks
+        «та же травма или другая?» instead of giving the route once more.
+
+        It is the injury of the route when the patient has said «Та же», when the child is
+        under 6 months (any complaint is 05-04), when DeepSeek names the scenario of the
+        route, or when the message has that scenario's own guard words («там же игла была»).
+        """
+        routed = c.s.talk.routed
+        if routed is None or c.s.talk.same or c.s.talk.other:
+            return False
+        trail = routed.dialog.trail
+        if INFANT_SCENARIO in trail or (scenario_id is not None and scenario_id in trail):
+            return False
+        if any(g in trail for g in topics.guard_scenarios(self.kb, text)):
+            return False
+        return self._injury_in(text) is not None
+
+    def _same_words(self, c: Ctx, text: str) -> None:
+        """«Та же травма или другая?» for an injury known by the word lists only; «Другая»
+        goes on with what the words name."""
+        area, words = self._injury_in(text) or (None, [])
+        wish, (for_whom, kept) = c.s.wish, self._for_whom(c)
+        self._reset(c, booking=True)
+        c.s.wizard, c.s.area, c.s.hint, c.s.wish = True, area, list(words), wish
+        c.s.for_whom, c.s.who_kept = for_whom, kept  # type: ignore[assignment]
+        self._same_screen(c)
 
     def _guard_asked(
         self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], child_age: int | None
@@ -1907,7 +1944,7 @@ class Conversation:
     async def _on_same(self, c: Ctx, value: str) -> None:
         """«Та же» — the route once more and an administrator; «Другая» — the booking."""
         scenario = c.s.pending_scenario
-        if c.s.step != "same" or scenario is None or value not in ("same", "other"):
+        if c.s.step != "same" or value not in ("same", "other"):
             c.say(texts.STALE, [_home()])
             return
         if value == "same":
@@ -1915,10 +1952,15 @@ class Conversation:
             if done is None:
                 await self._show_menu(c)
                 return
-            await self._route_line(c, done, "not_here", self.kb.scenario(scenario).menu_label)
+            c.s.talk.same = True  # an injury named later in this talk is that one
+            label = self.kb.scenario(scenario).menu_label if scenario else texts.SAME_INJURY
+            await self._route_line(c, done, "not_here", label)
+            return
+        c.s.talk.other = True
+        if scenario is None:  # known by the word lists: its scenario, or the topics
+            await self._by_words(c, c.s.area, list(c.s.hint))
             return
         facts, age, picked = c.s.pending_facts, c.s.child_age, c.s.picked
-        c.s.talk.other = True
         c.s.pending_scenario, c.s.pending_facts, c.s.child_age = None, {}, None
         await self._begin(c, scenario, facts, age)
         c.s.picked = picked
@@ -3266,7 +3308,7 @@ class Conversation:
         if done.kind == "route" and done.scenario.kind == "routing":
             # section 5, «не принимаем, обратитесь в…»: not booked later in this talk
             c.s.talk.routed = Routed(dialog=c.s.dialog.model_copy(deep=True), at=c.now)
-            c.s.talk.other = False
+            c.s.talk.other = c.s.talk.same = False
         if done.kind == "book" and await self._too_many_bookings(c):
             return
         if done.kind == "book":
