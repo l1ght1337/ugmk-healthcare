@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -178,12 +178,31 @@ class EmergencyRoute(_Data):
     child: str
 
 
+class EmergencyOver(_Data):
+    """Words that the sign has passed: «кровь остановилась». They switch the «угроза жизни»
+    state off only after the phrases of ``after`` — of any but ``no_words_out`` if empty."""
+
+    phrases: tuple[str, ...] = Field(min_length=1)
+    after: tuple[str, ...] = ()
+
+
 class Emergency(_Data):
     reply: str
     phrases: tuple[str, ...] = Field(min_length=1)
-    # «кровь остановилась», «ложная тревога»: the «угроза жизни» state is switched off
-    over: tuple[str, ...] = ()
+    over: tuple[EmergencyOver, ...] = ()
+    # a loss of consciousness, a stop of breathing: no words switch the state off
+    no_words_out: tuple[str, ...] = ()
     routes: tuple[EmergencyRoute, ...] = ()
+
+    @model_validator(mode="after")
+    def _known_phrases(self) -> Emergency:
+        """``after``, ``no_words_out`` and the routes name phrases of the list itself."""
+        named = [p for group in self.over for p in group.after]
+        named += [*self.no_words_out, *(p for route in self.routes for p in route.phrases)]
+        unknown = sorted(set(named) - set(self.phrases))
+        if unknown:
+            raise ValueError(f"not in emergency.phrases: {unknown}")
+        return self
 
     @field_validator("phrases")
     @classmethod

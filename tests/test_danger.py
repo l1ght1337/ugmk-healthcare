@@ -316,3 +316,84 @@ def test_the_config_names_the_scripts_with_addresses(kb: KnowledgeBase, clinic) 
         scenario = kb.scenario(route.scenario)
         for outcome in (route.adult, route.child):
             assert scenario.outcomes[outcome].destinations
+
+
+# --- the words switch off only the state of their own kind (15.11.2026) ------------------------
+# After a loss of consciousness or a stop of breathing nothing the patient writes switches the
+# state off: «Меню» or /start only. «Кровь остановилась» does not switch off «не дышит».
+
+
+@pytest.mark.parametrize(
+    ("on_by", "said"),
+    [
+        ("ребёнок не дышит", "уже дышит, всё нормально"),
+        ("ребёнок не дышит", "задышал"),
+        ("ребёнок не дышит", "кровь остановилась"),
+        ("ребёнок не дышит", "ложная тревога"),
+        ("муж потерял сознание", "пришёл в себя"),
+        ("муж потерял сознание", "ложная тревога, он пришёл в себя"),
+        ("задыхается, трудно дышать", "ложная тревога"),
+    ],
+)
+async def test_after_consciousness_or_breathing_words_do_not_switch_it_off(
+    make_chat, on_by: str, said: str
+) -> None:
+    chat = make_chat()
+    await on(chat, on_by)
+    await chat.say(said)
+    assert chat.labels() == STATE and await danger(chat) is not None
+    assert texts.MENU_BOOK not in chat.labels()
+    await chat.press(texts.MENU)  # the way out
+    assert chat.labels() == MENU and await danger(chat) is None
+    assert (await session(chat))["talk"]["danger_said"]  # the line for the administrators stays
+
+
+async def test_the_bleeding_words_do_not_switch_off_another_phrase_said_later(make_chat) -> None:
+    chat = make_chat()
+    await on(chat)  # «кровь не останавливается»
+    await chat.say("он потерял сознание!")
+    await chat.say("кровь остановилась")
+    assert chat.labels() == STATE and await danger(chat) is not None
+
+
+@pytest.mark.parametrize(
+    ("on_by", "said", "off"),
+    [
+        ("у него судороги", "ложная тревога", True),  # no kind of its own: any but the two
+        ("у него судороги", "кровь остановилась", False),
+        ("кровь хлещет", "кровотечение остановилось", True),
+        ("кровь хлещет", "пришёл в себя", False),  # no longer a word of the list
+    ],
+)
+async def test_which_words_switch_which_state_off(
+    make_chat, on_by: str, said: str, off: bool
+) -> None:
+    chat = make_chat()
+    await on(chat, on_by)
+    await chat.say(said)
+    assert (await danger(chat) is None) is off
+
+
+async def test_the_outcome_of_a_scenario_is_not_switched_off_by_words(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await chat.press("Рана, ожог, укус")
+    await chat.press("Укус животного")
+    await chat.press(texts.AUDIENCE_SELF)
+    await chat.press("Да, есть")  # the signs of 04-11: pressure, breathing, consciousness
+    await chat.say("ложная тревога")
+    assert chat.labels() == STATE and await danger(chat) is not None
+
+
+def test_the_exit_words_of_the_config(clinic) -> None:
+    emergency = clinic.clinic.emergency
+    words = {w for group in emergency.over for w in group.phrases}
+    assert "ложная тревога" in words and "кровь остановилась" in words
+    for gone in ("пришел в себя", "пришла в себя", "уже дышит", "задышал", "задышала"):
+        assert gone not in words
+    for group in emergency.over:
+        assert set(group.after) <= set(emergency.phrases)
+    assert set(emergency.no_words_out) <= set(emergency.phrases)
+    for phrase in ("потерял сознание", "без сознания", "не дышит", "перестал дышать"):
+        assert phrase in emergency.no_words_out

@@ -101,7 +101,7 @@ from app.flow.identity import (
 )
 from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
 from app.flow.people import Person, find_people, merge, named_in
-from app.flow.safety import find_phrase
+from app.flow.safety import find_phrase, sign_passed
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import Choice, FactValue, Question, Scenario
 from app.flow.wishes import (
@@ -336,6 +336,8 @@ class Danger(BaseModel):
     """The «угроза жизни» state: no booking starts or goes on while it is on."""
 
     phrase: str  # what switched it on: a phrase of emergency.phrases, or the scenario's words
+    said: list[str] = []  # every phrase of the list said while it is on
+    locked: bool = False  # on by a scenario's outcome: no words switch it off
     scenario: str | None = None  # the scenario whose outcomes have addresses for this case
     outcomes: dict[str, str] = {}  # «adult» / «child» / «any» → the outcome with them
 
@@ -1558,7 +1560,14 @@ class Conversation:
         talk = c.s.talk
         self._reset(c)
         c.s.paused = c.s.paused_at = None
-        talk.danger = Danger(phrase=phrase, scenario=scenario, outcomes=outcomes or {})
+        listed = phrase in self.clinic.clinic.emergency.phrases
+        talk.danger = Danger(
+            phrase=phrase,
+            said=[phrase] if listed else [],
+            locked=not listed,  # the signs of a scenario (04-11): consciousness, breathing
+            scenario=scenario,
+            outcomes=outcomes or {},
+        )
         c.s.talk = talk
 
     def _danger_off(self, c: Ctx) -> None:
@@ -1634,7 +1643,11 @@ class Conversation:
             self._danger_set(c, said, route.scenario if route else None, outcomes)
             await self._danger_say(c, "first")
             return
-        if said is None and find_phrase(text, emergency.over):  # «кровь остановилась»
+        danger = c.s.talk.danger
+        if said is not None and said not in danger.said:
+            danger.said.append(said)  # one more sign: the words must answer it as well
+        passed = sign_passed(text, danger.said, emergency.over, emergency.no_words_out)
+        if said is None and not danger.locked and passed:  # «кровь остановилась»
             self._danger_off(c)
             self._reset(c)
             c.say(self.kb.common.more_help.text, self._main_menu(c))
