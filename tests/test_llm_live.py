@@ -136,6 +136,46 @@ async def test_intent_matrix_phrase(assistant: Assistant, intent: Intent) -> Non
         assert result.question, (intent.phrase, result)
 
 
+ADVICE = [
+    # 14.11, item 1: a medical question next to an injury stays a complaint
+    ("что делать укусила собака меня", "animal_bite", None),
+    ("порезал палец ножом, чем обработать?", "cut_sutures", "limb"),
+    ("Упал на руку, она опухла — это перелом?", None, "limb"),
+]
+
+
+@pytest.mark.parametrize(("text", "scenario", "area"), ADVICE, ids=[a[0] for a in ADVICE])
+async def test_complaint_with_a_medical_question(
+    assistant: Assistant, text: str, scenario: str | None, area: str | None
+) -> None:
+    result = await assistant.route(text)
+    assert result.kind == "complaint" and result.advice, result
+    if scenario:
+        assert result.scenario == scenario, result
+    if area:
+        assert result.area == area, result
+
+
+@pytest.mark.parametrize("text", ["Какое обезболивающее выпить?", "Нужно прикладывать лёд?"])
+async def test_medical_question_without_an_injury(assistant: Assistant, text: str) -> None:
+    result = await assistant.route(text)
+    assert result.kind == "medical_question", result
+
+
+@pytest.mark.parametrize(
+    ("text", "action"),
+    [
+        ("мне бы на самый первый экран попасть", "home"),
+        ("не туда нажал, верни прошлый вопрос", "back"),
+    ],
+)
+async def test_menu_and_back_beyond_the_word_list(
+    assistant: Assistant, text: str, action: str
+) -> None:
+    result = await assistant.route(text)
+    assert (result.kind, result.action) == ("menu_action", action), result
+
+
 async def test_asking_for_a_human(assistant: Assistant) -> None:
     result = await assistant.route("Соедините, пожалуйста, с администратором")
     assert (result.kind, result.action) == ("menu_action", "admin"), result

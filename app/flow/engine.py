@@ -220,9 +220,7 @@ class Engine:
         places = tuple(
             Place(self.kb.facilities[d.facility], d.label, d.note) for d in outcome.destinations
         )
-        notices: tuple[Notice, ...] = ()
-        if outcome.type == "book":
-            notices = tuple(n for n in scenario.notices if self._flags_match(n))
+        notices = self.notices(scenario) if outcome.type == "book" else ()
         return Done(scenario, outcome_id, outcome, places, notices)
 
     def _fallback(self, state: DialogState, scenario: Scenario, why: str) -> Done:
@@ -254,6 +252,10 @@ class Engine:
                 log.warning("scenario %s: ignored fact %s=%r", scenario.id, key, value)
                 continue
             state.facts[key] = value  # type: ignore[assignment]
+
+    def notices(self, scenario: Scenario) -> tuple[Notice, ...]:
+        """The scenario's script notices that hold now (config/clinic.yaml flags)."""
+        return tuple(n for n in scenario.notices if self._flags_match(n))
 
     def _flags_match(self, notice: Notice) -> bool:
         return all(getattr(self.clinic.clinic, k) == v for k, v in notice.when_config.items())

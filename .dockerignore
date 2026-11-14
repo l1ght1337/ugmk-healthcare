@@ -2,6 +2,7 @@
 .env
 .git
 .venv
+data/schedule.csv
 data/*.db
 data/*.db-journal
 data/*.jsonl

@@ -273,3 +273,13 @@ async def test_slots_lists_taken_time_too(schedule: MockSchedule) -> None:
     assert [s.start for s in every] == sorted(s.start for s in every)
     await schedule.book(free[0].id)
     assert free[0].id in {s.id for s in await schedule.slots(start, start + timedelta(days=1))}
+
+
+def test_demo_schedule_is_built_at_start_and_not_shipped() -> None:
+    """data/schedule.csv is runtime data: not in git, not in the image (14.11, item 6)."""
+    from app.config import PROJECT_ROOT
+
+    ignored = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "data/schedule.csv" in ignored
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "schedule.csv" not in dockerfile and "mkdir -p /app/data" in dockerfile

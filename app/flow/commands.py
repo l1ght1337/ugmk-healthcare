@@ -21,7 +21,7 @@ MenuAction = Literal[
 ]
 Navigation = Literal["back", "home", "cancel"]
 SmallTalk = Literal["greeting", "thanks", "ack", "bye"]
-Audience = Literal["adult", "child"]
+Audience = Literal["adult", "child", "self"]
 
 _BOOKING = r"(?:запис\w*|при[её]м\w*|визит\w*)"
 # Requests, not stories: «отмени запись», not «приём у врача отменили».
@@ -155,6 +155,32 @@ NAVIGATION: tuple[tuple[Navigation, re.Pattern[str]], ...] = (
     ),
 )
 
+NAVIGATION_WORDS = 5  # a longer message is a sentence, not a request to go somewhere
+
+
+def _words(text: str) -> frozenset[str]:
+    return frozenset(text.split())
+
+
+_NAV_FILLER = _words(
+    """
+    а ну и мне меня нас пожалуйста плиз пж бот давай давайте хочу можно надо нужно просто
+    снова опять обратно в во на к
+    """
+)
+_HOME_OK = _NAV_FILLER | _words(
+    """
+    меню открой откройте открыть покажи покажите показать верни верните вернись вернитесь
+    вернуться выйди выйти выход перейди перейдите перейти зайди главное главную основное
+    первоначальное начальное стартовое первое самое начало назад домой
+    """
+)
+_RESTART = frozenset({"заново", "сначала"})
+_RESTART_OK = _NAV_FILLER | _RESTART | _words("начать начни начните начнем все")
+_BACK_OK = _NAV_FILLER | _words(
+    "назад вернись вернитесь вернуться верни верните шаг шага шагу один вопрос вопросу экран экрану"
+)
+
 SMALL_TALK: tuple[tuple[SmallTalk, re.Pattern[str]], ...] = (
     (
         "greeting",
@@ -199,6 +225,31 @@ _QUESTION_START = re.compile(
 )
 YES = frozenset({"да", "ага", "угу", "конечно", "верно", "правильно", "именно", "точно", "так"})
 NO = frozenset({"нет", "неа", "не", "не надо", "не нужно", "не хочу"})
+# A request for medical advice or a diagnosis. «Можно ли записаться», «нужно ли брать
+# паспорт», «можно ли снять гипс у вас» are not: they are about the visit and the services.
+_MEDICAL_VERB = (
+    r"(?:мочить|намочить|наступать|наступить|ходить|греть|прогревать|прикладывать|приложить|"
+    r"мазать|намазать|помазать|пить|выпить|двигать|шевелить|нагружать|купать\w*|мыть\w*|"
+    r"бинтовать|забинтовать|терпеть|спать|заниматься|тренироваться|трогать|вскрывать|"
+    r"прокалывать|промывать|промыть|заклеивать|заклеить|охлаждать|массировать|разрабатывать|"
+    r"принимать\s+(?:душ|ванну|лекарств\w+|таблетк\w+|обезболивающ\w+)|"
+    r"(?:делать|сделать|ставить|поставить)\s+(?:прививк\w+|укол\w*|рентген\w*|снимок|"
+    r"компресс\w*))"
+)
+_ADVICE = re.compile(
+    r"\bчто\s+(?:(?:мне|нам|теперь|сейчас|же|дальше|с\s+(?:этим|ним|ней))\s+)*делать\b"
+    r"|\bчем\s+(?:(?:его|ее|это|лучше|можно)\s+)*(?:обработать|обрабатывать|мазать|помазать|"
+    r"намазать|промыть|лечить|обезболить|снять\s+боль|помочь)\b"
+    r"|\bкак\s+(?:(?:это|его|ее|лучше)\s+)?(?:лечить|вылечить|обезболить|снять\s+(?:боль|отек)|"
+    r"обработать|перевязать|помочь)\b"
+    r"|\bэто\s+(?:не\s+)?(?:перелом|вывих|растяжение|ушиб|трещина|разрыв|серьезно|опасно|"
+    r"страшно|нормально)\b"
+    r"|\b(?:перелом|вывих|растяжение|ушиб|трещина)\s+(?:это\s+)?или\b"
+    r"|\bкак\w+\s+(?:\w+\s+)?(?:обезболивающ\w+|мазь|мазью|лекарств\w+|таблетк\w+|крем\w*|"
+    r"препарат\w*)\b"
+    rf"|\b(?:можно|нужно|надо|стоит|обязательно)\s+ли\s+(?:\w+\s+){{0,2}}{_MEDICAL_VERB}"
+    rf"|\b{_MEDICAL_VERB}\s+ли\b"
+)
 _NEAREST = re.compile(
     r"^(?:на\s+)?(?:ближайш\w+|люб\w+|все\s+равно|без\s+разницы|неважно|не\s+важно|"
     r"как\s+можно\s+(?:скорее|быстрее|раньше)|поскорее|побыстрее|скорее|срочно|"
@@ -226,7 +277,14 @@ _MOVE_INTENT = re.compile(
 _INJURED = (
     r"(?:упал\w*|ударил\w*|сломал\w*|порезал\w*|обжег\w*|обожгл\w*|подвернул\w*|вывихнул\w*|"
     r"ушиб\w*|поранил\w*|травмировал\w*|наступил\w*|прищемил\w*|повредил\w*|разбил\w*|"
-    r"укусил\w*|покусал\w*|ошпарил\w*|потянул\w*|поскользнул\w*)"
+    r"укусил\w*|покусал\w*|ошпарил\w*|потянул\w*|поскользнул\w*|поцарапал\w*|придавил\w*|"
+    r"сбил\w*|избил\w*|обварил\w*)"
+)
+# What a complaint is about, as a noun or «болит»: «у меня перелом», «у меня болит рука».
+_COMPLAINT = (
+    r"(?:бол\w+|перелом\w*|вывих\w*|ожог\w*|порез\w*|ран[аыуе]|укус\w*|гипс\w*|растяжени\w*|"
+    r"ушиб\w*|травм\w+|опух\w+|отек\w*|трещин\w*|шв[ыа]|шов|связк\w+|спиц\w*|повязк\w+|"
+    r"перевязк\w+|ортез\w*|скотчкаст\w*|синяк\w*|ссадин\w*|заноз\w*|ноет|хруст\w*)"
 )
 _MY = r"(?:мо\w+\s+|наш\w+\s+|сво\w+\s+)?"
 
@@ -237,6 +295,7 @@ def _audience_patterns(words: str) -> re.Pattern[str]:
         rf"|\bдля\s+{_MY}{words}\b"  # «для ребёнка»
         rf"|\bу\s+{_MY}{words}\b"  # «у мамы перелом»
         rf"|^{_MY}{words}\s+{_INJURED}"  # «дочка упала с качелей»
+        rf"|\bу\s+меня\s+{words}\b"  # «у меня сын упал»
         rf"|\b{_MY}{words}\s+(?:нужн\w+|надо|нужно)\b"  # «сыну нужно к врачу»
     )
 
@@ -244,6 +303,17 @@ def _audience_patterns(words: str) -> re.Pattern[str]:
 _FOR_CHILD = _audience_patterns(_CHILD_WORDS)
 _FOR_ADULT = _audience_patterns(_ADULT_WORDS)
 _WITH_SOMEONE = re.compile(rf"\bс\s+{_MY}(?:{_CHILD_WORDS}|{_ADULT_WORDS})\b")  # «гуляла с сыном»
+_SOMEONE = re.compile(rf"\b(?:{_CHILD_WORDS}|{_ADULT_WORDS}|мы|нас|нам|нами)\b")
+# «Я», «меня», «мне», «у меня» next to the complaint: the visit is for the one who writes.
+_FOR_SELF = re.compile(
+    rf"\bменя\s+(?:\w+\s+){{0,2}}{_INJURED}"  # «меня вчера укусила собака»
+    rf"|{_INJURED}\s+(?:\w+\s+){{0,2}}меня\b"  # «укусила собака меня»
+    rf"|\bя\s+(?:\w+\s+){{0,2}}{_INJURED}"  # «я вчера упала с лестницы»
+    rf"|\bу\s+меня\s+(?:\w+\s+){{0,2}}{_COMPLAINT}"  # «у меня болит рука», «у меня перелом»
+    rf"|\bмне\s+(?:нужн\w+|надо|нужно)\s+(?!запис|запиш)"  # «мне нужно снять гипс»
+    rf"|\bмне\s+(?:больно|наложил\w+|зашил\w+|поставил\w+)\b"
+    rf"|\b{_INJURED}\s+себе\b|\bсебе\s+{_INJURED}"  # «порезал себе палец»
+)
 
 # Words of a request to book with nothing else in it: «мне бы к травматологу попасть».
 _BOOK_FILLER = re.compile(
@@ -277,8 +347,24 @@ def find_command(text: str) -> MenuAction | None:
 
 
 def find_navigation(text: str) -> Navigation | None:
+    """«Назад», «в меню», «отмена» — and short requests in other words: «открой меню»,
+    «первоначальное меню открой», «вернись назад», «давай заново». A long message where
+    «меню» is a part of a question is not navigation."""
     t = normalize(text)
-    return next((action for action, pattern in NAVIGATION if pattern.search(t)), None)
+    exact = next((action for action, pattern in NAVIGATION if pattern.search(t)), None)
+    words = t.split()
+    if exact is not None or not 0 < len(words) <= NAVIGATION_WORDS:
+        return exact
+    said = set(words)
+    if "меню" in said and said <= _HOME_OK:
+        return "home"
+    if said & _RESTART and said <= _RESTART_OK:
+        return "home"
+    if any(w == "назад" or w.startswith("предыдущ") for w in words) and all(
+        w in _BACK_OK or w.startswith("предыдущ") for w in words
+    ):
+        return "back"
+    return None
 
 
 def find_small_talk(text: str) -> SmallTalk | None:
@@ -287,14 +373,23 @@ def find_small_talk(text: str) -> SmallTalk | None:
 
 
 def find_audience(text: str) -> Audience | None:
-    """«Запишите ребёнка» → child, «можно записать маму?» → adult; None — the bot asks."""
+    """«Запишите ребёнка» → child, «можно записать маму?» → adult, «меня укусила собака» →
+    self; None — the bot asks («меня и сына», «гуляла с сыном», «запишите брата»)."""
     t = normalize(text)
     if _WITH_SOMEONE.search(t):
         return None
     child, adult = bool(_FOR_CHILD.search(t)), bool(_FOR_ADULT.search(t))
+    if _FOR_SELF.search(t):  # with someone else in the text it is not clear who is hurt
+        return None if child or adult or _SOMEONE.search(t) else "self"
     if child == adult:
         return None
     return "child" if child else "adult"
+
+
+def asks_advice(text: str) -> bool:
+    """«Что делать?», «это перелом?», «чем обработать?», «можно ли мочить?» — a request for
+    medical advice or a diagnosis; a safety net for route's ``advice`` flag."""
+    return _ADVICE.search(normalize(text)) is not None
 
 
 def is_booking_order(text: str) -> bool:

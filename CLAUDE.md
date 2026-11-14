@@ -30,7 +30,7 @@ kb/text/           скрипты клиники (исходник; по смы�
 kb/scenarios/      JSON-сценарии, собранные из kb/text
 kb/info/           справка для ответов на вопросы (адрес, часы, парковка, документы, больничный)
 kb/source_pdf/     оригиналы PDF (в .gitignore)
-data/              schedule.csv, bot.db (bot.db в .gitignore)
+data/              schedule.csv, bot.db (оба в .gitignore; демо-расписание бот строит при старте)
 tests/
 ```
 

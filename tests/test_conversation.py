@@ -55,7 +55,7 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     )
     assert chat.labels()[:2] == ["Похоже на вывих", "Похоже на перелом"]
     await chat.press("Похоже на вывих")
-    assert chat.labels() == ["Для себя", "Для ребёнка (до 18 лет)", texts.BACK]
+    assert chat.labels() == ["Для себя", "Для ребёнка (до 18 лет)", texts.BACK, texts.MENU]
     await chat.press("Для себя")
     await chat.press("Бытовая травма")
     await chat.press("В течение 7 дней")
@@ -176,7 +176,7 @@ async def test_day_before_reminder_lists_documents(make_chat, schedule: MockSche
     await chat.press(texts.MENU_MY)
     await chat.press(texts.MOVE)
     assert "Переношу запись с четверга, 12 ноября" in chat.text and "Шаг" not in chat.text
-    assert chat.labels()[-1] == texts.KEEP_AS_IS and texts.BACK not in chat.labels()
+    assert chat.labels()[-2:] == [texts.KEEP_AS_IS, texts.MENU]  # the first screen: no «Назад»
     await chat.pick_day("Завтра")
     await chat.data(f"s:{tomorrow.id}")
     assert chat.text.startswith("Готово, запись перенесена на 13 ноября (пятница)")
@@ -317,7 +317,7 @@ async def test_child_age_from_complaint_is_confirmed_with_buttons(make_chat, kb)
     await chat.start()
     await chat.say("у сына 8 лет вывих, упал вчера дома, к врачу не ходили")
     assert chat.text.endswith("\n\nПравильно понимаю: запись для ребёнка, 8 лет?")
-    assert chat.labels() == ["Да, ребёнок 8 лет", "Нет", texts.BACK]
+    assert chat.labels() == ["Да, ребёнок 8 лет", "Нет", texts.MENU]
     await chat.press("Да, ребёнок 8 лет")
     assert texts.DAY_PICK in chat.text  # all answers known → straight to the day picker
 
@@ -328,7 +328,7 @@ async def test_child_age_rejected_asks_who(make_chat, kb) -> None:
     await chat.start()
     await chat.say("дочке 3 года, обожглась")
     await chat.press("Нет")
-    assert chat.labels() == ["Для себя", "Для ребёнка (до 18 лет)", texts.BACK]
+    assert chat.labels() == ["Для себя", "Для ребёнка (до 18 лет)", texts.BACK, texts.MENU]
 
 
 async def test_free_text_answer_falls_back_to_buttons(make_chat, kb) -> None:
@@ -338,7 +338,7 @@ async def test_free_text_answer_falls_back_to_buttons(make_chat, kb) -> None:
     await chat.press("Для себя")
     await chat.say("обожгла руку")
     assert texts.PICK_BUTTON in chat.text
-    assert chat.labels() == ["Лицо", "Другая часть тела", texts.BACK]
+    assert chat.labels() == ["Лицо", "Другая часть тела", texts.BACK, texts.MENU]
 
 
 async def test_questions_are_answered_from_kb_info(make_chat, kb) -> None:
@@ -371,7 +371,7 @@ async def test_returning_patient_is_picked_not_retyped(make_chat, db: Database) 
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")
     await chat.pick_slot()
-    assert chat.labels() == ["Петров Иван, 12.03.1985", texts.PATIENT_NEW, texts.BACK]
+    assert chat.labels() == ["Петров Иван, 12.03.1985", texts.PATIENT_NEW, texts.BACK, texts.MENU]
     await chat.press("Петров Иван, 12.03.1985")
     assert "Иван Сергеевич записан" in chat.text
     assert len(await bookings(db)) == 2
@@ -466,7 +466,8 @@ async def test_child_booking_asks_the_guardian_item_once(make_chat, db: Database
     await chat.press("Менее суток назад")
     await chat.press("Нет, не обращались")
     await chat.pick_slot()
-    assert chat.labels() == ["Петрова Анна, 01.02.2021", texts.PATIENT_NEW, texts.BACK]
+    assert chat.labels()[:2] == ["Петрова Анна, 01.02.2021", texts.PATIENT_NEW]
+    assert chat.labels()[2:] == [texts.BACK, texts.MENU]
 
 
 async def test_consent_text_mentions_withdrawal(make_chat) -> None:

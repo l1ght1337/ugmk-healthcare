@@ -34,10 +34,14 @@ def _words(label: str) -> list[str]:
 def _covers(text: str, label: str) -> bool:
     """Every typed word is on the label, and they are at least half of it.
 
-    «бытовая» for «Бытовая травма»; not «другой день» for «День 12–18».
+    «бытовая» for «Бытовая травма»; not «другой день» for «День 12–18». A number typed with
+    them must be on the label too: «завтра в 3» is a wish for a time, not «Завтра, 13.11».
     """
     words = _words(label)
     typed = _words(text)
+    numbers = [w for w in text.split() if w.isdigit()]
+    if any(n not in label.split() for n in numbers):
+        return False
     return bool(typed) and all(w in words for w in typed) and len(typed) * 2 >= len(words)
 
 

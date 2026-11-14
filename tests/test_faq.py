@@ -107,6 +107,13 @@ async def _check(chat: Chat, faq: Faq) -> None:
         async with chat.conversation.db() as s:
             session = (await s.get(User, chat.user.id)).session
         assert session["dialog"]["scenario_id"] == faq.scenario
+    elif faq.kind == "complaint":  # a medical question next to an injury: the complaint goes on
+        from app.db.models import User
+
+        async with chat.conversation.db() as s:
+            session = (await s.get(User, chat.user.id)).session
+        assert chat.replies[0].text == texts.MEDICAL_ASIDE and session["wizard"]
+        assert "На что больше похоже?" in chat.replies[-1].text
     elif faq.kind == "medical_question":
         assert text == texts.MEDICAL and labels[0] == texts.MENU_BOOK
     elif faq.kind == "about_bot":

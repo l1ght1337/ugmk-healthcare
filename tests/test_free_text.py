@@ -55,7 +55,7 @@ async def test_cosmonaut_is_a_limb_complaint(make_chat, kb: KnowledgeBase, db: D
     await chat.start()
     await chat.say(COSMONAUT)
     assert chat.text == "Шаг 1 из 5 · Что случилось\n\nЧто случилось с рукой или ногой?"
-    assert chat.labels() == [*LIMB_TOPICS, texts.BACK]
+    assert chat.labels() == [*LIMB_TOPICS, texts.MENU]
     assert chat.admin == [] and await handoffs(db) == []
 
 
@@ -168,12 +168,12 @@ async def test_three_unclear_answers_show_buttons_and_home(make_chat, kb, db) ->
     await chat.press("Для себя")
     for _ in range(2):
         await chat.say("не знаю")
-        assert texts.MENU_HOME not in chat.labels()
+        assert texts.PICK_BUTTON not in chat.text
     await chat.say("не знаю")
     assert texts.PICK_BUTTON in chat.text
-    assert chat.labels() == ["Лицо", "Другая часть тела", texts.MENU_HOME, texts.BACK]
+    assert chat.labels() == ["Лицо", "Другая часть тела", texts.BACK, texts.MENU]
     assert chat.admin == [] and await handoffs(db) == []
-    await chat.press(texts.MENU_HOME)
+    await chat.press(texts.MENU)
     assert texts.MENU_BOOK in chat.labels()
 
 

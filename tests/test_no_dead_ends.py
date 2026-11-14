@@ -355,3 +355,65 @@ async def test_description_on_step_1_is_not_answered_with_describe_it(
         assert "Пожелание: к Ярунину А. А., завтра" in chat.text and chat.buttons(), where
         if reading in COMPLAINT_READINGS:  # read as a complaint: never «опишите своими словами»
             assert "своими словами" not in chat.text.lower(), where
+
+
+# --- the menu and «назад» in the patient's own words, on every step (14.11, item 7) ----------
+
+MENU_PHRASES = (
+    "открой меню",
+    "покажи меню",
+    "первоначальное меню открой",
+    "начальное меню",
+    "верни меня в меню",
+    "выйди в меню",
+    "давай заново",
+    "хочу сначала",
+)
+BACK_PHRASES = ("вернись назад", "давай назад", "можно назад?")
+EVERY_STEP = (m.MENU, *SCREENS, m.PAYMENT, m.ASK)
+
+
+@pytest.mark.parametrize("screen", EVERY_STEP)
+async def test_menu_and_back_in_words_work_on_every_step(
+    make_chat, kb: KnowledgeBase, screen: str
+) -> None:
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await to_screen(chat, screen)
+    shown, saved = chat.replies[-1], await session(chat)
+    for phrase in MENU_PHRASES:
+        await put_back(chat, saved)
+        await chat.say(phrase)
+        where = f"«{phrase}» на шаге {screen}:\n{chat.text}"
+        assert fake.requests == [], where  # read by code
+        assert (await session(chat))["step"] == "idle", where
+        assert chat.text == kb.common.more_help.text and texts.MENU_BOOK in chat.labels(), where
+    for phrase in BACK_PHRASES:
+        await put_back(chat, saved)
+        await chat.say(phrase)
+        where = f"«{phrase}» на шаге {screen}:\n{chat.text}"
+        assert fake.requests == [], where
+        now = await session(chat)
+        moved = (chat.replies[-1].text, chat.replies[-1].buttons) != (shown.text, shown.buttons)
+        assert now["step"] == "idle" or moved, where  # the step before, or the menu from the first
+        assert texts.HINT_TIME not in chat.text and texts.HINT_BUTTONS not in chat.text, where
+
+
+@pytest.mark.parametrize("action", ["home", "back"])
+@pytest.mark.parametrize("screen", [m.DAYS, m.PERIODS, m.TIMES, m.CONSENT])
+async def test_route_leads_to_the_menu_or_back_from_steps_with_buttons(
+    make_chat, kb: KnowledgeBase, screen: str, action: str
+) -> None:
+    """A wording the word list does not know: route says «home» or «back»."""
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await to_screen(chat, screen)
+    shown = chat.replies[-1]
+    fake.replies = [{"type": "menu_action", "action": action}]
+    await chat.say("мне бы на самый первый экран попасть" if action == "home" else "не туда нажал")
+    assert len(fake.requests) == 1
+    if action == "home":
+        assert (await session(chat))["step"] == "idle" and texts.MENU_BOOK in chat.labels()
+        assert chat.labels()[0] == texts.RESUME  # the booking is kept
+    else:
+        assert (chat.replies[-1].text, chat.replies[-1].buttons) != (shown.text, shown.buttons)

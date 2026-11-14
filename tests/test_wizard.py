@@ -100,7 +100,12 @@ async def test_list_button_keeps_to_the_area(make_chat, kb: KnowledgeBase) -> No
     await chat.start()
     await chat.say("болит рука")
     await chat.press("Другое")
-    assert chat.labels() == ["Опишите своими словами", "Позвать администратора", texts.BACK]
+    assert chat.labels() == [
+        "Опишите своими словами",
+        "Позвать администратора",
+        texts.BACK,
+        texts.MENU,
+    ]
     await chat.press("Опишите своими словами")
     assert texts.DESCRIBE in chat.text
     await chat.say("сам не понимаю")  # still unclear: the arm is remembered
@@ -111,8 +116,8 @@ async def test_list_button_keeps_to_the_area(make_chat, kb: KnowledgeBase) -> No
 
 
 GROUPS = [
-    "Рука или нога", "Рана, ожог, укус", "Голова, лицо, глаза, уши", "Шея, спина, грудь, живот",
-    "Уже лечусь у вас", "Ребёнок до 6 месяцев", "Другое",
+    "Рука или нога", "Рана, ожог, укус", "Голова, лицо, глаза, уши",
+    "Шея, спина, грудь, живот, пах", "Уже лечусь у вас", "Ребёнок до 6 месяцев", "Другое",
 ]  # fmt: skip
 
 
@@ -120,29 +125,29 @@ async def test_topic_buttons_are_about_what_happened(make_chat) -> None:
     chat = make_chat()
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    assert chat.labels() == [*GROUPS, texts.BACK]
+    assert chat.labels() == [*GROUPS, texts.MENU]  # the first screen: nothing to go back to
     await chat.press("Рука или нога")  # from the groups: every topic one press away
     assert chat.labels() == [
         "Похоже на вывих", "Похоже на перелом", "Растяжение или разрыв связок",
-        "Наложить гипс", "Снять гипс", "Ортез", "Скотчкаст", "Другое", texts.BACK,
+        "Наложить гипс", "Снять гипс", "Ортез", "Скотчкаст", "Другое", texts.BACK, texts.MENU,
     ]  # fmt: skip
     await chat.start()
     await chat.press(texts.MENU_BOOK)
     await chat.say("болит рука")  # after a complaint: what happened, then the details
     assert chat.labels() == [
         "Упал, ударился, подвернул", "Порез, рана", "Ожог", "Укус животного",
-        "Гипс, ортез, скотчкаст", "Уже лечусь у вас", "Другое", texts.BACK,
+        "Гипс, ортез, скотчкаст", "Уже лечусь у вас", "Другое", texts.BACK, texts.MENU,
     ]  # fmt: skip
     await chat.press("Упал, ударился, подвернул")
     assert chat.labels() == [
         "Похоже на вывих", "Похоже на перелом", "Растяжение или разрыв связок", "Не знаю",
-        texts.BACK,
+        texts.BACK, texts.MENU,
     ]  # fmt: skip
     await chat.press(texts.BACK)
     await chat.press("Уже лечусь у вас")
     assert chat.labels() == [
         "Повторный приём", "Перевязка", "Больничный", "Повторная пункция", "Удаление спиц",
-        texts.BACK,
+        texts.BACK, texts.MENU,
     ]  # fmt: skip
 
 
@@ -232,7 +237,8 @@ async def test_back_returns_the_previous_screen_and_answer(make_chat) -> None:
     assert "Любой муниципальный травмпункт" in chat.text
     await chat.start()
     await chat.press(texts.MENU_BOOK)
-    await chat.press(texts.BACK)  # the first screen: back to the main menu
+    assert texts.BACK not in chat.labels()  # the first screen: only «Меню»
+    await chat.say("назад")  # typed, it leads to the main menu
     assert texts.MENU_BOOK in chat.labels()
 
 
@@ -660,7 +666,7 @@ async def test_a_sore_neck_shows_only_neck_and_back_topics(
     await chat.start()
     await chat.press(texts.MENU_BOOK)
     await chat.say("шея болит")
-    assert chat.labels() == [*NECK_TOPICS, texts.BACK]
+    assert chat.labels() == [*NECK_TOPICS, texts.BACK, texts.MENU]
     labels = await every_topic_label(chat)
     assert "Травма половых органов" not in labels and "Удар в грудь или живот" not in labels
 
@@ -700,7 +706,7 @@ def test_every_scenario_is_two_presses_from_the_groups(kb: KnowledgeBase) -> Non
     presses = _presses_to_each_scenario(kb)
     assert set(presses) == set(kb.scenarios), set(kb.scenarios) - set(presses)
     assert max(presses.values()) <= 2
-    assert "Шея, спина, грудь, живот" in [i.label for i in kb.topics.menus["root"].items]
+    assert "Шея, спина, грудь, живот, пах" in [i.label for i in kb.topics.menus["root"].items]
 
 
 async def test_two_presses_really_start_each_scenario(make_chat, kb: KnowledgeBase) -> None:

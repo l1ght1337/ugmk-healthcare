@@ -136,7 +136,7 @@ async def test_phrase_on_step(
     elif must == m.MY_MOVE:
         assert text.startswith("Переношу запись с пятницы, 13 ноября, 1")
         assert now in ("days", "periods", "times") and after.get("reschedule_of")
-        assert labels[-1] == texts.KEEP_AS_IS and texts.MY_ONE not in text
+        assert labels[-2:] == [texts.KEEP_AS_IS, texts.MENU] and texts.MY_ONE not in text
     elif must == m.CONFIRM:
         assert "Спасибо, ждём Вас" in text and "в 1" in text
         async with chat.conversation.db() as s:
@@ -201,6 +201,11 @@ async def test_phrase_on_step(
     elif must == m.TWO_BOOK:
         assert any(a in chat.replies[0].text for a in m.ANSWERS), text
         assert now == "complaint" and texts.ASK_COMPLAINT in text and "Пожелание:" in text
+    elif must == m.TWO_ADVICE:
+        answer, screen = chat.replies
+        assert answer.text.endswith(texts.MEDICAL_ASIDE) and "Антирабической" in answer.text
+        assert now == "question" and after["dialog"]["scenario_id"] == "animal_bite"
+        assert texts.ASK_AUDIENCE not in screen.text and after.get("for_whom") == "self"
     elif must == m.TWO_COMPLAINT:
         assert any(a in chat.replies[0].text for a in m.ANSWERS), text
         assert now == "audience" and after["dialog"]["scenario_id"] == "fracture"

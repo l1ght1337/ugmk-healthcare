@@ -88,9 +88,10 @@ def inline(buttons: tuple[tuple[Button, ...], ...], *, styles: bool = True) -> I
 def markup(reply: Reply, *, styles: bool = True) -> Markup:
     if reply.ask_contact:
         button = KeyboardButton(text=texts.CONTACT_BUTTON, request_contact=True)
-        back = KeyboardButton(text=texts.BACK)  # comes as the text «Назад»: one step back
+        # «Назад» and «Меню» come as texts: one step back, the main menu
+        nav = [KeyboardButton(text=texts.BACK), KeyboardButton(text=texts.MENU)]
         return ReplyKeyboardMarkup(
-            keyboard=[[button], [back]], resize_keyboard=True, one_time_keyboard=True
+            keyboard=[[button], nav], resize_keyboard=True, one_time_keyboard=True
         )
     if reply.buttons:
         return inline(reply.buttons, styles=styles)

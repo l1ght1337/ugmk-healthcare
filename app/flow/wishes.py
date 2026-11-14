@@ -298,6 +298,14 @@ _REFUSED = re.compile(
 )
 _NOT_BEFORE = re.compile(r"\b(?:не|кроме|исключая)\s+(?:хочу\s+|надо\s+|нужно\s+)?$")
 _ALSO = re.compile(r"^\s*(?:,|или|и|либо)\s*$")  # «к Ярунину или Кузнецову»
+# «только не на завтра», «кроме субботы», «завтра не могу»: a day or a time named to refuse it
+_NOT_THAT = re.compile(
+    r"\b(?:не|кроме|исключая)\s+(?:(?:хочу|надо|нужно|могу|смогу)\s+)?(?:(?:на|в|во|к|ко)\s+)?$"
+)
+_NOT_AFTER = re.compile(
+    r"^\s*(?:(?:я|мы|мне|нам|никак|точно|совсем)\s+)*не\s+(?:могу|смогу|можем|сможем|получится|"
+    r"получается|подходит|подойдет|удобно|успею|успеваю|вариант|хочу|надо|нужно)\b"
+)
 _NAMES = "(?:" + "|".join(stem_pattern(n).lower().replace("ё", "е") for n in FIRST_NAMES) + ")"
 _FIRST_NAME_AFTER = re.compile(rf"\s+{_NAMES}\b(?:\s+[а-я]+(?:вич|вна|чна)[а-я]{{0,2}}\b)?")
 _FIRST_NAME_BEFORE = re.compile(rf"\b(?P<name>{_NAMES})\s+$")
@@ -413,6 +421,9 @@ def _clock(hour: str, minute: str | None, part: str | None) -> time | None:
     return time(h, m)
 
 
+LAST_AFTERNOON_HOUR = 6  # «завтра в 3», «в субботу в 6» are 15:00 and 18:00; «в 7» is 7:00
+
+
 def _is_loose(hour: str, part: str | None) -> bool:
     """«в 7» with no «утра» or «вечера»: 7:00 or 19:00 — the clock decides."""
     return part is None and 1 <= int(hour) <= 11
@@ -423,10 +434,11 @@ def _later(moment: time | None) -> time | None:
 
 
 def _by_the_clock(wish: Wish, loose: bool, today: date, now: time | None) -> None:
-    """A bare hour is the nearest one ahead: the trauma centre works round the clock.
+    """A bare hour: today — the nearest one ahead, the trauma centre works round the clock.
 
-    At 5 in the morning «в 7» is 7:00, at 10 «в 3» is 15:00. «Утром», «вечером» settle it;
-    for another day the hour stays as it is said.
+    At 5 in the morning «в 7» is 7:00, at 10 «в 3» is 15:00. For another day people say
+    «завтра в 3» about the afternoon: 1–6 is 13:00–18:00, 7–11 stays as it is said. «Утром»,
+    «вечером», «в 3 ночи» settle it for any day.
     """
     first = wish.at or wish.start or wish.end
     if not loose or first is None:
@@ -435,7 +447,9 @@ def _by_the_clock(wish: Wish, loose: bool, today: date, now: time | None) -> Non
         return
     if wish.period == "evening" or (wish.period == "day" and first.hour <= 6):
         after_noon = True
-    elif wish.period is None and now is not None and wish.day in (None, today):
+    elif wish.period is None and wish.day not in (None, today):
+        after_noon = first.hour <= LAST_AFTERNOON_HOUR
+    elif wish.period is None and now is not None:
         after_noon = first <= now < time(first.hour + 12, first.minute)
     else:
         after_noon = False
@@ -673,6 +687,10 @@ def parse(
             taken.append(unknown)
 
     mentions = _days(t, today, taken) + _times(t, taken)
+    refused = [
+        m for m in mentions if _NOT_THAT.search(t[: m.start]) or _NOT_AFTER.match(t[m.end :])
+    ]
+    mentions = [m for m in mentions if m not in refused]  # named, but not wished for
     clauses = _clauses(t)
     events = [m.start() for m in _EVENT.finditer(t)]
     cues = [m.start() for m in _CUE.finditer(t)]
@@ -717,7 +735,7 @@ def parse(
     _by_the_clock(wish, loose, today, now)
 
     # everything but the wish, the request words and the greeting
-    consumed = [(m.start, m.end) for m in counted]
+    consumed = [(m.start, m.end) for m in (*counted, *refused)]
     consumed += [(start, end) for _, start, end, _ in named] + people.refused + people.patients
     if unknown is not None:
         consumed.append(unknown)

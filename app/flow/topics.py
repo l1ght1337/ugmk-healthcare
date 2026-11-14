@@ -60,6 +60,7 @@ CANDIDATE_WORDS: dict[str, tuple[str, ...]] = {
     "pin_removal": (r"спиц\w*", r"металлоконструкц\w*", r"пластин\w*"),
     "head_trauma": (r"сотряс\w*",),
 }  # fmt: skip
+CAST_ON_WORDS = (r"налож\w*", r"накладыв\w*", r"загипсов\w*", r"постав\w*")
 # Twisting a joint can be any of these three (the «Упал, ударился, подвернул» menu).
 SPRAIN_WORDS = (
     r"подвернул\w*", r"подвернул\w* ног\w*", r"потянул\w*", r"ушиб\w*", r"упал\w*",
@@ -88,6 +89,8 @@ def guess_candidates(text: str) -> list[str]:
     found = [sid for sid, stems in CANDIDATE_WORDS.items() if _has(t, stems)]
     if "cast_removal" in found and "cast_apply" in found:
         found.remove("cast_apply")
+    elif "cast_apply" in found and not _has(t, CAST_ON_WORDS):
+        found.append("cast_removal")  # a bare «гипс»: to put it on or to take it off
     if _has(t, SPRAIN_WORDS):
         found += [sid for sid in FALL_SCENARIOS if sid not in found]
     return found

@@ -24,9 +24,9 @@ COPY app ./app
 COPY config ./config
 COPY kb/scenarios ./kb/scenarios
 COPY kb/info ./kb/info
-COPY data/schedule.csv ./data/schedule.csv
 
-RUN useradd --create-home --uid 1000 bot && chown -R bot:bot /app/data
+# data/ is empty in the image: the bot builds the demo schedule at start (app/schedule).
+RUN useradd --create-home --uid 1000 bot && mkdir -p /app/data && chown -R bot:bot /app/data
 USER bot
 
 # bot.db, llm_usage.jsonl and the demo schedule live here; mount it to keep them.

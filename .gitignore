@@ -4,7 +4,8 @@
 # local copies of the clinic's original documents
 kb/source_pdf/
 
-# runtime data
+# runtime data (the demo schedule is built by the bot at start and topped up every day)
+data/schedule.csv
 data/*.db
 data/*.db-journal
 data/*.jsonl

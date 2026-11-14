@@ -33,7 +33,7 @@
         },
         {
           "id": "g_trunk",
-          "label": "Шея, спина, грудь, живот",
+          "label": "Шея, спина, грудь, живот, пах",
           "menu": "trunk",
           "icon": "🧍"
         },
@@ -226,12 +226,6 @@
           "icon": "🫁"
         },
         {
-          "id": "k_genital",
-          "label": "Травма половых органов",
-          "scenario": "genital_trauma",
-          "icon": "🩺"
-        },
-        {
           "id": "k_cut",
           "label": "Порез, рана",
           "scenario": "cut_sutures",
@@ -253,6 +247,12 @@
           "id": "k_pus",
           "label": "Нагноение, плохо заживает",
           "scenario": "inflammation",
+          "icon": "🩺"
+        },
+        {
+          "id": "k_genital",
+          "label": "Травма половых органов",
+          "scenario": "genital_trauma",
           "icon": "🩺"
         },
         {

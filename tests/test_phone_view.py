@@ -11,8 +11,8 @@ from tests.chat_harness import Chat, to_topic
 from tests.conftest import TZ
 
 GROUPS = [
-    "Рука или нога", "Рана, ожог, укус", "Голова, лицо, глаза, уши", "Шея, спина, грудь, живот",
-    "Уже лечусь у вас", "Ребёнок до 6 месяцев", "Другое",
+    "Рука или нога", "Рана, ожог, укус", "Голова, лицо, глаза, уши",
+    "Шея, спина, грудь, живот, пах", "Уже лечусь у вас", "Ребёнок до 6 месяцев", "Другое",
 ]  # fmt: skip
 
 
@@ -33,7 +33,7 @@ async def test_groups_are_on_the_first_screen_under_the_invitation(make_chat) ->
     await chat.press(texts.MENU_BOOK)
     assert "Шаг 1 из 5" in chat.text and texts.ASK_COMPLAINT in chat.text
     assert "Опишите своими словами" in chat.text  # the invitation stays above the buttons
-    assert chat.labels() == [*GROUPS, texts.BACK]
+    assert chat.labels() == [*GROUPS, texts.MENU]
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")  # three taps from the menu to the scenario
     assert texts.ASK_AUDIENCE in chat.text
@@ -45,7 +45,7 @@ async def test_back_from_a_group_returns_to_the_first_screen(make_chat) -> None:
     await chat.press(texts.MENU_BOOK)
     await chat.press("Рука или нога")
     await chat.press(texts.BACK)
-    assert texts.ASK_COMPLAINT in chat.text and chat.labels() == [*GROUPS, texts.BACK]
+    assert texts.ASK_COMPLAINT in chat.text and chat.labels() == [*GROUPS, texts.MENU]
 
 
 # 2. few free times: the grid at once ----------------------------------------------------------
@@ -135,7 +135,8 @@ async def test_name_step_is_the_script_phrase_and_a_short_start(make_chat, kb) -
 
 def test_contact_keyboard_has_back() -> None:
     keyboard = markup(Reply("телефон", ask_contact=True)).keyboard
-    assert [[b.text for b in row] for row in keyboard] == [[texts.CONTACT_BUTTON], [texts.BACK]]
+    rows = [[b.text for b in row] for row in keyboard]
+    assert rows == [[texts.CONTACT_BUTTON], [texts.BACK, texts.MENU]]
     assert keyboard[0][0].request_contact and not keyboard[1][0].request_contact
 
 

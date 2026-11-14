@@ -53,7 +53,8 @@ TextKind = Literal[
     "offtopic",
     "crisis",
 ]
-MenuAction = Literal["book", "my_bookings", "ask", "admin", "forget"]
+MenuAction = Literal["book", "my_bookings", "ask", "admin", "forget", "home", "back"]
+MENU_ACTIONS = frozenset(MenuAction.__args__)  # type: ignore[attr-defined]
 Area = Literal["limb", "head", "neck_back", "chest_abdomen", "genital"]
 
 
@@ -68,11 +69,12 @@ class RouteOut(_Out):
     facts: dict[str, Any] = {}
     clarify: str | None = None
     question: bool = False
+    advice: bool = False
 
     @field_validator("action", mode="before")
     @classmethod
     def _unknown_action(cls, value: object) -> object:
-        return value if value in ("book", "my_bookings", "ask", "admin", "forget") else None
+        return value if value in MENU_ACTIONS else None
 
     @field_validator("area", mode="before")
     @classmethod
@@ -108,7 +110,9 @@ class RouteResult(BaseModel):
     * menu_action — «когда у меня приём», «хочу записаться» → the menu screen (``action``);
     * schedule_question — «кто принимает в субботу?», «есть время вечером?» → answered by
       code from the schedule provider (the day, time and doctor are read by app/flow/wishes);
-    * medical_question — «какое обезболивающее», «это перелом?» → no advice, an offer to book;
+    * medical_question — «какое обезболивающее», «можно ли мочить гипс?» with no injury
+      described → no advice, an offer to book. Next to an injury it is a complaint with
+      ``advice``: the complaint is not lost;
     * about_bot — «ты человек?», «где мои данные» → who the bot is and where data is kept;
     * feedback — a complaint about the service or thanks → an offer to pass it on;
     * other_department — other departments of the clinic → the clinic phone;
@@ -119,13 +123,15 @@ class RouteResult(BaseModel):
     """
 
     kind: TextKind
-    action: MenuAction | None = None  # menu_action: book / my_bookings / ask / admin / forget
+    # menu_action: book / my_bookings / ask / admin / forget / home / back
+    action: MenuAction | None = None
     area: Area | None = None
     scenario: str | None = None
     candidates: list[str] = []  # 3–5 scenarios that may fit, for choosing the topic menu
     facts: dict[str, FactValue] = {}
     clarify: str | None = None
     question: bool = False  # the message also asks about the trauma centre: answer it too
+    advice: bool = False  # a complaint that also asks what to do or what it is: no advice
 
 
 class ExtractResult(BaseModel):
@@ -201,7 +207,9 @@ class Assistant:
                 return RouteResult(kind="menu_action", action="admin")
             if out.type == "menu_action":
                 if out.action is None:
-                    raise ValueError("menu_action needs action: book / my_bookings / ask / admin")
+                    raise ValueError(
+                        "menu_action needs action: book / my_bookings / ask / admin / home / back"
+                    )
                 return RouteResult(kind="menu_action", action=out.action, question=out.question)
             if out.type != "complaint":
                 return RouteResult(kind=out.type)
@@ -214,6 +222,7 @@ class Assistant:
                     candidates=candidates,
                     clarify=clarify,
                     question=out.question,
+                    advice=out.advice,
                 )
             if out.scenario not in self.kb.scenarios:
                 raise ValueError(f"unknown scenario {out.scenario!r}; use an id from the catalogue")
@@ -229,6 +238,7 @@ class Assistant:
                 candidates=candidates,
                 facts=_valid_facts(scenario, out.facts),
                 question=out.question,
+                advice=out.advice,
             )
 
         return await self.client.complete_json(

@@ -79,6 +79,10 @@ TO_DAYS = "Показывает выбор дня"
 TO_PERIODS = "Показывает время суток этого дня"
 TWO_BOOK = "Отвечает на вопрос и начинает запись"
 TWO_COMPLAINT = "Отвечает на вопрос и ведёт по сценарию жалобы"
+TWO_ADVICE = (
+    "Одним сообщением говорит, что с этой травмой делают в травмпункте (если это есть в "
+    "скрипте) и что рекомендации даст врач, затем ведёт по сценарию жалобы"
+)
 
 NO_LLM = frozenset(
     {BOOK, BOOK_WISH, BOOK_CHILD, BOOK_ADULT, GO_ON, MY, MY_MOVE, CONFIRM, CONFIRM_NONE, ADMIN,
@@ -251,6 +255,9 @@ INTENTS: tuple[Intent, ...] = (
            was="Начинал запись к Кузнецову, вопрос об адресе терялся",
            llm=(route("menu_action", action="book", question=True), ADDRESS), live="menu_action"),
     Intent(G_TWO, "спасибо, а как отменить запись?", ((BOOKED, MY),)),
+    Intent(G_TWO, "что делать укусила собака меня", ((MENU, TWO_ADVICE),),
+           was="Сразу спрашивал «Для кого запись?»; на «что делать» не отвечал",
+           llm=(route("complaint", scenario="animal_bite", advice=True),)),
     # --- Короткие ответы посреди записи -------------------------------------------------------
     Intent(G_SHORT, "да",
            ((YES_NO, NEXT), (CONSENT, SAME), (DAYS, SAME), (QUESTION, UNCLEAR), (MENU, ACK)),
@@ -264,6 +271,14 @@ INTENTS: tuple[Intent, ...] = (
     Intent(G_SHORT, "в меню", everywhere(ANYWHERE, HOME),
            was="Не работало нигде: в меню, на первом шаге и после записи открывался «Задать "
                "вопрос» без кнопок; на остальных шагах — как «назад»"),
+    Intent(G_SHORT, "первоначальное меню открой", everywhere(ANYWHERE, HOME),
+           was="На шаге выбора дня — «Выберите, пожалуйста, день кнопкой» и тот же экран"),
+    Intent(G_SHORT, "открой меню", ((QUESTION, HOME), (DAYS, HOME), (CONSENT, HOME)),
+           was="Понимал только «меню», «в меню», «главное меню»"),
+    Intent(G_SHORT, "давай заново", ((COMPLAINT, HOME), (DAYS, HOME)),
+           was="Понимал только «заново» и «начать заново»"),
+    Intent(G_SHORT, "вернись назад", everywhere(ANYWHERE, BACK),
+           was="Понимал только «назад», «вернись», «вернуться назад»"),
     Intent(G_SHORT, "не знаю",
            ((COMPLAINT, TOPICS), (QUESTION, UNCLEAR), (AGE, SAME), (DAYS, SAME), (AUDIENCE, SAME)),
            was="На первом шаге — " + OFFTOPIC + " и запись сбрасывалась; на шаге «возраст» — "

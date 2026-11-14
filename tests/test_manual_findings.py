@@ -133,7 +133,7 @@ async def test_a_word_goes_through_the_group_to_its_topic(make_chat, kb, word, s
         ("Голова, лицо, глаза, уши", "травма"),  # not «Травма глаза»
         ("Рана, ожог, укус", "укол"),  # not «Укол чужой иглой»
         ("Рана, ожог, укус", "плохо"),  # not «Нагноение, плохо заживает»
-        ("Шея, спина, грудь, живот", "удар"),  # not «Удар в грудь или живот»
+        ("Шея, спина, грудь, живот, пах", "удар"),  # not «Удар в грудь или живот»
         ("Рука или нога", "гипс"),  # two buttons: «Наложить гипс», «Снять гипс»
     ],
 )
@@ -202,7 +202,8 @@ async def test_cancel_and_book_for_sunday_opens_sunday_at_once(make_chat, kb) ->
     assert line.text.startswith("Переношу запись с четверга, 12 ноября, 1") and not line.buttons
     assert "15 ноября (воскресенье)" in screen.text
     labels = [b.label for row in screen.buttons for b in row]
-    assert labels[0].startswith("Ближайшее: вс, 15.11, ") and labels[-1] == texts.KEEP_AS_IS
+    assert labels[0].startswith("Ближайшее: вс, 15.11, ")
+    assert labels[-2:] == [texts.KEEP_AS_IS, texts.MENU]
     (still,) = await bookings(chat.conversation.db)
     assert (still.status, still.slot_id) == ("active", before.slot_id)  # held until a new time
 
@@ -232,7 +233,7 @@ async def test_back_inside_a_move_and_no_back_on_its_first_screen(make_chat) -> 
     assert chat.periods() and chat.nearest().label >= "Ближайшее: вс, 15.11, 08:00"  # not 00:00
     await chat.say("вечером")  # typed: the evening grid
     assert all("18:00" <= b.label < "23:00" for b in chat.times())
-    assert chat.labels()[-2:] == [texts.BACK, texts.KEEP_AS_IS]
+    assert chat.labels()[-3:] == [texts.KEEP_AS_IS, texts.BACK, texts.MENU]
     await chat.press(texts.BACK)  # the parts of the day again, not the same grid
     assert len(chat.periods()) > 1 and "вечером" not in chat.text
     assert "Пожелание: в воскресенье, 15 ноября" in chat.text

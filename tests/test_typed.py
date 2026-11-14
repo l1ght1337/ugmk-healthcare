@@ -75,3 +75,14 @@ WHO = [("Для себя", "a:adult"), ("Для ребёнка (до 18 лет)"
 )
 def test_typed_label(text: str, buttons: list, mode: str, data: str | None) -> None:
     assert pressed(text, buttons, mode=mode) == data, text
+
+
+def test_a_number_typed_with_the_word_must_be_on_the_label() -> None:
+    """«Завтра в 3» is a wish for a time, not the button «Завтра, 13.11» (14.11, item 4)."""
+    days = [("Сегодня, 12.11", "d:1"), ("Завтра, 13.11", "d:2"), ("Сб, 14.11", "d:3")]
+    assert pressed("завтра", days) == "d:2"
+    assert pressed("завтра в 3", days) is None
+    assert pressed("завтра в 15", days) is None
+    periods = [("Утро 8–12", "pr:m"), ("День 12–18", "pr:d")]
+    assert pressed("день", periods) == "pr:d"
+    assert pressed("день в 3", periods) is None

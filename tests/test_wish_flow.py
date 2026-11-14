@@ -209,7 +209,7 @@ async def test_8_reschedule_to_tomorrow(make_chat) -> None:
     assert "Пожелание: завтра, 13 ноября" in chat.text
     assert FRIDAY in chat.text and not chat.days()  # tomorrow at once
     assert chat.nearest().label.startswith("Ближайшее: завтра, ")
-    assert chat.labels()[-1] == texts.KEEP_AS_IS
+    assert chat.labels()[-2:] == [texts.KEEP_AS_IS, texts.MENU]
     await chat.pick_time()
     (booking,) = await bookings(chat.conversation.db)
     assert booking.start_at.astimezone(TZ).date() == date(2026, 11, 13)

@@ -62,7 +62,15 @@ def render_labels(kb: KnowledgeBase) -> str:
             "После «Записаться в травмпункт»: группы тем сразу, под «С чем обращаетесь?»",
             [item.caption for item in kb.topics.menus[kb.topics.root].items],
         ),
-        _row("Каждый экран записи (кроме первого вопроса после напоминания)", [texts.BACK]),
+        _row(
+            "Нижний ряд каждого экрана записи и переноса, в одну строку (на первом экране, где "
+            "возвращаться некуда, — только «Меню»)",
+            [texts.BACK, texts.MENU],
+        ),
+        _row(
+            "Главное меню, пока начатая запись не старше 45 минут: первая кнопка",
+            [texts.RESUME],
+        ),
         _row("Для кого запись", [texts.AUDIENCE_SELF, texts.AUDIENCE_CHILD]),
         _row(
             "Ребёнок и возраст названы в жалобе",
@@ -154,7 +162,7 @@ def render_labels(kb: KnowledgeBase) -> str:
         _row(
             "Кого записываем", ["Петров Иван, 12.03.1985 (сохранённый пациент)", texts.PATIENT_NEW]
         ),
-        _row("Телефон (клавиатура Telegram)", [texts.CONTACT_BUTTON, texts.BACK]),
+        _row("Телефон (клавиатура Telegram)", [texts.CONTACT_BUTTON, texts.BACK, texts.MENU]),
         _row("После карточки записи: оплата", [texts.PAYMENT_SELF, texts.PAYMENT_INSURANCE]),
         _row(
             "Маршрут с вариантом «передать администратору»", [texts.HANDOFF_YES, texts.HANDOFF_NO]
@@ -162,11 +170,15 @@ def render_labels(kb: KnowledgeBase) -> str:
         _row("Вопрос без ответа в справке", [texts.ASK_ADMIN_QUESTION, texts.MENU_HOME]),
         _row("Просьба «соедините с администратором» текстом", [texts.MENU_ADMIN, texts.MENU_HOME]),
         _row(
-            "Три непонятных ответа на вопрос сценария",
-            ["кнопки вопроса", texts.MENU_HOME],
+            "«Я не могу давать медицинские рекомендации…»: «Записаться» ведёт в сценарий или "
+            "темы травмы, названной в вопросе",
+            [texts.MENU_BOOK, texts.MENU_HOME],
         ),
         _row("Мои записи", [texts.MOVE, texts.CANCEL]),
-        _row("Перенос записи: внизу каждого экрана выбора дня и времени", [texts.KEEP_AS_IS]),
+        _row(
+            "Перенос записи: внизу каждого экрана выбора дня и времени",
+            [texts.KEEP_AS_IS, texts.BACK, texts.MENU],
+        ),
         _row(
             "«Перенеси на завтра», когда записей несколько: какую переносим",
             [
@@ -182,7 +194,10 @@ def render_labels(kb: KnowledgeBase) -> str:
             "«Задать вопрос», «хочу пожаловаться», «Есть вопрос» после приёма: бот ждёт текст",
             [texts.MENU_HOME],
         ),
-        _row("Возраст, ФИО или дата рождения не разобраны: бот просит ещё раз", [texts.BACK]),
+        _row(
+            "Возраст, ФИО или дата рождения не разобраны: бот просит ещё раз",
+            [texts.BACK, texts.MENU],
+        ),
         _row("Отмена записи", [texts.CANCEL_YES, texts.CANCEL_KEEP]),
         _row("Напоминания за 24 и за 2 часа", [texts.CONFIRM, texts.MOVE, texts.CANCEL]),
         _row("«Как прошёл приём?»", [texts.AFTER_VISIT_OK, texts.AFTER_VISIT_QUESTION]),

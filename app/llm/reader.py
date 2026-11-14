@@ -24,13 +24,14 @@ class TextReading:
     """A free text, classified (app/llm/assistant.py, RouteResult)."""
 
     kind: str | None = None  # complaint / menu_action / clinic_question / other_medical / …
-    action: str | None = None  # menu_action: book / my_bookings / ask / admin
+    action: str | None = None  # menu_action: book / my_bookings / ask / admin / home / back
     area: str | None = None
     scenario_id: str | None = None
     candidates: list[str] = field(default_factory=list)
     facts: dict[str, FactValue] = field(default_factory=dict)
     clarify: str | None = None
     question: bool = False  # the message also asks about the trauma centre
+    advice: bool = False  # the complaint also asks what to do or what it is
     unavailable: bool = False  # no LLM: the bot falls back to buttons (and the word list)
 
 
@@ -60,7 +61,7 @@ async def read_text(
         log.warning("route unavailable: %s", exc)
         return TextReading(unavailable=True)
     return TextReading(
-        r.kind, r.action, r.area, r.scenario, r.candidates, r.facts, r.clarify, r.question
+        r.kind, r.action, r.area, r.scenario, r.candidates, r.facts, r.clarify, r.question, r.advice
     )
 
 

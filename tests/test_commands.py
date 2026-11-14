@@ -53,7 +53,8 @@ async def test_my_bookings_by_text_lists_the_booking(make_chat, kb: KnowledgeBas
         assert {texts.MOVE, texts.CANCEL} <= set(chat.labels())
     await chat.say("перенеси запись на завтра")  # a new day is named: the move starts at once
     assert chat.text.startswith("Переношу запись с четверга, 12 ноября")
-    assert "13 ноября (пятница)" in chat.text and chat.labels()[-1] == texts.KEEP_AS_IS
+    assert "13 ноября (пятница)" in chat.text
+    assert chat.labels()[-2:] == [texts.KEEP_AS_IS, texts.MENU]
 
 
 async def test_admin_by_text_twice_is_one_request(make_chat) -> None:
