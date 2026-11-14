@@ -7,6 +7,14 @@ All texts address the patient with «Вы» (CLAUDE.md, rule 7).
 ASK_AUDIENCE = "Подскажите, пожалуйста, для кого запись?"
 AUDIENCE_SELF = "Для себя"
 AUDIENCE_CHILD = "Для ребёнка (до 18 лет)"
+# two patients in one message («меня и сына», «двоих детей»): one booking at a time
+ONE_BY_ONE = (
+    "Запишу по очереди: сначала одного пациента, потом второго — после записи нажмите "
+    "«Записать ещё одного»."
+)
+BOOK_MORE = "Записать ещё одного"  # under «Спасибо!» after the booking card
+NEXT_PATIENT = "Спасибо! Теперь запишем второго пациента?"
+WHOM_ADULT = "Для взрослого"  # «для кого» of one more booking: «Для себя» would not fit
 ASK_CHILD_AGE = "Сколько лет ребёнку? Если меньше года — сколько месяцев?"
 ASK_CHILD_AGE_AGAIN = "Напишите, пожалуйста, возраст ребёнка цифрами, например: 7 лет или 4 месяца."
 CLARIFY = "Уточните, пожалуйста: {ask}"
@@ -114,6 +122,18 @@ ASK_INFO = "Напишите, пожалуйста, Ваш вопрос о тр�
 INFO_UNKNOWN = "У меня нет этой информации."
 INFO_DOWN = "Сейчас не получается ответить на вопрос."
 OFFER_HANDOFF = "Передать вопрос администратору?"
+# a question typed on «Передать администратору?» that the reference does not answer
+ADMIN_WILL_ANSWER = "На этот вопрос ответит администратор."
+# the same complaint again right after its route: said plainly, with a way on
+NOT_BOOKED_HERE = (
+    "С этим в травмпункт не записываем — обратиться нужно по адресу из сообщения выше. Если "
+    "остались вопросы, я передам их администратору."
+)
+# «когда позвонит администратор?»: the hours from config/contacts.yaml
+HANDOFF_WHEN = (
+    "Администраторы отвечают с {start} до {end} — в это время с Вами свяжутся. Точное время "
+    "назвать не могу."
+)
 ASK_ADMIN_QUESTION = "Передать вопрос администратору"
 HANDOFF_YES = "Передать администратору"
 HANDOFF_NO = "Не нужно"

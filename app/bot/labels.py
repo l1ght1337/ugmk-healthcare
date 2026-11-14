@@ -165,9 +165,25 @@ def render_labels(kb: KnowledgeBase) -> str:
         _row("Телефон (клавиатура Telegram)", [texts.CONTACT_BUTTON, texts.BACK, texts.MENU]),
         _row("После карточки записи: оплата", [texts.PAYMENT_SELF, texts.PAYMENT_INSURANCE]),
         _row(
+            "После ответа об оплате: «Спасибо!» (или «Теперь запишем второго пациента?»)",
+            [texts.BOOK_MORE, texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN],
+        ),
+        _row(
+            "«Записать ещё одного»: «Для кого запись?» перед «Что случилось?»",
+            [texts.WHOM_ADULT, texts.AUDIENCE_CHILD, texts.MENU],
+        ),
+        _row(
             "Маршрут с вариантом «передать администратору»", [texts.HANDOFF_YES, texts.HANDOFF_NO]
         ),
         _row("Вопрос без ответа в справке", [texts.ASK_ADMIN_QUESTION, texts.MENU_HOME]),
+        _row(
+            "Та же жалоба сразу после маршрута: «С этим в травмпункт не записываем…»",
+            [texts.ASK_ADMIN_QUESTION, texts.MENU_HOME],
+        ),
+        _row(
+            "«Подробнее» после маршрута: полная фраза скрипта",
+            [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN],
+        ),
         _row("Просьба «соедините с администратором» текстом", [texts.MENU_ADMIN, texts.MENU_HOME]),
         _row(
             "«Я не могу давать медицинские рекомендации…»: «Записаться» ведёт в сценарий или "

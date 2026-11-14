@@ -375,6 +375,53 @@ _CONSENT_ASKS = re.compile(
     r"\b(?:с\s+чем|на\s+что|что\s+значит|зачем|почему|для\s+чего|как\w+|ли)\b"
 )
 _SENTENCE_END = re.compile(r"[.!;…]+(?:\s+|$)")
+# «Передать администратору?» answered in words. An imperative is a «да» even with a question
+# after it («передайте. А когда позвонят?»); «передать» in a question is not.
+_HANDOFF_YES = re.compile(
+    r"\b(?:передай|передайте|передавай|передавайте)\b"
+    r"|\bпусть\s+(?:\w+\s+){0,2}(?:позвон\w+|перезвон\w+|свяж\w+|ответ\w+)\b"
+)
+_HANDOFF_NO = re.compile(r"^нет\b|\bне\s+(?:надо|нужно|стоит|хочу|передавай\w*|передавать)\b")
+# «Когда позвонит администратор?», «сколько ждать звонка?», «через сколько перезвонят»
+_WHEN_CALL = re.compile(
+    r"\b(?:когда|во\s+сколько|через\s+сколько|как\s+скоро|скоро\s+ли|как\s+быстро)\b"
+    r"(?:\s+\w+){0,4}?\s+(?:позвон\w+|перезвон\w+|свяж\w+|ждать\s+звонка)\b"
+    r"|\bсколько\s+(?:\w+\s+){0,2}?ждать\b(?!\s+(?:в\s+)?(?:очеред\w+|прием\w*|врача|доктора))"
+)
+# «Буду ждать звонка», «больше вопросов нет», «всего доброго» — with a «спасибо» or without:
+# the talk is over. Anything asked for in the same message makes it not small talk.
+_WAITING = re.compile(
+    r"\b(?:буду|будем)\s+ждать\b|\bжду\s+(?:звонка|ответа)\b|\bвопросов\s+(?:больше\s+)?нет\b"
+    r"|\bна\s+этом\s+все\b"
+)
+_BYE = re.compile(
+    r"\b(?:до\s+свидания|досвидания|всего\s+(?:доброго|хорошего)|до\s+встречи|прощайте)\b"
+)
+_THANKS_WORD = re.compile(r"\b(?:спасибо|благодарю|спс)\b")
+_ASKS_FOR = re.compile(
+    r"\b(?:запиш\w+|запис\w+|передай\w*|передавай\w*|передать|позови\w*|позвать|перенес\w+|"
+    r"перенести|отмен\w+|болит|болят|болело|болела|боль|больно|опух\w*|кров\w+|перелом\w*|"
+    r"вывих\w*|травм\w+|упал\w*|ушиб\w*)\b"
+)
+SMALL_TALK_WORDS = 16  # a longer message says more than «спасибо, буду ждать»
+# Two patients in one message: «меня и сына», «для себя и для мужа», «обоих», «двоих детей».
+# «Обе ноги», «оба колена», «оба раза» are not two patients.
+_MANY = re.compile(
+    r"\b(?:двоих|двое|двоим|вдвоем|троих|трое|нас\s+дво\w+)\b"
+    r"|\b(?:обоих|обеих|обоим|обеим|оба|обе)\b(?!\s+(?:ног\w*|рук\w*|колен\w*|плеч\w*|пальц\w*|"
+    r"глаз\w*|стоп\w*|кист\w*|запяст\w*|локт\w*|голен\w*|бедр\w*|лодыж\w*|ух\w*|уш\w*|пятк\w*|"
+    r"сторон\w*|раза|варианта|дня|врач\w*))"
+)
+_SELF_TOO = re.compile(
+    rf"\bдля\s+себя\b|\bсебя\b|\b{_BOOK_VERB}\s+(?:\w+\s+)?меня\b|\bменя\s+(?:и|с)\b"
+    r"|\b(?:и|с)\s+меня\b|\b(?:сначала|сперва)\s+(?:\w+\s+)?(?:меня|я)\b|\bпосле\s+меня\b"
+)
+_FIRST = r"\b(?:сначала|сперва|первым|первой)\s+(?:\w+\s+){0,2}?(?:для\s+)?"
+_FIRST_OF_TWO: tuple[tuple[Audience, re.Pattern[str]], ...] = (
+    ("self", re.compile(rf"{_FIRST}(?:меня|себя|я)\b|\bпосле\s+меня\b")),
+    ("child", re.compile(rf"{_FIRST}{_MY}{_CHILD_WORDS}\b")),
+    ("adult", re.compile(rf"{_FIRST}{_MY}{_ADULT_WORDS}\b")),
+)
 
 
 def normalize(text: str) -> str:
@@ -417,8 +464,56 @@ def find_navigation(text: str) -> Navigation | None:
 
 
 def find_small_talk(text: str) -> SmallTalk | None:
+    """«Привет», «спасибо», «ок», «пока» as the whole message — and the end of a talk said
+    in a sentence: «спасибо, больше вопросов нет, буду ждать звонка», «всего доброго»."""
     t = normalize(text)
-    return next((kind for kind, pattern in SMALL_TALK if pattern.search(t)), None)
+    exact = next((kind for kind, pattern in SMALL_TALK if pattern.search(t)), None)
+    if exact is not None:
+        return exact
+    if "?" in text or len(t.split()) > SMALL_TALK_WORDS:
+        return None
+    if _ASKS_FOR.search(t) or _QUESTION_START.search(t):
+        return None  # something is asked for: the message is not only a goodbye
+    waiting = _WAITING.search(t) is not None
+    if _BYE.search(t) and (waiting or _THANKS_WORD.search(t)):
+        return "bye"
+    return "thanks" if waiting else None
+
+
+def wants_handoff(text: str) -> bool | None:
+    """«Передать администратору?» answered in words: True — «да, передайте…», «пусть
+    позвонит»; False — «не надо», «не передавайте»; None — the text says neither."""
+    t = normalize(text)
+    if _HANDOFF_NO.search(t):
+        return False
+    if _HANDOFF_YES.search(t):
+        return True
+    return True if re.search(r"\bпередать\b", t) and not is_question(text) else None
+
+
+def asks_when_admin(text: str) -> bool:
+    """«Когда позвонит администратор?», «сколько ждать звонка?»."""
+    return _WHEN_CALL.search(normalize(text)) is not None
+
+
+def names_several(text: str) -> bool:
+    """More than one patient in a message: «меня и сына», «сначала для себя, потом сына»,
+    «мы с мужем, обоих», «двоих детей». «Гуляла с сыном, он упал» names one."""
+    t = normalize(text)
+    if _MANY.search(t):
+        return True
+    other = re.search(rf"\b(?:{_CHILD_WORDS}|{_ADULT_WORDS})\b", t) is not None
+    return other and _SELF_TOO.search(t) is not None
+
+
+def after_me(text: str) -> Audience | None:
+    """«Запишите мужа после меня»: the other patient — for the one who is booked already."""
+    t = normalize(text)
+    if re.search(r"\bпосле\s+меня\b", t) is None:
+        return None
+    child = re.search(rf"\b{_CHILD_WORDS}\b", t) is not None
+    adult = re.search(rf"\b{_ADULT_WORDS}\b", t) is not None
+    return None if child == adult else "child" if child else "adult"
 
 
 def find_audience(text: str) -> Audience | None:
@@ -426,6 +521,10 @@ def find_audience(text: str) -> Audience | None:
     self, «запишите меня» → self; None — the bot asks («меня и сына», «запишите меня с
     ребёнком», «гуляла с сыном», «запишите брата»)."""
     t = normalize(text)
+    if names_several(text):  # «сначала для себя, потом сына»: the first, if the text says who
+        for first, pattern in _FIRST_OF_TWO:
+            if pattern.search(t):
+                return first
     if _WITH_SOMEONE.search(t):
         return None
     child, adult = bool(_FOR_CHILD.search(t)), bool(_FOR_ADULT.search(t))

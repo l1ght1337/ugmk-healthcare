@@ -38,6 +38,7 @@ ADMIN = "передано администратору"
 PHRASES: tuple[tuple[str, str], ...] = (
     (texts.INFO_UNKNOWN, NO_INFO),
     (texts.ASIDE_UNKNOWN, NO_INFO),
+    (texts.ADMIN_WILL_ANSWER, NO_INFO),
     (texts.INFO_DOWN, DOWN),
     (texts.OFFTOPIC, OFFTOPIC),
     (texts.OTHER_DEPARTMENT_NO_PHONE, OFFTOPIC),

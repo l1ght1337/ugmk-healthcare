@@ -309,6 +309,8 @@ _NOT_AFTER = re.compile(
     r"^\s*(?:(?:я|мы|мне|нам|никак|точно|совсем)\s+)*не\s+(?:могу|смогу|можем|сможем|получится|"
     r"получается|подходит|подойдет|удобно|успею|успеваю|вариант|хочу|надо|нужно)\b"
 )
+# «можно до завтра терпеть?», «подожду до пятницы»: a day to wait until, not a day to come
+_UNTIL = re.compile(r"\bдо\s+(?:самого\s+|самой\s+)?$")
 _NAMES = "(?:" + "|".join(stem_pattern(n).lower().replace("ё", "е") for n in FIRST_NAMES) + ")"
 _FIRST_NAME_AFTER = re.compile(rf"\s+{_NAMES}\b(?:\s+[а-я]+(?:вич|вна|чна)[а-я]{{0,2}}\b)?")
 _FIRST_NAME_BEFORE = re.compile(rf"\b(?P<name>{_NAMES})\s+$")
@@ -350,7 +352,8 @@ _FREE = re.compile(
     r"\b(?:есть|будет|найдется|остал\w*)\b[^.!?]*\b(?:время|времени|окн[оа]|окошк\w+|мест[оа]?|"
     r"запись|записи|слот\w*)\b"
     r"|\bсвободн\w+"
-    r"|\bближайш\w+\s+(?:\w+\s+)?(?:время|запись|окно|окошко|прием|дата|день)\b"
+    # not «позвонят в ближайшее время»: that is «soon», not a time to book
+    r"|(?<!\bв\s)\bближайш\w+\s+(?:\w+\s+)?(?:время|запись|окно|окошко|прием|дата|день)\b"
     r"|\bкогда\s+(?:можно|я\s+могу|мне\s+можно)\s+(?:записаться|прийти|подойти|попасть|приехать)\b"
     r"|\bна\s+когда\s+(?:можно|есть)\b"
 )
@@ -726,7 +729,11 @@ def parse(
 
     mentions = _days(t, today, taken) + _times(t, taken)
     refused = [
-        m for m in mentions if _NOT_THAT.search(t[: m.start]) or _NOT_AFTER.match(t[m.end :])
+        m
+        for m in mentions
+        if _NOT_THAT.search(t[: m.start])
+        or _NOT_AFTER.match(t[m.end :])
+        or (m.day is not None and _UNTIL.search(t[: m.start]))
     ]
     mentions = [m for m in mentions if m not in refused]  # named, but not wished for
     clauses = _clauses(t)
@@ -817,6 +824,12 @@ def parse(
         doctor_spans=(*((start, end) for _, start, end, _ in named), *people.refused),
         patient_spans=tuple(people.patients),
     )
+
+
+def days_named(text: str, today: date) -> list[date]:
+    """Every day a text names, wished for or not: «на завтра и на воскресенье» — two days."""
+    found = _days(_norm(text), today, [])
+    return sorted({m.day for m in found if m.day is not None})
 
 
 def names_doctors(text: str) -> bool:
