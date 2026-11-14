@@ -129,6 +129,15 @@ ADMIN_WILL_ANSWER = "На этот вопрос ответит админист�
 # the same complaint again right after its route: said plainly, with a way on
 NOT_BOOKED_HERE = "С этим в травмпункт не записываем. Обратиться нужно:"  # the places follow
 QUESTIONS_TO_ADMIN = "Если остались вопросы, я передам их администратору."
+# A booking started after a route (rule 5): asked once, before the scenario
+SAME_OR_OTHER = "Это та же травма, о которой Вы писали, или другая?"
+SAME_INJURY = "Та же"
+OTHER_INJURY = "Другая"
+# «ехать или ждать звонка?», «а туда как, просто приехать?» after a route: templates, the
+# places of the route follow «Обратиться нужно:»; 103 / 112 is the clinic's emergency line
+ROUTE_NO_WAIT = "Ждать звонка администратора для этого не нужно."
+ROUTE_GO = "Обратиться нужно:"
+ROUTE_THERE = "Как там принимают, у меня данных нет — уточните в самом учреждении."
 # «когда позвонит администратор?»: the hours from config/contacts.yaml
 HANDOFF_WHEN = (
     "Администраторы отвечают с {start} до {end} — в это время с Вами свяжутся. Точное время "

@@ -14,6 +14,7 @@ the ``menu_action`` type. No Telegram and no LLM here.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Literal
 
 MenuAction = Literal[
@@ -399,6 +400,42 @@ _WAITING = re.compile(
     r"\b(?:буду|будем)\s+ждать\b|\bжду\s+(?:звонка|ответа)\b|\bвопросов\s+(?:больше\s+)?нет\b"
     r"|\bна\s+этом\s+все\b"
 )
+_GO = (
+    r"(?:ехать|поехать|идти|пойти|везти|повезти|приезжать|приехать|приходить|прийти|обращаться|"
+    r"обратиться|деваться|податься)"
+)
+_WAIT = r"(?:ждать|подождать|дожидаться|дождаться)"
+_WHERE_TO_GO = re.compile(
+    rf"\bкуда\b(?:\s+\w+){{0,3}}?\s+{_GO}\b"
+    rf"|\b{_WAIT}\b.*\b{_GO}\b|\b{_GO}\b.*\b{_WAIT}\b"
+    rf"|\b(?:{_GO}|{_WAIT})\b(?:\s+\w+){{0,4}}?\s+или\s+(?:нет|не)\b"
+    r"|\bскор\w+\s+(?:\w+\s+){0,2}?(?:вызыва\w+|вызва\w+|звонить|набирать)\b"
+    r"|\b(?:вызыва\w+|вызва\w+)\s+(?:\w+\s+){0,2}?скор\w+"
+    r"|\b(?:103|112)\s+(?:\w+\s+){0,2}?(?:звонить|позвонить|набирать|вызывать)\b"
+    r"|\b(?:звонить|позвонить|набирать)\s+(?:\w+\s+){0,2}?(?:103|112)\b"
+)
+_CALL = re.compile(r"\b(?:звонк\w+|администратор\w*|перезвон\w+|позвон\w+)\b")
+_PLACE_NOUN = r"(?:больниц\w+|центр\w*|учреждени\w+|клиник\w+|поликлиник\w+|отделени\w+)"
+_THAT_PLACE = re.compile(
+    rf"\b(?:эту|этой|этот|этом|этого|той|том|ту|тот|того)\s+{_PLACE_NOUN}"
+    rf"|\b{_PLACE_NOUN}\s+(?:эту|этой|этот|этом|этого|той|том|ту|тот|того)\b"
+)
+_THERE = re.compile(r"\b(?:туда|там|оттуда)\b")
+_VISIT_WORD = re.compile(
+    r"\b(?:как|принима\w+|примут|возьмут|приехать|приезжать|ехать|попасть|добраться|обращаться|"
+    r"запис\w+|работа\w+|круглосуточн\w+|очеред\w+|документ\w+|платн\w+|бесплатн\w+|адрес\w*|"
+    r"телефон\w*)\b"
+)
+PLACE_WORD = 5  # shorter words of a place's name do not name it («ул», «пер», «46»)
+_PLACE_COMMON = frozenset(
+    {
+        "городская", "городской", "клиническая", "клинической", "больница", "больницы",
+        "центральная", "центральной", "детская", "детской", "областная", "областной",
+        "отделение", "отделения", "травматологическое", "приемный", "приемно",
+        "диагностическое", "покой", "борьбы", "центр", "любой", "муниципальный", "травмпункт",
+        "старых", "токсикологическое", "ожоговый",
+    }
+)  # fmt: skip
 _PARENT = re.compile(
     r"\b(?:мам\w+|пап\w+|родител\w+|отец|отц\w+|мать|матер\w+|бабушк\w+|дедушк\w+|опекун\w*|"
     r"представител\w+|взросл\w+)\b"
@@ -530,6 +567,50 @@ def asks_when_admin(text: str) -> bool:
         return True
     doctor = re.search(r"\b(?:врач\w*|доктор\w*)\b", t)
     return _WHEN_ANSWER.search(t) is not None and doctor is None
+
+
+def asks_where_to_go(text: str) -> bool:
+    """«Ехать или ждать звонка?», «куда нам ехать-то?», «скорую вызывать, что ли?», «103
+    звонить или нет?» — asked after a route: where to go and whether to wait."""
+    return _WHERE_TO_GO.search(normalize(text)) is not None
+
+
+def mentions_call(text: str) -> bool:
+    """«…или ждать звонка администратора?»."""
+    return _CALL.search(normalize(text)) is not None
+
+
+def asks_about_there(text: str, places: Sequence[str]) -> bool:
+    """«А туда как, просто приехать?», «там записи нужны?», «на Ясной принимают без
+    записи?» — about the place of a route (``places`` — «Центр борьбы со СПИДом, ул. Ясная,
+    46»), not about the trauma centre. «Там болит, где ударился» is about the injury."""
+    t = normalize(text)
+    if _THAT_PLACE.search(t):
+        return True
+    if _THERE.search(t) and _VISIT_WORD.search(t):
+        return True
+    return any(re.search(rf"\b(?:на|в|во|до|к|у|около)\s+{stem}\w*", t) for stem in _stems(places))
+
+
+def _stems(places: Sequence[str]) -> list[str]:
+    """Words that name a place of a route: «Ясная» → «ясн», «Дерябиной» → «дерябин»."""
+    found = []
+    for place in places:
+        for word in normalize(place).split():
+            if len(word) >= PLACE_WORD and not word.isdigit() and word not in _PLACE_COMMON:
+                found.append(re.escape(word[: max(3, len(word) - 2)]))
+    return found
+
+
+def same_or_other(text: str) -> str | None:
+    """«Та же травма или другая?» answered in words: «да та же самая» → same, «нет, другая
+    травма» → other; None — the text says neither, or both."""
+    t = normalize(text)
+    same = re.search(r"\b(?:та\s+же|тоже\s+самая|одна\s+и\s+та\s+же|она\s+же|эта\s+же)\b", t)
+    other = re.search(r"\b(?:друг\w+|нов\w+|не\s+та)\b", t)
+    if bool(same) == bool(other):
+        return None
+    return "same" if same else "other"
 
 
 def names_parent(text: str) -> bool:

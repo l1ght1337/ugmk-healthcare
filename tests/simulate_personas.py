@@ -2,7 +2,8 @@
 
 Every name, birth date and phone number here is made up. ``goal``:
 
-* book — to get a visit (or to hear plainly why not and where to go);
+* book — to get a visit (or to hear plainly why not and where to go); ``route=True`` — the
+  scripts do not book this patient: only a route or 103 is the right end;
 * move / keep / cancel — about a visit booked before the dialog (``booked``);
 * price / ask — to get an answer to a question, no booking needed;
 * two — to book two people;
@@ -33,6 +34,9 @@ class Persona:
     doctor: str | None = None  # the doctor's surname the patient asks for
     day: int | None = None  # the day the patient asks for: days from today
     phone: str = "+79000000000"
+    # the scripts send this patient elsewhere (section 5, a burn of the face) or to an
+    # ambulance: the expected end is a route, and a booking is a violation
+    route: bool = False
 
     @property
     def for_child(self) -> bool:
@@ -152,22 +156,22 @@ PERSONAS: tuple[Persona, ...] = (
       "мужчина, ударился головой",
       "коротко, жалуется на самочувствие",
       "book", "час назад ударился головой о полку, тошнит, кружится голова; сознание не терял",
-      phone="+79001110021"),
+      phone="+79001110021", route=True),
     P("infant", "Корнеева Юлия Максимовна", "18.12.1996",
       "мать четырёхмесячного ребёнка",
       "испуганно, сбивчиво",
       "book", "сын, 4 месяца, полчаса назад упал с дивана, плакал, сейчас успокоился",
-      child=("Корнеев Лев Ильич", "10.07.2026"), phone="+79001110023"),
+      child=("Корнеев Лев Ильич", "10.07.2026"), phone="+79001110023", route=True),
     P("criminal", "Тихонов Максим Эдуардович", "23.03.1992",
       "мужчина после драки",
       "зло, коротко",
       "book", "вчера вечером избили на улице, болит рука и рёбра; хочет «снять побои» и "
-      "справку для полиции", phone="+79001110024"),
+      "справку для полиции", phone="+79001110024", route=True),
     P("needle", "Белоусова Оксана Игоревна", "01.06.1989",
       "женщина, наступила на иглу",
       "встревоженно, с вопросами",
       "book", "сегодня во дворе наступила на иглу от шприца, прокол стопы",
-      phone="+79001110025"),
+      phone="+79001110025", route=True),
     P("old_injury", "Зуев Пётр Григорьевич", "28.02.1977",
       "мужчина со старой травмой",
       "неторопливо",
@@ -177,12 +181,12 @@ PERSONAS: tuple[Persona, ...] = (
       "мать трёхлетней девочки",
       "испуганно",
       "book", "дочь, 3 года, двадцать минут назад опрокинула на лицо горячий чай, кожа красная",
-      child=("Котова Мила Денисовна", "12.04.2023"), phone="+79001110027"),
+      child=("Котова Мила Денисовна", "12.04.2023"), phone="+79001110027", route=True),
     P("bleeding", "Рябов Антон Витальевич", "14.02.1987",
       "мужчина с сильным кровотечением",
       "паникует, пишет обрывками",
       "book", "разбил стекло, глубоко порезал предплечье, кровь не останавливается, льётся "
-      "сильно", phone="+79001110028"),
+      "сильно", phone="+79001110028", route=True),
     P("night_adult", "Соболев Евгений Романович", "20.10.1982",
       "мужчина поздним вечером",
       "коротко, хочет прийти прямо сейчас",

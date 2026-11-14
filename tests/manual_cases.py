@@ -25,6 +25,8 @@ def answer(text: str | None, offer_admin: bool = False) -> dict:
 
 
 QUESTION = {"type": "clinic_question"}  # route: a question about the trauma centre
+# after a route of section 5 a new booking in the same conversation is asked once
+SAME_OR_OTHER = "Это та же травма, о которой Вы писали, или другая?"
 
 
 @dataclass(frozen=True)
@@ -204,15 +206,18 @@ CASES: tuple[Case, ...] = (
     )),
     Case("7", "Взрослый ударился головой, тошнит", (
         BOOK,
-        Step("say", "Ударился головой, тошнит", ("для кого запись?",),
-             llm=(route("head_trauma"),)),
+        Step("say", "Ударился головой, тошнит", (SAME_OR_OTHER,),
+             llm=(route("head_trauma"),),
+             hint="перед этим был маршрут (кейс 6): бот один раз уточняет, не та же ли это травма"),
+        Step("press", "Другая", ("для кого запись?",)),
         Step("press", "Для себя", ("№ 23, ул. Старых Большевиков, 9", "Рижский пер., 16",
                                    "ул. Центральная, 2")),
     )),
     Case("8", "«Наступил на иглу»", (
         BOOK,
-        Step("say", "Наступил на иглу от шприца", ("Центр борьбы со СПИДом, ул. Ясная, 46",),
+        Step("say", "Наступил на иглу от шприца", (SAME_OR_OTHER,),
              llm=(route("needle_injury"),)),
+        Step("press", "Другая", ("Центр борьбы со СПИДом, ул. Ясная, 46",)),
     )),
     Case("9", "Удалить спицы после перелома, ребёнок", (
         BOOK,

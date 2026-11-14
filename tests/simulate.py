@@ -73,13 +73,14 @@ BOOKED_DAYS = ("Завтра", "Вс")  # the days of the visits booked before t
 
 # --- the rules, as the report names them ---------------------------------------------------
 GOAL = "цель не достигнута, и понятного отказа с выходом нет"
+ROUTED_BOOKED = "записан пациент, которому положен маршрут"  # Persona.route (rule 5)
 REPEAT = "один и тот же экран показан дважды подряд без новой строки"
 UNANSWERED = "вопрос пациента остался без ответа"
 LOST = "названные врач, день или «для кого» потерялись"
 NO_BUTTON = "у ответа нет кнопки, которая ведёт дальше"
 ADVICE = "диагноз или медицинский совет"
 CRASH = "ошибка в боте"
-RULES = (GOAL, REPEAT, UNANSWERED, LOST, NO_BUTTON, ADVICE, CRASH)
+RULES = (GOAL, ROUTED_BOOKED, REPEAT, UNANSWERED, LOST, NO_BUTTON, ADVICE, CRASH)
 
 GOALS = {
     "book": "записаться на приём (или получить ясный ответ, почему нельзя и куда обратиться)",
@@ -537,6 +538,8 @@ def _goal(dialog: Dialog, clinic: ClinicData) -> str | None:
     way_on = _way_on(steps[-1])
     said = "\n".join(r.text for s in steps for r in s.replies)
     if persona.goal in ("book", "unknown"):
+        if persona.route:  # only the route counts, whatever the patient says about his goal
+            return None if refused and way_on else "маршрута с выходом нет"
         if new or (refused and way_on):
             return None
         return "записи нет, и понятного отказа с выходом тоже нет"
@@ -573,6 +576,19 @@ def _goal(dialog: Dialog, clinic: ClinicData) -> str | None:
         s.action.kind == "say" and s.replies and not _is_fallback(s.replies[0].text) for s in steps
     )
     return None if answered and way_on else "ответа на вопрос нет"
+
+
+def _routed_booked(dialog: Dialog) -> list[Violation]:
+    """A patient the scripts send elsewhere or to an ambulance has a booking (rule 5)."""
+    if not dialog.persona.route:
+        return []
+    before = {b["id"] for b in dialog.before}
+    for step in dialog.steps:
+        new = [b for b in step.bookings if b["id"] not in before and b["status"] == "active"]
+        if new:
+            when = f"запись на {new[0]['date']} в {new[0]['time']}"
+            return [Violation(ROUTED_BOOKED, step.n, when)]
+    return []
 
 
 def _repeats(dialog: Dialog) -> list[Violation]:
@@ -758,6 +774,7 @@ def check(dialog: Dialog, kb: KnowledgeBase, clinic: ClinicData) -> list[Violati
     problem = _goal(dialog, clinic)
     if problem is not None and not crashed:
         found.append(Violation(GOAL, 0, problem))
+    found += _routed_booked(dialog)
     found += _repeats(dialog)
     found += _unanswered(dialog)
     found += _lost(dialog)

@@ -327,3 +327,41 @@ async def test_saved_transcripts_are_rechecked_without_deepseek(
     ]
     assert again[1][0].before == moved.before and again[0][0].steps == good.steps
     assert render_report(again, meta) == render_report(results, meta)
+
+
+# --- a patient who is due a route (section 5) or an ambulance ---------------------------------
+
+ROUTED = {"head", "infant", "criminal", "needle", "burn_face", "bleeding"}
+
+
+def test_the_personas_due_a_route_are_marked() -> None:
+    assert {p.key for p in PERSONAS if p.route} == ROUTED
+
+
+async def test_a_booking_of_a_patient_due_a_route_is_a_violation(env: sim.Env) -> None:
+    dialog = await play(BY_KEY["needle"], ScriptedPatient(*BOOK_BY_BUTTONS), env)
+    assert len(dialog.steps[-1].bookings) == 1
+    found = {v.rule: v for v in check(dialog, env.kb, env.clinic)}
+    # booked, and no route was given: the patient's «цель достигнута» does not count
+    assert set(found) == {sim.GOAL, sim.ROUTED_BOOKED}
+    assert sim.ROUTED_BOOKED == "записан пациент, которому положен маршрут"
+    booked = found[sim.ROUTED_BOOKED]
+    assert booked.turn == 14 and "13.11" in booked.detail  # the turn the booking was made on
+    same = replace(dialog, persona=BY_KEY["buttons_only"])
+    assert check(same, env.kb, env.clinic) == []  # the same dialog of a patient who may book
+
+
+async def test_the_route_and_a_booking_after_it_is_a_violation_too(env: sim.Env) -> None:
+    route = (
+        ("press", "Записаться в травмпункт"),
+        ("press", "Рана, ожог, укус"),
+        ("press", "Укол чужой иглой"),
+    )
+    other = (BOOK_BY_BUTTONS[0], BOOK_BY_BUTTONS[1], BOOK_BY_BUTTONS[2], ("press", "Другая"))
+    patient = ScriptedPatient(*route, *other, *BOOK_BY_BUTTONS[3:])
+    dialog = await play(BY_KEY["needle"], patient, env)
+    assert rules(dialog, env) == {sim.ROUTED_BOOKED}
+
+
+def test_the_rule_is_in_the_report_table() -> None:
+    assert sim.ROUTED_BOOKED in sim.RULES
