@@ -394,6 +394,12 @@ _WAITING = re.compile(
     r"\b(?:буду|будем)\s+ждать\b|\bжду\s+(?:звонка|ответа)\b|\bвопросов\s+(?:больше\s+)?нет\b"
     r"|\bна\s+этом\s+все\b"
 )
+_WAITS_FOR_CALL = re.compile(
+    r"\b(?:буду|будем)\s+ждать\b|\b(?:жду|подожду|дождусь)\b(?:\s+(?:звонка|ответа))?"
+    r"|\b(?:звонка|ответа)\s+ждать\b|\bждать\s+(?:звонка|ответа)\b"
+    r"|\bродител\w+\s+(?:сейчас\s+)?(?:не|нет|нету)\s+рядом\b"
+    r"|\b(?:нет|нету)\s+рядом\b|\bрядом\s+(?:никого|нет)\b|\bя\s+(?:один|одна)\b"
+)
 _BYE = re.compile(
     r"\b(?:до\s+свидания|досвидания|всего\s+(?:доброго|хорошего)|до\s+встречи|прощайте)\b"
 )
@@ -404,12 +410,17 @@ _ASKS_FOR = re.compile(
     r"вывих\w*|травм\w+|упал\w*|ушиб\w*)\b"
 )
 SMALL_TALK_WORDS = 16  # a longer message says more than «спасибо, буду ждать»
+LONG_BYE_WORDS = 30  # …unless it ends with the goodbye: «…пойду сама разбираться. До свидания»
+_BYE_AT_END = re.compile(rf"{_BYE.pattern}$")
 # Two patients in one message: «меня и сына», «для себя и для мужа», «обоих», «двоих детей».
-# «Обе ноги», «оба колена», «оба раза» are not two patients.
+# «Обе ноги», «оба колена», «оба раза», «обе травмы», «обе записи» are not two patients.
 _MANY = re.compile(
     r"\b(?:двоих|двое|двоим|вдвоем|троих|трое|нас\s+дво\w+)\b"
     r"|\b(?:обоих|обеих|обоим|обеим|оба|обе)\b(?!\s+(?:ног\w*|рук\w*|колен\w*|плеч\w*|пальц\w*|"
     r"глаз\w*|стоп\w*|кист\w*|запяст\w*|локт\w*|голен\w*|бедр\w*|лодыж\w*|ух\w*|уш\w*|пятк\w*|"
+    r"ладон\w*|ступн\w*|щиколот\w*|предплеч\w*|ключиц\w*|конечност\w*|"
+    r"травм\w*|ран\w*|порез\w*|ожог\w*|перелом\w*|вывих\w*|укус\w*|ссадин\w*|синяк\w*|"
+    r"повреждени\w*|мест\w*|проблем\w*|жалоб\w*|вопрос\w*|запис\w*|справк\w*|"
     r"сторон\w*|раза|варианта|дня|врач\w*))"
 )
 _SELF_TOO = re.compile(
@@ -465,16 +476,22 @@ def find_navigation(text: str) -> Navigation | None:
 
 def find_small_talk(text: str) -> SmallTalk | None:
     """«Привет», «спасибо», «ок», «пока» as the whole message — and the end of a talk said
-    in a sentence: «спасибо, больше вопросов нет, буду ждать звонка», «всего доброго»."""
+    in a sentence: «спасибо, больше вопросов нет, буду ждать звонка», «всего доброго». A
+    longer message is a goodbye when it thanks and ends with one: «Ладно, спасибо хоть за
+    это. Пойду сама разбираться, а то с вами до вечера просижу с клещом. До свидания»."""
     t = normalize(text)
     exact = next((kind for kind, pattern in SMALL_TALK if pattern.search(t)), None)
     if exact is not None:
         return exact
-    if "?" in text or len(t.split()) > SMALL_TALK_WORDS:
+    words = len(t.split())
+    if "?" in text or words > LONG_BYE_WORDS:
         return None
     if _ASKS_FOR.search(t) or _QUESTION_START.search(t):
         return None  # something is asked for: the message is not only a goodbye
     waiting = _WAITING.search(t) is not None
+    if words > SMALL_TALK_WORDS:  # a long one: only «спасибо … до свидания» as its last words
+        said_bye = _THANKS_WORD.search(t) and _BYE_AT_END.search(t.rstrip(" .!)"))
+        return "bye" if said_bye else None
     if _BYE.search(t) and (waiting or _THANKS_WORD.search(t)):
         return "bye"
     return "thanks" if waiting else None
@@ -494,6 +511,12 @@ def wants_handoff(text: str) -> bool | None:
 def asks_when_admin(text: str) -> bool:
     """«Когда позвонит администратор?», «сколько ждать звонка?»."""
     return _WHEN_CALL.search(normalize(text)) is not None
+
+
+def waits_for_call(text: str) -> bool:
+    """«Буду ждать звонка», «родитель не рядом, значит жду звонка, да?», «я один» — said by
+    a patient of 15–17 whose request is with the administrators: nothing else is wanted."""
+    return _WAITS_FOR_CALL.search(normalize(text)) is not None
 
 
 def names_several(text: str) -> bool:

@@ -282,7 +282,8 @@ _CUE = re.compile(
 )
 _CLAUSE_END = re.compile(r"[!?;\n]|[.,](?=\s|$)|\s(?:и|а|но)\s|\s—\s")
 _IMPERATIVE = re.compile(r"\b(?:запиши|запишите|запишусь|записать)\b")
-_BOOKING_WORD = re.compile(r"\b(?:запис\w+|запиш\w+)\b")
+# «примут без записи?» asks about coming without a booking, it does not ask for one
+_BOOKING_WORD = re.compile(r"(?<!\bбез\s)\b(?:запис\w+|запиш\w+)\b")
 
 _DOCTOR_WORD = r"(?:врач\w*|доктор\w*|травматолог\w*|специалист\w*)"
 # A surname of the list is a doctor after «к», «у», «врач», «доктор» — or when the talk is

@@ -60,6 +60,7 @@ from app.flow.commands import (
     names_several,
     refuses_new_booking,
     says_self,
+    waits_for_call,
     wants_all,
     wants_cancel,
     wants_handoff,
@@ -150,6 +151,7 @@ NOT_UNDERSTOOD = (
     texts.NAME_HELP,
     texts.ASK_BIRTH_AGAIN,
     texts.ASK_CONTACT_AGAIN,
+    texts.REQUEST_UNCLEAR,
 )
 
 DraftSink = Callable[[str], Awaitable[None]]
@@ -1092,6 +1094,8 @@ class Conversation:
         if step in MESSAGE_STEPS:  # the text goes to an administrator as it is
             await self._on_step_text(c, step, text)
             return
+        if step == "teen" and await self._teen_waits(c, text):
+            return  # «буду ждать звонка», «родитель не рядом»: one line, not the screen again
         if (talk := find_small_talk(text)) is not None:  # «привет», «спасибо», «ок», «пока»
             await self._small_talk(c, talk)
             return
@@ -1551,6 +1555,12 @@ class Conversation:
             c.say(texts.ABOUT_BOT)
         elif reading.kind == "medical_question":
             c.say(texts.MEDICAL_ASIDE)
+        elif c.s.step in BUTTON_STEPS and not data and (reading.question or "?" in text):
+            # «а сколько стоит приём? и на ближайшее можно?» on the day step, read by route
+            # as a booking: a text answers nothing there, so the question in it is answered
+            # and the same buttons follow — not «Не понял сообщение»
+            info = await read_question(self._llm(c), text, known, on_partial=c.draft)
+            c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
         else:
             return False
         if not data:
@@ -1614,9 +1624,8 @@ class Conversation:
         elif step == "consent":  # a question, or anything else: an answer, not «не понял»
             c.say(texts.CONSENT_WHY if is_question(text) else texts.CONSENT_HINT)
             await self._repeat_buttons(c)
-        elif step == "teen":
-            c.say(texts.TEEN_AGAIN)
-            await self._repeat_buttons(c)
+        elif step == "teen":  # one line with the buttons of the screen, not the screen again
+            c.say(texts.TEEN_AGAIN, self._teen_buttons())
         elif step in ("child_confirm", "patient", "second"):
             c.say(texts.HINT_BUTTONS)
             await self._repeat_buttons(c)
@@ -2017,6 +2026,25 @@ class Conversation:
         age = years_word((c.s.teen_months or 0) // 12)
         text = texts.TEEN.format(age=age, passed=texts.TEEN_PASSED if passed else "")
         self._screen(c, text, [Button(texts.TEEN_PARENT, "tn:parent", "primary")], back=False)
+
+    def _teen_buttons(self) -> list[list[Button]]:
+        """The buttons of that screen under a one-line answer: the screen is not drawn again."""
+        return [[Button(texts.TEEN_PARENT, "tn:parent", "primary")], self._nav_row(False)]
+
+    async def _teen_waits(self, c: Ctx, text: str) -> bool:
+        """«Буду ждать звонка», «родитель не рядом, значит жду звонка, да?» on that screen.
+
+        The request is with the administrators: one line says so («Хорошо, ждите звонка.
+        Ваше обращение № 1 уже у администратора…»). «Когда позвонят?» is answered with the
+        administrators' hours as everywhere.
+        """
+        if not c.s.teen_passed or asks_when_admin(text) or not waits_for_call(text):
+            return False
+        handoff = await self._open_handoff(c)
+        if handoff is None:
+            return False
+        c.say(f"{texts.TEEN_WAIT} {self._already(c, handoff)}", self._teen_buttons())
+        return True
 
     async def _on_teen(self, c: Ctx, value: str) -> None:
         """«Запись оформляет родитель»: the consent with the representative's line; the

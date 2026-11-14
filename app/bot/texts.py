@@ -276,6 +276,8 @@ TEEN_REASON = (
     "Выбранное время: {when} (не забронировано)"
 )
 TEEN_NO_TIME = "не выбрано"
+# «буду ждать звонка», «родитель не рядом» on that screen: before «Ваше обращение № N уже…»
+TEEN_WAIT = "Хорошо, ждите звонка."
 # the third «не понял» in a row on any screen: said plainly, with a way to a person
 STUCK = (
     "Похоже, я Вас не понимаю. Выберите, пожалуйста, вариант кнопкой — или позовите администратора."
