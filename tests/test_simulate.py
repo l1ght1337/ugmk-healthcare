@@ -379,3 +379,23 @@ async def test_the_danger_state_is_a_plain_refusal_for_a_patient_due_an_ambulanc
     dialog = await play(BY_KEY["bleeding"], patient, env)
     assert dialog.steps[0].replies[0].text == texts.DANGER_FIRST
     assert dialog.steps[-1].bookings == [] and check(dialog, env.kb, env.clinic) == []
+
+
+def test_a_one_line_answer_under_the_same_buttons_is_an_answer(env: sim.Env) -> None:
+    """The partial run before run 4: «Самостоятельную запись с 15 до 18 лет я оформить не
+    могу…» under the buttons of the screen was counted as the screen shown again."""
+    buttons = (texts.TEEN_PARENT, texts.MENU)
+    screen = Shown("Вам 16 лет. Правила самостоятельной записи уточнит администратор.", buttons)
+    before = step(1, Action("say", "09.09.2010"), screen, step="teen", wizard=True)
+    asked = Action("say", "а че, сам не могу записаться? мне 16 уже")
+    answer = step(2, asked, Shown(texts.TEEN_AGAIN, buttons), step="teen", wizard=True)
+    assert sim.UNANSWERED not in rules(made(BY_KEY["teen16"], before, answer), env)
+    # the screen once more with another header line is still no answer
+    days = Shown("Шаг 4 из 5 · День и время\n\nВыберите, пожалуйста, день приёма:", ("Завтра",))
+    again = Shown(
+        "Шаг 4 из 5 · День и время\nПожелание: завтра\n\nВыберите, пожалуйста, день приёма:",
+        ("Завтра",),
+    )
+    first = step(1, Action("press", "x"), days, step="days", wizard=True)
+    shown = step(2, Action("say", "а сколько стоит приём?"), again, step="days", wizard=True)
+    assert sim.UNANSWERED in rules(made(BY_KEY["questions"], first, shown), env)

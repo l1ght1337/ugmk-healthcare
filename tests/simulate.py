@@ -610,6 +610,11 @@ def _repeats(dialog: Dialog) -> list[Violation]:
     return found
 
 
+def _body(text: str) -> str:
+    """A screen without its header: the last paragraph, the question itself."""
+    return text.rsplit("\n\n", 1)[-1].strip()
+
+
 def _unanswered(dialog: Dialog) -> list[Violation]:
     found = []
     prev_state = {"step": "idle", "scenario": None, "question": None, "outcome": None}
@@ -621,7 +626,15 @@ def _unanswered(dialog: Dialog) -> list[Violation]:
             same_buttons = (
                 prev_screen is not None and step.replies[-1].buttons == prev_screen.buttons
             )
-            reshown = len(informative) == 1 and informative[0] is step.replies[-1] and same_buttons
+            # the screen once more: the same buttons under the same question (the header
+            # above it may differ); a one-line answer under the buttons of a screen is not it
+            reshown = (
+                len(informative) == 1
+                and informative[0] is step.replies[-1]
+                and same_buttons
+                and prev_screen is not None
+                and _body(informative[0].text) == _body(prev_screen.text)
+            )
             if not informative or (reshown and step.state["step"] != "idle"):
                 found.append(Violation(UNANSWERED, step.n, _cut(step.action.value, 120)))
         prev_state = step.state

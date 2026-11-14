@@ -350,3 +350,19 @@ async def test_waiting_for_the_call_in_a_long_message_adds_nothing_to_the_reques
     await chat.say(WAITS_LONG)
     assert chat.text == texts.WELCOME and chat.labels() == MENU
     assert len(chat.admin) == posted and fake.requests == []
+
+
+# --- after the partial run before run 4 (teen16) ----------------------------------------------
+
+
+@pytest.mark.parametrize("said", ["ну ок, а скоро админ позвонит? нога реально болит"])
+def test_soon_is_about_the_call_too(said: str) -> None:
+    assert asks_when_admin(said)
+
+
+async def test_a_teen_who_asks_what_to_do_gets_no_advice(make_chat) -> None:
+    chat = make_chat()
+    await to_teen(chat)
+    await chat.say("ну а если не позвонят до вечера? болит же, мне че делать")
+    (only,) = chat.replies
+    assert only.text == texts.MEDICAL_ASIDE and chat.labels() == [texts.TEEN_PARENT, texts.MENU]

@@ -1725,6 +1725,8 @@ class Conversation:
         done = self._routed(c)
         if done is None or not done.places or self._someone_else(c, text):
             return False
+        if wants_handoff(text) or find_command(text) == "admin":
+            return False  # «передайте вопрос администратору»: a request, not a question
         if asks_where_to_go(text):
             waits = mentions_call(text) or await self._open_handoff(c) is not None
             await self._route_line(c, done, "no_wait" if waits else "go", text)
@@ -1747,9 +1749,8 @@ class Conversation:
         step_ok = c.s.step in ("idle", "offer_admin", *START_STEPS)
         if done is None or not step_ok or self._someone_else(c, text):
             return False
-        injury = reading.kind == "complaint" or self._injury_in(text) is not None
-        if not injury or reading.kind not in ("complaint", "medical_question"):
-            return False
+        if reading.kind not in ("complaint", "medical_question"):
+            return False  # a complaint, or «что делать?» in the talk about that injury
         routed = c.s.talk.routed
         assert routed is not None
         infant = INFANT_SCENARIO in routed.dialog.trail
@@ -1764,6 +1765,8 @@ class Conversation:
         started = c.s.wizard and c.s.step in START_STEPS
         if not (asks or ((infant or again) and not started)):
             return False
+        if reading.advice or asks_advice(text) or reading.kind == "medical_question":
+            c.say(texts.MEDICAL_ASIDE)  # «как понять, угроза жизни или нет?»: no advice
         await self._route_line(c, done, "not_here", text)
         return True
 
@@ -1886,8 +1889,12 @@ class Conversation:
             await self._render_screen(c)
         elif talk == "greeting":
             await self._greet(c)
+        elif talk == "thanks" and c.s.talk.line == "welcome":
+            self._reset(c)  # thanked twice in a row: the talk is over, not «Пожалуйста!» again
+            c.say(self.kb.common.goodbye.text, self._main_menu(c))
         elif talk == "thanks":
             self._reset(c)
+            c.line = "welcome"
             c.say(texts.WELCOME, self._main_menu(c))
         else:
             await self._show_menu(c)
@@ -2502,6 +2509,9 @@ class Conversation:
                 c.teen_line = "waits"
                 c.say(f"{texts.TEEN_WAIT} {self._already(c, handoff)}", self._teen_buttons())
                 return True
+        if asks_advice(text):  # «болит же, мне че делать»: no advice, as everywhere
+            await self._teen_say(c, "medical", texts.MEDICAL_ASIDE)
+            return True
         if names_parent(text) and not waits_for_call(text):
             await self._teen_say(c, "parent", texts.TEEN_PARENT_CAN)
             return True

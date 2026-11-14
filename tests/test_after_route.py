@@ -359,3 +359,51 @@ def test_an_answer_from_the_reference_is_grounded(answer: str) -> None:
 def test_advice_that_the_reference_gives_itself_is_allowed() -> None:
     reference = INFO + " При открытом переломе рекомендуем сразу вызвать скорую."
     assert grounded("При открытом переломе рекомендуем сразу вызвать скорую.", reference)
+
+
+# --- after the partial run of 14.11 (9 dialogs) ---------------------------------------------
+
+
+async def test_asking_for_an_administrator_after_the_route_is_not_a_template(make_chat) -> None:
+    chat = make_chat()
+    await needle_route(chat)
+    await chat.say("А туда можно сегодня прийти? Или записаться нужно?")
+    assert chat.text == f"{texts.ROUTE_THERE}\n{AIDS}"
+    await chat.say(
+        "А вы можете передать вопрос администратору? Пусть подскажут, можно ли сегодня "
+        "прийти в этот центр или сначала записываться"
+    )
+    assert texts.CONSENT_YES in chat.labels() and texts.ROUTE_GO not in chat.text
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["А как понять, угроза жизни или нет? Он же не скажет. Может, вы всё-таки нас посмотрите, "
+     "я не знаю что делать, боюсь везти не туда",
+     "как понять, что это серьёзно?", "боюсь ехать не туда"],
+)  # fmt: skip
+def test_not_there_and_how_to_tell_are_not_about_the_place(said: str) -> None:
+    assert not asks_about_there(said, ("Центр борьбы со СПИДом, ул. Ясная, 46",))
+
+
+async def test_advice_asked_after_the_route_gets_no_advice_and_the_route(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    fake = FakeDeepSeek(MEDICAL, {"found": False})
+    chat = make_chat(assistant=fake.assistant(kb))
+    await infant_route(chat)
+    await chat.say(
+        "А как понять, угроза жизни или нет? Он же не скажет. Может, вы всё-таки нас "
+        "посмотрите, я не знаю что делать, боюсь везти не туда"
+    )
+    aside, route = chat.replies
+    assert aside.text == texts.MEDICAL_ASIDE and route.text == INFANT_AGAIN
+
+
+async def test_thanks_twice_in_a_row_is_a_goodbye(make_chat, kb: KnowledgeBase) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say("Хорошо, буду ждать. Спасибо вам большое")
+    assert chat.text == texts.WELCOME
+    await chat.say("Нет, наверное больше нечего. Спасибо, буду ждать звонка")
+    assert chat.text == kb.common.goodbye.text
