@@ -17,10 +17,46 @@ from app.flow.loader import KnowledgeBase, load_kb
 from app.flow.schema import Audience
 from app.schedule.generate import generate
 from app.schedule.mock import MockSchedule
+from tests import data_guard
 
 TZ = ZoneInfo("Asia/Yekaterinburg")
 FIRST_DAY = date(2026, 11, 12)  # Thursday
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=TZ)
+
+
+# --- data/ belongs to the running bot (tests/data_guard.py) -------------------------------------
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """From here on a write into data/ is refused; importing this module does not turn it on,
+    so `python -m tests.simulate` still saves data/simulation.jsonl."""
+    data_guard.install()
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """The check that the run left data/ alone goes last: it speaks for every test before it."""
+    last = [item for item in items if item.name == "test_the_run_left_data_alone"]
+    items[:] = [item for item in items if item not in last] + last
+
+
+@pytest.fixture(scope="session", autouse=True)
+def scratch_data(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The journals and the database of the settings' defaults — in a temporary folder.
+
+    ``Settings()`` built by a test without ``misses_log``, ``llm_usage_log`` or
+    ``database_url`` would otherwise point at data/misses.jsonl, data/llm_usage.jsonl and
+    data/bot.db of the running bot.
+    """
+    from app.config import get_settings
+
+    folder = tmp_path_factory.mktemp("data")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("MISSES_LOG", str(folder / "misses.jsonl"))
+        patch.setenv("LLM_USAGE_LOG", str(folder / "llm_usage.jsonl"))
+        patch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{folder / 'bot.db'}")
+        get_settings.cache_clear()
+        yield folder
+    get_settings.cache_clear()
 
 
 @pytest.fixture(scope="session")

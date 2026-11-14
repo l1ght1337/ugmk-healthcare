@@ -83,7 +83,7 @@ async def _play(chat: Chat, fake: FakeDeepSeek, case: Case) -> None:
 
 
 async def test_all_manual_cases_in_order(
-    kb: KnowledgeBase, clinic: ClinicData, db: Database, schedule: MockSchedule
+    kb: KnowledgeBase, clinic: ClinicData, db: Database, schedule: MockSchedule, tmp_path: Path
 ) -> None:
     fake = FakeDeepSeek()
     settings = Settings(
@@ -92,6 +92,7 @@ async def test_all_manual_cases_in_order(
         demo_mode=True,
         admin_chat_id=-100123,
         handoff_daily_limit=10,  # the run has more than three requests in a day
+        misses_log=tmp_path / "misses.jsonl",  # the journal is on, as in the bot — not in data/
     )
     conversation = Conversation(
         kb=kb,
