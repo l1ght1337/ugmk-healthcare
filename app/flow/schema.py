@@ -262,6 +262,15 @@ class Scenario(_Model):
         min_length=1, description="Where the injury is; topics of other areas are not shown"
     )
     router_hint: str = Field(description="When the scenario applies, in the script's words")
+    guard_words: tuple[str, ...] = Field(
+        default=(),
+        description="Section 5 only: words of a complaint that mean this scenario, every form "
+        "written out («игла», «иглу», «шприц»). A booking scenario about to start for such a "
+        "complaint is not started silently: the bot asks ``guard_question`` first",
+    )
+    guard_question: str | None = Field(
+        default=None, description="«Уточните, пожалуйста: это укол чужой иглой?» — «Да» / «Нет»"
+    )
     entry: tuple[Branch, ...] = Field(min_length=1)
     questions: tuple[Question, ...] = ()
     outcomes: dict[str, Outcome] = Field(min_length=1)
@@ -293,6 +302,10 @@ class Scenario(_Model):
 
     @model_validator(mode="after")
     def _check_integrity(self) -> Scenario:
+        if self.guard_words and self.kind != "routing":
+            raise ValueError("guard_words are for a routing scenario (section 5)")
+        if bool(self.guard_words) != bool(self.guard_question):
+            raise ValueError("guard_words and guard_question go together")
         question_ids = [q.id for q in self.questions]
         if len(set(question_ids)) != len(question_ids):
             raise ValueError("duplicate question ids")

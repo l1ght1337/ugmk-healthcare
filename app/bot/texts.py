@@ -163,6 +163,10 @@ ADMIN_WILL_ANSWER = "На этот вопрос ответит админист�
 # the same complaint again right after its route: said plainly, with a way on
 NOT_BOOKED_HERE = "С этим в травмпункт не записываем. Обратиться нужно:"  # the places follow
 QUESTIONS_TO_ADMIN = "Если остались вопросы, я передам их администратору."
+# The scenario's own question (kb/scenarios, guard_question) before a booking scenario that
+# DeepSeek named for a complaint with the words of section 5: «это укол чужой иглой?»
+GUARD_YES = "Да"
+GUARD_NO = "Нет"
 # A booking started after a route (rule 5): asked once, before the scenario
 SAME_OR_OTHER = "Это та же травма, о которой Вы писали, или другая?"
 SAME_INJURY = "Та же"

@@ -45,6 +45,8 @@ from app.db.session import Database
 from app.flow import topics
 from app.flow.age import find_child_age, parse_age_months
 from app.flow.commands import (
+    NO,
+    YES,
     after_me,
     asks_about_there,
     asks_advice,
@@ -63,6 +65,7 @@ from app.flow.commands import (
     mentions_call,
     names_parent,
     names_several,
+    normalize,
     refuses_new_booking,
     same_or_other,
     says_no_more,
@@ -242,6 +245,7 @@ StepName = Literal[
     "topic",
     "describe",
     "same",
+    "guard",
     "child_confirm",
     "audience",
     "whom",
@@ -273,6 +277,7 @@ STAGE_OF: dict[str, int] = {
     "topic": 1,
     "describe": 1,
     "same": 1,  # «Это та же травма, о которой Вы писали, или другая?» after a route
+    "guard": 1,  # «Уточните, пожалуйста: это укол чужой иглой?» (a scenario's guard_question)
     "child_confirm": 2,
     "audience": 2,
     "whom": 2,  # «Записать ещё одного»: «для кого» before «что случилось»
@@ -312,7 +317,7 @@ COMMAND_ACTIONS = frozenset({*MENU_ITEM, "forget", "about_bot"})
 NAV_ACTIONS = frozenset({"home", "back"})  # route: «хочу на стартовый экран», «верни вопрос»
 # Steps answered by a button: a text there is read by route before the bot gives a hint.
 BUTTON_STEPS = frozenset(
-    {*TIME_STEPS, "second", "consent", "patient", "child_confirm", "name_ok", "same"}
+    {*TIME_STEPS, "second", "consent", "patient", "child_confirm", "name_ok", "same", "guard"}
 )
 
 
@@ -354,6 +359,9 @@ class Talk(BaseModel):
     other: bool = False  # «Другая»: the booking after the route is about another injury
     # asked once: dropped when another person is named, on «Изменить», by a booking made
     who: Who | None = None
+    # the section 5 scenario whose guard_words a complaint had; «Нет» to its question
+    guard: str | None = None
+    guard_no: list[str] = []
     danger: Danger | None = None  # on: by a phrase or an «emergency» outcome; off: «Меню»
     danger_said: str | None = None  # it was on: a booking made later tells the administrators
     line: str | None = None  # the template said last turn: not the same one twice in a row
@@ -992,7 +1000,8 @@ class Conversation:
         """«Для кого запись?» was not asked in this booking: the text or the conversation
         has said it. The line and «Изменить» stay up to the scenario questions."""
         stage = STAGE_OF.get(c.s.step, 9)
-        hidden = c.s.step in ("whom", "first", "teen", "same", "audience", "child_confirm")
+        asks = ("whom", "first", "teen", "same", "guard", "audience", "child_confirm")
+        hidden = c.s.step in asks
         return bool(c.s.wizard and c.s.for_whom and stage <= WHO_SHOWN_UNTIL and not hidden)
 
     def _who_line(self, c: Ctx) -> str:
@@ -1147,6 +1156,8 @@ class Conversation:
             self._teen_screen(c, c.s.teen_passed)
         elif step == "same":
             self._same_screen(c)
+        elif step == "guard":
+            self._guard_screen(c)
         else:
             await self._show_menu(c)
 
@@ -1229,6 +1240,10 @@ class Conversation:
             await self._danger_text(c, text, said)
             return
         step = c.s.step
+        if step in FREE_STEPS:  # a complaint may be here: «наступила на иглу от шприца»
+            found = topics.guard_scenario(self.kb, text)
+            if found is not None and found not in c.s.talk.guard_no:
+                c.s.talk.guard = found
         c.for_whom, c.more = find_audience(text), names_several(text)
         if (other := after_me(text)) is not None and await self._upcoming(c):
             # «мужа после меня»: the writer is booked already
@@ -1785,6 +1800,50 @@ class Conversation:
         await self._route_line(c, done, "not_here", text)
         return True
 
+    def _guard_asked(
+        self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], child_age: int | None
+    ) -> bool:
+        """A booking scenario for a complaint with the guard words of a section 5 scenario
+        («наступила на иглу от шприца» read as «Порез, швы») is not started silently: the
+        scenario's own question is asked first. Its own scenario gives the route at once."""
+        guard = c.s.talk.guard
+        if guard is None or guard not in self.kb.scenarios:
+            return False
+        if scenario_id == guard or self.kb.scenario(scenario_id).kind != "booking":
+            return False
+        area, wish, (for_whom, kept) = c.s.area, c.s.wish, self._for_whom(c)
+        self._reset(c, booking=True)
+        c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
+        c.s.who_kept = kept
+        c.s.pending_scenario, c.s.pending_facts, c.s.child_age = scenario_id, facts, child_age
+        self._guard_screen(c)
+        return True
+
+    def _guard_screen(self, c: Ctx) -> None:
+        guard = self.kb.scenarios.get(c.s.talk.guard or "")
+        if guard is None or not guard.guard_question:
+            self._complaint_screen(c)
+            return
+        c.s.step = "guard"
+        buttons = [Button(texts.GUARD_YES, "gd:yes"), Button(texts.GUARD_NO, "gd:no")]
+        self._screen(c, guard.guard_question, buttons)
+
+    async def _on_guard(self, c: Ctx, value: str) -> None:
+        """«Да» — the route of that scenario; «Нет» — the booking, and not asked again."""
+        scenario, guard = c.s.pending_scenario, c.s.talk.guard
+        if c.s.step != "guard" or scenario is None or guard is None or value not in ("yes", "no"):
+            c.say(texts.STALE, [_home()])
+            return
+        facts, age, picked = c.s.pending_facts, c.s.child_age, c.s.picked
+        c.s.pending_scenario, c.s.pending_facts, c.s.child_age = None, {}, None
+        c.s.talk.guard = None
+        if value == "yes":
+            await self._begin(c, guard, {}, age)
+            return
+        c.s.talk.guard_no.append(guard)
+        await self._begin(c, scenario, facts, age)
+        c.s.picked = picked
+
     def _same_asked(
         self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], child_age: int | None
     ) -> bool:
@@ -2093,7 +2152,9 @@ class Conversation:
             await self._teen_say(c, "again", texts.TEEN_AGAIN)
         elif step == "same" and (answer := same_or_other(text)) is not None:
             await self._on_same(c, answer)  # «да та же самая», «нет, другая травма»
-        elif step in ("child_confirm", "patient", "second", "same"):
+        elif step == "guard" and (first := normalize(text).split()[:1]) and first[0] in YES | NO:
+            await self._on_guard(c, "yes" if first[0] in YES else "no")  # «да, чужой шприц»
+        elif step in ("child_confirm", "patient", "second", "same", "guard"):
             c.say(texts.HINT_BUTTONS)
             await self._repeat_buttons(c)
         elif step == "offer_admin":
@@ -2684,6 +2745,7 @@ class Conversation:
             "pe": self._on_person,
             "sm": self._on_same,
             "who": self._on_who,
+            "gd": self._on_guard,
         }.get(head)
         if handler is None:
             c.say(texts.STALE, [_home()])
@@ -3040,6 +3102,8 @@ class Conversation:
         """Start a scenario of the wizard; the body area may already answer a question."""
         if self._same_asked(c, scenario_id, facts, child_age):
             return  # after a route: «Это та же травма, о которой Вы писали, или другая?»
+        if self._guard_asked(c, scenario_id, facts, child_age):
+            return  # the complaint has words of section 5: «это укол чужой иглой?»
         area, wish, (for_whom, remembered) = c.s.area, c.s.wish, self._for_whom(c)
         self._reset(c, booking=True)
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
@@ -3168,6 +3232,7 @@ class Conversation:
         text, more = self._shorten(render.outcome_message(done, self.clinic, local))
         if done.kind != "book":  # the trauma centre does not book this: the wish is dropped
             c.s.wish, c.s.ended_at = None, c.now
+            c.s.talk.guard = None  # a route or a handoff: the words of section 5 are answered
         if done.kind == "route" and done.scenario.kind == "routing":
             # section 5, «не принимаем, обратитесь в…»: not booked later in this talk
             c.s.talk.routed = Routed(dialog=c.s.dialog.model_copy(deep=True), at=c.now)
@@ -3716,6 +3781,7 @@ class Conversation:
             c.say(place.address, venue=place)
         self._reset(c, booking=True)  # the second patient, if one was named, is offered next
         c.s.talk.who = None  # the booking is made: the next one is asked «для кого»
+        c.s.talk.guard = None
         c.s.step, c.s.booking_id = "payment", booking.id
         c.say(
             render.payment_question(done),

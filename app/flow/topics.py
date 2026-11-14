@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 
 from app.flow.loader import KnowledgeBase
+from app.flow.safety import find_phrase
 from app.flow.schema import Area, FactValue, MenuItem
 
 # Word stems after lower-casing and «ё» → «е». Whole words only; keep them unambiguous
@@ -82,6 +83,15 @@ def guess_area(text: str) -> Area | None:
     t = _normalize(text)
     found = [area for area, stems in AREA_WORDS.items() if _has(t, stems)]
     return found[0] if len(found) == 1 else None
+
+
+def guard_scenario(kb: KnowledgeBase, text: str) -> str | None:
+    """The section 5 scenario whose ``guard_words`` a complaint has: «наступила на иглу от
+    шприца» — 05-07. The words are whole words, as the scenario writes them out."""
+    for scenario in kb.scenarios.values():
+        if scenario.guard_words and find_phrase(text, scenario.guard_words):
+            return scenario.id
+    return None
 
 
 def guess_candidates(text: str) -> list[str]:
