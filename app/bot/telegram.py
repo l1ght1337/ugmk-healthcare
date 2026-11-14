@@ -569,6 +569,10 @@ def build_dispatcher(
         async def today(message: Message) -> None:
             await message.reply(await conversation.admin_today())
 
+        @admin.message(F.chat.id == settings.admin_chat_id, Command("misses"))
+        async def misses(message: Message) -> None:  # what the bot did not understand
+            await message.reply(await conversation.admin_misses())
+
         @admin.callback_query(
             F.message.chat.id == settings.admin_chat_id, F.data.startswith(CLOSE_PREFIX)
         )

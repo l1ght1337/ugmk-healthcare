@@ -139,7 +139,8 @@ def test_dispatcher_wires_patient_and_admin_routers(kb, clinic, schedule, tmp_pa
     patients = dp.sub_routers[1]
     assert len(patients.message.handlers) == 9 and len(patients.callback_query.handlers) == 1
     admin = dp.sub_routers[0]
-    assert len(admin.message.handlers) == 2 and len(admin.callback_query.handlers) == 2
+    # a reply to a request, /today and /misses; «Закрыть обращение» and «Разрешить»
+    assert len(admin.message.handlers) == 3 and len(admin.callback_query.handlers) == 2
 
 
 # --- service messages and bots never reach the dialog (the pinned card, 13.11) -------------

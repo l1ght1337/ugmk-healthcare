@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     llm_first_attempt_seconds: float = Field(default=6.0, gt=0, le=60)
     # Token usage per call (no texts), for the clinic's cost estimate. Empty — log only.
     llm_usage_log: Path | None = PROJECT_ROOT / "data" / "llm_usage.jsonl"
+    # Fallback answers and questions passed to an administrator: the step, the kind and the
+    # masked text, no user (app/bot/misses.py, /misses). Empty — the journal is off.
+    misses_log: Path | None = PROJECT_ROOT / "data" / "misses.jsonl"
 
     # Schedule
     schedule_provider: Literal["mock", "medialog"] = "mock"

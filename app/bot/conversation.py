@@ -26,10 +26,10 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot import render, slots_view, texts, typed
+from app.bot import misses, render, slots_view, texts, typed
 from app.bot.layout import DAY_COLUMNS, TIME_COLUMNS, grid, pack
 from app.bot.render import Card, Venue
-from app.config import ClinicData, Settings
+from app.config import PROJECT_ROOT, ClinicData, Settings
 from app.db.models import (
     AdminMessage,
     AnswerRating,
@@ -80,13 +80,13 @@ from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
 from app.flow.safety import find_phrase
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import Choice, FactValue, Question, Scenario
-from app.flow.wishes import Parsed, Wish, dative, names_doctors, short_name
+from app.flow.wishes import Parsed, Wish, dative, mark_doctors, names_doctors, short_name
 from app.flow.wishes import parse as parse_wish
 from app.flow.words import days as days_word
 from app.flow.words import format_age
 from app.flow.words import years as years_word
 from app.llm.assistant import Assistant
-from app.llm.masking import KnownPerson
+from app.llm.masking import KnownPerson, mask
 from app.llm.reader import AnswerReading, TextReading, read_answer, read_question, read_text
 from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, plan
 from app.schedule.base import ScheduleProvider, Slot, SlotUnavailable
@@ -394,6 +394,10 @@ class Conversation:
         self.engine = Engine(kb, clinic)
         self.posts = doctor_posts(clinic.schedule.doctors)  # «врач-травматолог-ортопед»
         self.care = care_lines()  # scenario → what the trauma centre does (kb/info/uslugi.md)
+        path = settings.misses_log
+        if path is not None and not path.is_absolute():
+            path = PROJECT_ROOT / path
+        self.misses = misses.MissLog(path)  # fallback answers, for /misses
         self._locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     # --- entry points ------------------------------------------------------------------
@@ -402,7 +406,8 @@ class Conversation:
         return await self._run(user, self._greet)
 
     async def text(self, user: UserRef, text: str, draft: DraftSink | None = None) -> Turn:
-        return await self._run(user, lambda c: self._on_text(c, text.strip()), draft=draft)
+        said = text.strip()
+        return await self._run(user, lambda c: self._on_text(c, said), draft=draft, said=said)
 
     async def button(self, user: UserRef, data: str) -> Turn:
         return await self._run(user, lambda c: self._on_button(c, data), via_button=True)
@@ -412,7 +417,7 @@ class Conversation:
 
     async def other(self, user: UserRef) -> Turn:
         """A photo, a voice message, a sticker: the bot reads only text and buttons."""
-        return await self._run(user, self._on_other)
+        return await self._run(user, self._on_other, said="")
 
     async def call_admin(self, user: UserRef) -> Turn:
         return await self._run(user, lambda c: self._handoff(c, texts.ASK_ADMIN_REASON))
@@ -606,6 +611,7 @@ class Conversation:
         *,
         via_button: bool = False,
         draft: DraftSink | None = None,
+        said: str | None = None,
     ) -> Turn:
         async with self._locks[user.id], self.db() as db:
             row = await db.get(User, user.id)
@@ -619,9 +625,12 @@ class Conversation:
             ctx = Ctx(db, row, session, Turn(), self.clock(), via_button=via_button, draft=draft)
             before = session.model_dump(mode="json")
             before_key = _screen_key(session)
+            step = session.step
             ctx.had_history = bool(session.history)
             ctx.came_from = before_key if session.step in WIZARD_STEPS else None
             await handler(ctx)
+            if said is not None:  # a text or a photo answered with a fallback phrase
+                await self._note_misses(ctx, step, said)
             if not ctx.deleted:
                 self._remember_screen(ctx, before, before_key)
                 under_way = ctx.s.wizard and ctx.s.step in WIZARD_STEPS
@@ -646,6 +655,23 @@ class Conversation:
 
     def _local(self, moment: datetime) -> datetime:
         return moment.astimezone(self.settings.tz)
+
+    async def _miss(self, c: Ctx, step: str, kind: str, said: str) -> None:
+        """One line of the journal: the masked text, the step and the kind — no user."""
+        if self.misses.path is None:
+            return
+        doctors = self.clinic.schedule.doctors
+        text = mask(mark_doctors(said, doctors), await self._known(c), self._local(c.now).date())
+        self.misses.write(misses.Miss(c.now.isoformat(timespec="seconds"), step, kind, text))
+
+    async def _note_misses(self, c: Ctx, step: str, said: str) -> None:
+        kinds = dict.fromkeys(k for r in c.turn.replies if (k := misses.kind_of(r.text)))
+        for kind in kinds:
+            await self._miss(c, step, kind, said)
+
+    async def admin_misses(self) -> str:
+        """/misses in the admin chat: the last fallback answers and a day of counters."""
+        return self.misses.report(self.clock(), self.settings.tz)
 
     async def _known(self, c: Ctx) -> KnownPerson:
         patients = (await c.db.scalars(select(Patient).where(Patient.user_id == c.user.id))).all()
@@ -3313,6 +3339,7 @@ class Conversation:
             handoff.last_note, handoff.updated_at = note, c.now
             thread = await self._first_admin_message(c, handoff.id)
             body = await self._admin_text(c, handoff, addendum=True)
+            await self._miss(c, c.s.step, misses.ADMIN, c.s.handoff_context or handoff.reason)
             c.turn.admin.append(AdminPost(body, handoff.id, reply_to=thread))
             template = texts.HANDOFF_ADDED
         text = render.handoff_message(self.clinic, now, handoff.id, why, template)
@@ -3336,6 +3363,7 @@ class Conversation:
         )
         c.db.add(handoff)
         await c.db.flush()
+        await self._miss(c, c.s.step, misses.ADMIN, c.s.handoff_context or reason)
         close = ((Button(texts.ADMIN_CLOSE, f"close:{handoff.id}", style="success"),),)
         c.turn.admin.append(
             AdminPost(await self._admin_text(c, handoff), handoff.id, buttons=close)

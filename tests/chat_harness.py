@@ -23,7 +23,12 @@ def plain(label: str) -> str:
 
 
 def make_settings(**overrides: object) -> Settings:
-    base = {"schedule_provider": "mock", "demo_mode": True, "admin_chat_id": ADMIN_CHAT}
+    base = {
+        "schedule_provider": "mock",
+        "demo_mode": True,
+        "admin_chat_id": ADMIN_CHAT,
+        "misses_log": None,  # the journal of fallback answers: a test turns it on with a path
+    }
     return Settings(_env_file=None, **(base | overrides))  # type: ignore[arg-type]
 
 
