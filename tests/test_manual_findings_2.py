@@ -445,3 +445,81 @@ async def test_the_empty_first_screen_is_not_kept(make_chat) -> None:
     await chat.press(texts.MENU_BOOK)
     await chat.press(texts.MENU)
     assert texts.RESUME not in chat.labels() and chat.labels()[0] == texts.MENU_BOOK
+
+
+# --- 15.11: «запишите меня» is a booking for oneself -------------------------------------------
+
+
+async def test_book_me_is_a_booking_for_oneself(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say("запиши меня к Ярунину на завтра")
+    assert texts.FOR_WHOM["self"] in chat.text
+    assert "Пожелание: к Ярунину А. А., завтра, 13 ноября" in chat.text
+    await chat.press("Рука или нога")
+    await chat.press("Похоже на вывих")
+    assert "Как получена травма" in chat.text and texts.ASK_AUDIENCE not in chat.text
+    await chat.press(texts.BACK)  # the question is there by «Назад»
+    assert texts.ASK_AUDIENCE in chat.text and "Пожелание: к Ярунину А. А." in chat.text
+    await chat.press(texts.AUDIENCE_CHILD)
+    assert texts.ASK_CHILD_AGE in chat.text
+
+
+async def test_plain_book_me_shows_who_the_visit_is_for(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say("запишите меня")
+    assert texts.ASK_COMPLAINT in chat.text and texts.FOR_WHOM["self"] in chat.text
+    await through_dislocation(chat)
+    assert "Ваши ответы: вывих; для себя; бытовая травма" in chat.text
+
+
+@pytest.mark.parametrize("text", ["запишите меня с ребёнком", "запишите меня и сына"])
+async def test_book_me_with_someone_is_asked_about(make_chat, text: str) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say(text)
+    assert texts.FOR_WHOM["self"] not in chat.text
+    await chat.press("Рука или нога")
+    await chat.press("Похоже на вывих")
+    assert texts.ASK_AUDIENCE in chat.text
+
+
+# --- 15.11: «что делать» with a cut, a dressing, a cast: the line of kb/info/uslugi.md ---------
+
+CARE = {
+    "cut_sutures": ("порезал палец, чем обработать?", "Доктор в травмпункте может сделать только"),
+    "dressing": ("нужна перевязка, что делать с повязкой?", "Перевязки: чистые и ожоговые"),
+    "cast_apply": ("сказали наложить гипс, что делать?", "Наложение «обычного» гипса"),
+    "cast_removal": ("пора снять гипс, можно ли его мочить?", "Наложение «обычного» гипса"),
+    "orthosis": ("нужен ортез на колено, что делать?", "Наложение «обычного» гипса"),
+    "scotchcast": ("хочу скотчкаст вместо гипса, что делать?", "Наложение «обычного» гипса"),
+}
+
+
+@pytest.mark.parametrize("scenario", CARE)
+async def test_what_to_do_is_answered_with_the_line_of_the_spravka(
+    make_chat, kb: KnowledgeBase, scenario: str
+) -> None:
+    from app.flow.loader import KB_DIR
+
+    text, start = CARE[scenario]
+    fake = FakeDeepSeek({"type": "complaint", "scenario": scenario, "advice": True})
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say(text)
+    line, rest = chat.replies[0].text.split("\n\n")
+    assert rest == texts.MEDICAL_ASIDE and line.startswith(start)
+    spravka = (KB_DIR / "info" / "uslugi.md").read_text(encoding="utf-8")
+    assert line in spravka  # word for word: the code picks the line, DeepSeek writes nothing
+    assert "ответ клиники" not in line and len(fake.requests) == 1
+    assert (await session(chat))["dialog"]["scenario_id"] == scenario
+
+
+def test_care_lines_are_one_per_scenario_and_only_where_the_spravka_has_them(kb) -> None:
+    from app.flow.loader import care_lines
+
+    lines = care_lines()
+    assert set(lines) == set(CARE)
+    assert len({lines[s] for s in ("cast_apply", "cast_removal", "orthosis", "scotchcast")}) == 1
+    assert all(line and not line.startswith("-") for line in lines.values())

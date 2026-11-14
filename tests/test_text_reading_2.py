@@ -96,6 +96,39 @@ def test_a_refused_time_is_no_wish(doctors) -> None:
     assert parse("только не завтра", doctors, TODAY).wish.empty
 
 
+# --- «не раньше 5», «не позже 12» are bounds, not refusals (15.11) ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "now", "start", "end"),
+    [
+        ("можно не раньше 5?", time(10), time(17), None),  # as «после 5»: the nearest ahead
+        ("можно не раньше 5?", time(4), time(5), None),
+        ("завтра не раньше 5", time(10), time(17), None),  # another day: 1–6 is the afternoon
+        ("завтра не раньше 7", time(10), time(7), None),
+        ("не ранее 9 утра", time(10), time(9), None),
+        ("не раньше чем в 10", time(8), time(10), None),
+        ("только не раньше 18", time(8), time(18), None),
+        ("не позже 12 завтра", time(10), None, time(12)),
+        ("завтра не позже 3", time(10), None, time(15)),
+        ("не позднее 18:30", time(10), None, time(18, 30)),
+        ("запишите к Ярунину на завтра не позже чем в 11", time(10), None, time(11)),
+    ],
+)
+def test_bounds_with_not(doctors, text: str, now: time, start, end) -> None:
+    wish = parse(text, doctors, TODAY, now=now).wish
+    assert (wish.start, wish.end) == (start, end), text
+    assert wish.at is None and wish.period is None
+
+
+def test_bounds_with_not_keep_the_day(doctors) -> None:
+    wish = parse("не позже 12 завтра", doctors, TODAY).wish
+    assert (wish.day, wish.end) == (date(2026, 11, 13), time(12))
+    wish = parse("в субботу не раньше 10 и не позже 14", doctors, TODAY).wish
+    assert (wish.day, wish.start) == (date(2026, 11, 14), time(10))
+    assert parse("не раньше 5 дней назад упал", doctors, TODAY).wish.empty  # a number of days
+
+
 # --- 2. «меня» is a booking for oneself -------------------------------------------------------
 
 
@@ -114,6 +147,10 @@ def test_a_refused_time_is_no_wish(doctors) -> None:
         "мне больно наступать на ногу",
         "я сломал руку, сколько стоит приём?",
         "порезал себе палец",
+        "запишите меня",  # «меня» is the patient here too (15.11)
+        "запиши меня к Ярунину на завтра",
+        "Здравствуйте, запишите меня, пожалуйста",
+        "можно записать меня на завтра?",
     ],
 )
 def test_a_complaint_about_oneself(text: str) -> None:
@@ -128,7 +165,9 @@ def test_a_complaint_about_oneself(text: str) -> None:
         ("мы упали", None),
         ("нас покусала собака", None),
         ("я гуляла с сыном, упала", None),  # as before: it does not say who is hurt
-        ("запишите меня", None),  # no complaint next to it
+        ("запишите меня с ребёнком", None),
+        ("запишите меня и сына", None),
+        ("запишите нас", None),
         ("упал вчера", None),
         ("запишите брата", None),
         ("сын упал, я не знаю что делать", "child"),

@@ -304,9 +304,11 @@ _FOR_CHILD = _audience_patterns(_CHILD_WORDS)
 _FOR_ADULT = _audience_patterns(_ADULT_WORDS)
 _WITH_SOMEONE = re.compile(rf"\bс\s+{_MY}(?:{_CHILD_WORDS}|{_ADULT_WORDS})\b")  # «гуляла с сыном»
 _SOMEONE = re.compile(rf"\b(?:{_CHILD_WORDS}|{_ADULT_WORDS}|мы|нас|нам|нами)\b")
-# «Я», «меня», «мне», «у меня» next to the complaint: the visit is for the one who writes.
+# «Запишите меня» and «я», «меня», «мне», «у меня» next to the complaint: the visit is for the
+# one who writes.
 _FOR_SELF = re.compile(
-    rf"\bменя\s+(?:\w+\s+){{0,2}}{_INJURED}"  # «меня вчера укусила собака»
+    rf"\b{_BOOK_VERB}\s+меня\b"  # «запишите меня», «запиши меня к Ярунину на завтра»
+    rf"|\bменя\s+(?:\w+\s+){{0,2}}{_INJURED}"  # «меня вчера укусила собака»
     rf"|{_INJURED}\s+(?:\w+\s+){{0,2}}меня\b"  # «укусила собака меня»
     rf"|\bя\s+(?:\w+\s+){{0,2}}{_INJURED}"  # «я вчера упала с лестницы»
     rf"|\bу\s+меня\s+(?:\w+\s+){{0,2}}{_COMPLAINT}"  # «у меня болит рука», «у меня перелом»
@@ -374,7 +376,8 @@ def find_small_talk(text: str) -> SmallTalk | None:
 
 def find_audience(text: str) -> Audience | None:
     """«Запишите ребёнка» → child, «можно записать маму?» → adult, «меня укусила собака» →
-    self; None — the bot asks («меня и сына», «гуляла с сыном», «запишите брата»)."""
+    self, «запишите меня» → self; None — the bot asks («меня и сына», «запишите меня с
+    ребёнком», «гуляла с сыном», «запишите брата»)."""
     t = normalize(text)
     if _WITH_SOMEONE.search(t):
         return None

@@ -248,8 +248,11 @@ _PERIOD_WORDS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _CLOCK = r"(?P<h{0}>\d{{1,2}})(?:[:.](?P<m{0}>\d{{2}}))?(?:\s*(?P<u{0}>ч\b|час\w*))?"
 _PART = r"(?:\s+(?P<part{0}>утра|дня|вечера|ночи))?"
 _AT = re.compile(rf"\b(?P<prep>в|во|к|на|около)\s+{_CLOCK.format('')}{_PART.format('')}(?![\d.:])")
-_AFTER = re.compile(rf"\bпосле\s+{_CLOCK.format('')}{_PART.format('')}(?![\d.:])")
-_BEFORE = re.compile(rf"\bдо\s+{_CLOCK.format('')}{_PART.format('')}(?![\d.:])")
+# «не раньше 5» is «после 5», «не позже 12» is «до 12»: a bound, not a refusal
+_NOT_EARLIER = r"(?:после|не\s+(?:раньше|ранее)(?:\s+чем)?(?:\s+в)?)"
+_NOT_LATER = r"(?:до|не\s+(?:позже|позднее)(?:\s+чем)?(?:\s+в)?)"
+_AFTER = re.compile(rf"\b{_NOT_EARLIER}\s+{_CLOCK.format('')}{_PART.format('')}(?![\d.:])")
+_BEFORE = re.compile(rf"\b{_NOT_LATER}\s+{_CLOCK.format('')}{_PART.format('')}(?![\d.:])")
 _FROM_TO = re.compile(
     rf"\bс\s+{_CLOCK.format('')}\s+(?:до|по)\s+{_CLOCK.format('2')}{_PART.format('')}(?![\d.:])"
 )

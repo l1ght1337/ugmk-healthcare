@@ -29,7 +29,8 @@ async def through_dislocation(chat: Chat) -> None:
     """From the «Что случилось» screen to the time choice, by buttons."""
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
-    await chat.press("Для себя")
+    if "Для себя" in chat.labels():  # not asked after «запишите меня»: the text has said it
+        await chat.press("Для себя")
     await chat.press("Бытовая травма")
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")

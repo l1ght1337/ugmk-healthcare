@@ -74,7 +74,7 @@ from app.flow.identity import (
     parse_full_name,
     parse_phone,
 )
-from app.flow.loader import KnowledgeBase, doctor_posts
+from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
 from app.flow.safety import find_phrase
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import Choice, FactValue, Question, Scenario
@@ -386,6 +386,7 @@ class Conversation:
         self.clock = clock
         self.engine = Engine(kb, clinic)
         self.posts = doctor_posts(clinic.schedule.doctors)  # «врач-травматолог-ортопед»
+        self.care = care_lines()  # scenario → what the trauma centre does (kb/info/uslugi.md)
         self._locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     # --- entry points ------------------------------------------------------------------
@@ -1269,14 +1270,18 @@ class Conversation:
     def _advice(self, c: Ctx, scenario_id: str | None = None) -> None:
         """«Что делать?» next to a complaint: one message before the first question.
 
-        First what the trauma centre does with this injury — only where the script says so
-        (the scenario's notices) — then that advice is the doctor's, and 103 / 112. The bot
-        adds nothing of its own (rule 1).
+        First what the trauma centre does with this injury — only from the data: the
+        scenario's script notice, or else its line of kb/info/uslugi.md, picked by the code
+        and shown word for word. Then that advice is the doctor's, and 103 / 112. The bot adds
+        nothing of its own (rule 1); an injury with no phrase in the data gets the second
+        part only.
         """
         said = []
         if scenario_id is not None:
             said = [n.text for n in self.engine.notices(self.kb.scenario(scenario_id))]
-        c.notices_said = bool(said)
+        c.notices_said = bool(said)  # the notice is not repeated before the time is chosen
+        if not said and scenario_id in self.care:
+            said = [self.care[scenario_id]]
         c.say("\n\n".join([*said, texts.MEDICAL_ASIDE]))
 
     async def _by_words(

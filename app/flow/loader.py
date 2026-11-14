@@ -61,6 +61,33 @@ def doctor_posts(doctors: Sequence[str], kb_dir: Path = KB_DIR) -> dict[str, str
     return posts
 
 
+# What the trauma centre does with an injury, said when the patient asks «что делать?» next to
+# the complaint: scenario → the beginning of its line in kb/info/uslugi.md. The code picks the
+# line and shows it word for word; injuries without a line get no such phrase.
+CARE_LINES = {
+    "cut_sutures": "Доктор в травмпункте может сделать только хирургический шов",
+    "dressing": "Перевязки:",
+    "cast_apply": "Наложение «обычного» гипса",
+    "cast_removal": "Наложение «обычного» гипса",
+    "orthosis": "Наложение «обычного» гипса",
+    "scotchcast": "Наложение «обычного» гипса",
+}
+
+
+def care_lines(kb_dir: Path = KB_DIR) -> dict[str, str]:
+    """Scenario → its line of kb/info/uslugi.md, as it is written there (no list bullet)."""
+    path = kb_dir / "info" / "uslugi.md"
+    if not path.exists():
+        return {}
+    lines = [line.removeprefix("- ").strip() for line in path.read_text("utf-8").splitlines()]
+    found = {}
+    for scenario, start in CARE_LINES.items():
+        line = next((line for line in lines if line.startswith(start)), None)
+        if line is not None:
+            found[scenario] = line
+    return found
+
+
 def load_kb(kb_dir: Path = KB_DIR) -> KnowledgeBase:
     scenario_dir = kb_dir / "scenarios"
     scenarios: dict[str, Scenario] = {}
