@@ -1674,7 +1674,7 @@ class Conversation:
         danger = c.s.talk.danger
         if said is not None and said not in danger.said:
             danger.said.append(said)  # one more sign: the words must answer it as well
-        passed = sign_passed(text, danger.said, emergency.over, emergency.no_words_out)
+        passed = sign_passed(text, danger.said, emergency.over)
         if said is None and not danger.locked and passed:  # «кровь остановилась»
             self._danger_off(c)
             self._reset(c)

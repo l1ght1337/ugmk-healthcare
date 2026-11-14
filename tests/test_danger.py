@@ -359,8 +359,10 @@ async def test_the_bleeding_words_do_not_switch_off_another_phrase_said_later(ma
 @pytest.mark.parametrize(
     ("on_by", "said", "off"),
     [
-        ("у него судороги", "ложная тревога", True),  # no kind of its own: any but the two
+        ("у него судороги", "ложная тревога", False),  # words work after bleeding only
         ("у него судороги", "кровь остановилась", False),
+        ("ударило током", "ложная тревога", False),
+        ("кровь хлещет", "ложная тревога", True),
         ("кровь хлещет", "кровотечение остановилось", True),
         ("кровь хлещет", "пришёл в себя", False),  # no longer a word of the list
     ],
@@ -392,8 +394,7 @@ def test_the_exit_words_of_the_config(clinic) -> None:
     assert "ложная тревога" in words and "кровь остановилась" in words
     for gone in ("пришел в себя", "пришла в себя", "уже дышит", "задышал", "задышала"):
         assert gone not in words
-    for group in emergency.over:
-        assert set(group.after) <= set(emergency.phrases)
-    assert set(emergency.no_words_out) <= set(emergency.phrases)
-    for phrase in ("потерял сознание", "без сознания", "не дышит", "перестал дышать"):
-        assert phrase in emergency.no_words_out
+    (bleeding,) = emergency.over  # the words work after the phrases about bleeding only
+    assert bleeding.after and set(bleeding.after) <= set(emergency.phrases)
+    assert all("кров" in phrase for phrase in bleeding.after)
+    assert "ложная тревога" in bleeding.phrases
