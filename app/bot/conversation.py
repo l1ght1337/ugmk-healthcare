@@ -296,6 +296,7 @@ START_STEPS = frozenset({"complaint", "topic", "describe"})  # the scenario is n
 # steps the text answers a question («Когда была получена травма?» — «в пятницу»).
 FREE_STEPS = frozenset({"idle", *START_STEPS, "info", "offer_admin", "payment"})
 WISH_SHOWN_UNTIL = 4  # the wish line stays on screen up to «День и время»
+WHO_SHOWN_UNTIL = 3  # «Запись для себя» and «Изменить» stay up to the scenario questions
 # The text is an age, a name, a birth date, a phone number — unless it is a command or a
 # question: «позови администратора» on the name step is not the patient's name.
 INPUT_STEPS = frozenset({"age", "name", "birth", "contact"})
@@ -320,6 +321,15 @@ class Routed(BaseModel):
     at: datetime
 
 
+class Who(BaseModel):
+    """Who the visit is for, as it was said in this conversation — in the first message,
+    before a route, on «Для кого запись?», on «Кого записать первым?»."""
+
+    audience: Literal["self", "adult", "child"]
+    age_months: int | None = None  # the child's age
+    name: str | None = None  # the child's first name, if it was said: «Ваня»
+
+
 class Talk(BaseModel):
     """What is remembered for the whole conversation, whatever the step.
 
@@ -330,6 +340,8 @@ class Talk(BaseModel):
     at: datetime | None = None  # the last turn
     routed: Routed | None = None
     other: bool = False  # «Другая»: the booking after the route is about another injury
+    # asked once: dropped when another person is named, on «Изменить», by a booking made
+    who: Who | None = None
     line: str | None = None  # the template said last turn: not the same one twice in a row
 
 
@@ -368,6 +380,7 @@ class Session(BaseModel):
     wish: Wish | None = None  # the doctor, the day and the time the patient asked for
     # «запишите ребёнка», «у мамы перелом», «меня укусила собака»: not asked again
     for_whom: Literal["adult", "child", "self"] | None = None
+    who_kept: bool = False  # … taken from the conversation (Talk.who), not said in this booking
     hint: list[str] = []  # scenarios the word list found in a medical question («Записаться»)
     notices_said: bool = False  # the script notice was said with «что делать?»: not twice
     paused: dict[str, Any] | None = None  # the booking left for the menu («Продолжить запись»)
@@ -790,6 +803,7 @@ class Conversation:
             c.s.history = []
             return
         earlier = before.pop("history", [])
+        before.pop("talk", None)  # the conversation's memory is not a part of a screen
         if before["step"] in WIZARD_STEPS and _screen_key(c.s) != before_key:
             c.s.history = [*earlier, before][-MAX_HISTORY:]
         else:
@@ -867,9 +881,10 @@ class Conversation:
         """Leaving for the menu does not erase a booking under way («Продолжить запись»)."""
         s = c.s
         booking = s.wizard and s.step in WIZARD_STEPS and s.resume != "handoff"
-        empty = s.step == "complaint" and not (s.wish or s.for_whom or s.area)
+        # «для кого» alone is not a booking to come back to: the conversation keeps it
+        empty = s.step == "complaint" and not (s.wish or s.area)
         if booking and not empty:
-            s.paused = s.model_dump(mode="json", exclude={"paused", "paused_at"})
+            s.paused = s.model_dump(mode="json", exclude={"paused", "paused_at", "talk"})
             s.paused_at = c.now
 
     async def _resume(self, c: Ctx) -> None:
@@ -879,7 +894,9 @@ class Conversation:
             c.say(texts.RESUME_GONE)
             self._start_booking(c)
             return
+        talk = c.s.talk
         c.s = Session.model_validate(c.s.paused)
+        c.s.talk = talk  # the conversation's memory is not a part of the booking left
         c.back = True  # the «Назад» history comes back as it was
         await self._render_screen(c)
 
@@ -944,13 +961,71 @@ class Conversation:
             lines.append(texts.STEP.format(n=stage, total=len(texts.STAGES), name=name))
         if c.s.wizard and c.s.person is not None and stage <= WISH_SHOWN_UNTIL:
             lines.append(self._person_line(c.s.person))  # «Записываю Ваню: ногу подвернул»
-        elif c.s.wizard and c.s.for_whom and stage == 1:
-            lines.append(texts.FOR_WHOM[c.s.for_whom])
+        elif self._who_shown(c):
+            lines.append(self._who_line(c))  # «Запись для ребёнка, 4 месяца»
         wish = self._wish(c)
         booking = c.s.wizard or c.s.reschedule_of is not None
         if wish is not None and booking and stage <= WISH_SHOWN_UNTIL:
             lines.append(render.wish_line(wish, self._local(c.now).date()))
         return "\n".join(lines) or None
+
+    def _who_shown(self, c: Ctx) -> bool:
+        """«Для кого запись?» was not asked in this booking: the text or the conversation
+        has said it. The line and «Изменить» stay up to the scenario questions."""
+        stage = STAGE_OF.get(c.s.step, 9)
+        hidden = c.s.step in ("whom", "first", "teen", "same", "audience", "child_confirm")
+        return bool(c.s.wizard and c.s.for_whom and stage <= WHO_SHOWN_UNTIL and not hidden)
+
+    def _who_line(self, c: Ctx) -> str:
+        line, who = texts.FOR_WHOM[c.s.for_whom or "self"], c.s.talk.who
+        if c.s.for_whom != "child":
+            return line
+        age = c.s.dialog.age_months
+        if who is not None and who.audience == "child":
+            age = who.age_months if age is None else age
+            if who.name:
+                line = texts.FOR_WHOM_NAMED.format(line=line, name=who.name)
+        return f"{line}, {format_age(age)}" if age is not None else line
+
+    def _for_whom(self, c: Ctx) -> tuple[str | None, bool]:
+        """Who the visit is for — and whether that is only kept from the conversation, not
+        said in this message or this booking."""
+        if c.for_whom is not None:
+            return c.for_whom, False
+        if c.s.for_whom is not None:
+            return c.s.for_whom, c.s.who_kept
+        who = c.s.talk.who
+        return (who.audience, True) if who is not None else (None, False)
+
+    def _said_who(
+        self, c: Ctx, audience: str | None, age: int | None = None, name: str | None = None
+    ) -> None:
+        """Remember who the visit is for; another person named replaces the one before."""
+        if audience not in ("self", "adult", "child"):
+            return
+        who = c.s.talk.who
+        same = who is not None and who.audience == audience
+        if same and who is not None and audience == "child":
+            other_age = age is not None and who.age_months not in (None, age)
+            other_name = name is not None and who.name not in (None, name)
+            same = not (other_age or other_name)
+        if same and who is not None:
+            who.age_months = age if age is not None else who.age_months
+            who.name = name or who.name
+        else:
+            c.s.talk.who = Who(audience=audience, age_months=age, name=name)  # type: ignore[arg-type]
+
+    async def _on_who(self, c: Ctx, value: str) -> None:
+        """«Изменить» under «Запись для себя»: forgotten, «Для кого запись?» is asked."""
+        if value != "edit" or not c.s.wizard or STAGE_OF.get(c.s.step, 9) > WHO_SHOWN_UNTIL:
+            c.say(texts.STALE, [_home()])
+            return
+        c.s.talk.who, c.s.for_whom = None, None
+        d = c.s.dialog
+        if d.scenario_id is not None and d.outcome_id is None:
+            await self._ask_audience(c)  # the scenario is chosen: its «Для кого запись?»
+        else:
+            await self._render_screen(c)  # step 1: asked after the topic, as usual
 
     def _wish(self, c: Ctx) -> Wish | None:
         """The wish in force: its day is not in the past.
@@ -998,6 +1073,8 @@ class Conversation:
             layout.append([Button(texts.KEEP_AS_IS, f"b:keep:{c.s.reschedule_of}")])
         if c.s.person is not None and STAGE_OF.get(c.s.step, 9) <= PERSON_EDIT_UNTIL:
             layout.append([Button(texts.PERSON_EDIT, "pe:edit")])  # not this patient after all
+        elif self._who_shown(c):
+            layout.append([Button(texts.WHO_EDIT, "who:edit")])  # «Запись для себя» is wrong
         layout.append(self._nav_row(back))
         c.say(body, layout, edit=c.first(), screen=True)
 
@@ -1066,7 +1143,7 @@ class Conversation:
         first = d.trail[0] if d.trail else d.scenario_id
         assert first is not None
         facts = {k: v for k, v in d.facts.items() if k != "audience"}
-        c.s.for_whom, c.s.dialog = None, DialogState()
+        c.s.for_whom, c.s.dialog, c.s.talk.who = None, DialogState(), None
         c.back = True  # the screens before stay in the history
         await self._show(c, self.engine.start(c.s.dialog, first, answered=facts))
 
@@ -1079,8 +1156,9 @@ class Conversation:
             return
         *rest, snapshot = c.s.history
         wish, nudged = c.s.wish, c.s.nudged  # a wish dropped later is not brought back
-        on_time = c.s.step in TIME_STEPS
+        on_time, talk = c.s.step in TIME_STEPS, c.s.talk
         c.s = Session.model_validate(snapshot)
+        c.s.talk = talk  # the conversation's memory is not a part of a screen
         if wish is not None and on_time and c.s.step in TIME_STEPS:
             # «вечером» typed on the way here goes back with the step, or the earlier screen
             # (all parts of the day) could not be shown again; the doctor and the day stay
@@ -1129,6 +1207,12 @@ class Conversation:
         if (other := after_me(text)) is not None and await self._upcoming(c):
             # «мужа после меня»: the writer is booked already
             c.for_whom, c.more, c.alone = other, False, True
+        if c.for_whom is not None and not c.more:  # kept for the whole conversation
+            self._said_who(c, c.for_whom)  # the age is kept once it is confirmed or asked
+        elif c.s.talk.who is not None and self._read_wish(c, text).patient_spans:
+            c.s.talk.who = None  # «запишите Кузнецову Марию»: another person is named
+            if c.s.who_kept:
+                c.s.for_whom, c.s.who_kept = None, False
         if step not in MESSAGE_STEPS and await self._press_typed(c, text, shown):
             return  # a button's label typed as text: «бытовая», «вечер», «14:30», «да»
         if (move := find_navigation(text)) is not None:  # «назад», «в меню», «отмена»
@@ -1190,7 +1274,7 @@ class Conversation:
         if action == "book":
             if step in WIZARD_STEPS:  # «запишите меня» while booking: the same step
                 if c.for_whom and step in START_STEPS:
-                    c.s.for_whom = c.for_whom  # type: ignore[assignment]
+                    c.s.for_whom, c.s.who_kept = c.for_whom, False  # type: ignore[assignment]
                 c.say(texts.GOING_ON)
                 await self._render_screen(c)
             else:  # and the wish named just before, if any
@@ -1565,9 +1649,10 @@ class Conversation:
         if child_now or (c.for_whom is not None and self._someone_else(c, "")):
             c.s.talk.other = True  # another patient was named: another injury
             return False
-        area, wish, for_whom = c.s.area, c.s.wish, c.for_whom or c.s.for_whom
+        area, wish, (for_whom, kept) = c.s.area, c.s.wish, self._for_whom(c)
         self._reset(c, booking=True)
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
+        c.s.who_kept = kept
         c.s.pending_scenario, c.s.pending_facts, c.s.child_age = scenario_id, facts, child_age
         self._same_screen(c)
         return True
@@ -2006,9 +2091,10 @@ class Conversation:
         description is never «опишите своими словами».
         """
         shown = c.s.menu if c.s.wizard and c.s.step == "topic" else None
-        wish, for_whom = c.s.wish, c.for_whom or c.s.for_whom
+        wish, (for_whom, kept) = c.s.wish, self._for_whom(c)
         self._reset(c, booking=True)
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
+        c.s.who_kept = kept
         menu = topics.best_menu(self.kb, area, candidates)
         if shown is not None and topics.stays(self.kb, shown, menu, area, candidates):
             menu = shown
@@ -2074,6 +2160,7 @@ class Conversation:
         if months is None:
             c.say(texts.ASK_CHILD_AGE_AGAIN, self._back_row())
             return
+        self._said_who(c, "child", months)
         step = self.engine.set_patient(c.s.dialog, "child", months)
         if step is not None:
             await self._show(c, step)
@@ -2432,6 +2519,7 @@ class Conversation:
             "pf": self._on_first,
             "pe": self._on_person,
             "sm": self._on_same,
+            "who": self._on_who,
         }.get(head)
         if handler is None:
             c.say(texts.STALE, [_home()])
@@ -2457,6 +2545,7 @@ class Conversation:
             await self._take_person(c, person)
         elif item in ("more", "next"):  # «Записать ещё одного»
             self._reset(c)
+            c.s.talk.who = None  # another patient: asked
             c.s.wizard, c.s.second_ok = True, True  # the first booking is not asked about
             self._whom_screen(c)
         else:  # «В главное меню»
@@ -2499,6 +2588,7 @@ class Conversation:
         if c.s.step != "audience" or value not in ("adult", "child"):
             c.say(texts.STALE, [_home()])
             return
+        self._said_who(c, "self" if value == "adult" else "child")
         step = self.engine.set_patient(c.s.dialog, value)  # type: ignore[arg-type]
         if step is not None:
             await self._show(c, step)
@@ -2512,6 +2602,7 @@ class Conversation:
         c.s.dialog = DialogState()
         if value == "yes" and c.s.child_age is not None:
             self.engine.set_patient(c.s.dialog, "child", c.s.child_age)
+            self._said_who(c, "child", c.s.child_age)
         c.s.pending_scenario, c.s.pending_facts, c.s.child_age = None, {}, None
         await self._show(c, self.engine.start(c.s.dialog, scenario, facts))
 
@@ -2698,6 +2789,9 @@ class Conversation:
         age) goes on; otherwise the booking starts from «Что случилось?».
         """
         rest = [p for p in c.s.people if not p.same(person)]
+        c.s.talk.who = None  # this patient, not the one before
+        named = person.name if person.name[:1].isupper() else None  # «Ваня», not «сын»
+        self._said_who(c, person.audience, person.age_months, named)
         chosen = c.s.dialog.scenario_id is not None and c.s.dialog.outcome_id is None
         if chosen and c.s.step in ("first", "audience", "age"):
             c.s.person, c.s.people, c.s.for_whom = person, rest, person.audience
@@ -2727,7 +2821,7 @@ class Conversation:
             return
         people = c.s.people
         self._reset(c)
-        c.s.wizard, c.s.second_ok, c.s.people = True, True, people
+        c.s.wizard, c.s.second_ok, c.s.people, c.s.talk.who = True, True, people, None
         self._whom_screen(c)
 
     def _whom_screen(self, c: Ctx) -> None:
@@ -2742,6 +2836,7 @@ class Conversation:
             c.say(texts.STALE, [_home()])
             return
         c.s.for_whom = value  # type: ignore[assignment]
+        c.s.talk.who = Who(audience=value)  # type: ignore[arg-type]  # one more patient
         self._complaint_screen(c)
 
     async def _on_whom_text(self, c: Ctx, text: str) -> None:
@@ -2775,14 +2870,25 @@ class Conversation:
         """Start a scenario of the wizard; the body area may already answer a question."""
         if self._same_asked(c, scenario_id, facts, child_age):
             return  # after a route: «Это та же травма, о которой Вы писали, или другая?»
-        area, wish, for_whom = c.s.area, c.s.wish, c.for_whom or c.s.for_whom
+        area, wish, (for_whom, remembered) = c.s.area, c.s.wish, self._for_whom(c)
         self._reset(c, booking=True)
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
-        c.s.notices_said = c.notices_said
+        c.s.who_kept, c.s.notices_said = remembered, c.notices_said
+        who = c.s.talk.who
+        known = who.age_months if who is not None and who.audience == "child" else None
+        if child_age is not None and child_age == known and for_whom == "child":
+            child_age = None  # confirmed before in this conversation: not asked again
         if for_whom and child_age is None:  # «запишите ребёнка», «меня укусила»: not asked again
             person = c.s.person  # … and the age told with the name: «Маша 7 лет»
             age = person.age_months if person is not None and for_whom == "child" else None
+            if age is None and for_whom == "child":
+                age = known  # … or earlier in the conversation
             self.engine.set_patient(c.s.dialog, "child" if for_whom == "child" else "adult", age)
+            if remembered and self._ends_at_once(c, scenario_id, facts):
+                # the answer kept from the conversation would give a route (other hospitals
+                # for a child and for an adult) or send the request to the administrators
+                # with no screen to show «Запись для ребёнка» on: asked, as before
+                c.s.for_whom, c.s.who_kept, c.s.dialog = None, False, DialogState()
         facts = {**topics.area_facts(self.kb, scenario_id, area), **facts}
         if child_age is not None:
             c.s.step = "child_confirm"
@@ -2790,6 +2896,16 @@ class Conversation:
             self._child_confirm(c)
             return
         await self._show(c, self.engine.start(c.s.dialog, scenario_id, facts))
+
+    def _ends_at_once(self, c: Ctx, scenario_id: str, facts: dict[str, FactValue]) -> bool:
+        """The scenario would end at once with a route or a request to the administrators.
+
+        A booking is not such an end: «Ваши ответы: …; для ребёнка, 8 лет» with «Изменить
+        ответы» stands over the day picker.
+        """
+        probe = c.s.dialog.model_copy(deep=True)
+        step = self.engine.start(probe, scenario_id, dict(facts))
+        return isinstance(step, Done) and step.kind != "book"
 
     def _child_confirm(self, c: Ctx) -> None:
         age = format_age(c.s.child_age or 0)
@@ -3414,6 +3530,7 @@ class Conversation:
         if (place := render.venue(self.clinic)) is not None:
             c.say(place.address, venue=place)
         self._reset(c, booking=True)  # the second patient, if one was named, is offered next
+        c.s.talk.who = None  # the booking is made: the next one is asked «для кого»
         c.s.step, c.s.booking_id = "payment", booking.id
         c.say(
             render.payment_question(done),
@@ -4031,7 +4148,7 @@ class Conversation:
         self._reset(c)
         c.s.wizard = True
         c.s.wish = None if wish is None or wish.empty else wish
-        c.s.for_whom = c.for_whom  # type: ignore[assignment]
+        c.s.for_whom, c.s.who_kept = self._for_whom(c)  # type: ignore[assignment]
         self._complaint_screen(c)
 
     async def _on_wish_text(self, c: Ctx, found: Parsed) -> bool:
@@ -4068,7 +4185,7 @@ class Conversation:
             return False  # the rest of the message goes on: a complaint, an answer, a question
         if step in WIZARD_STEPS:  # the booking goes on: the same step, now with the wish
             if c.for_whom and step in START_STEPS:
-                c.s.for_whom = c.for_whom  # type: ignore[assignment]
+                c.s.for_whom, c.s.who_kept = c.for_whom, False  # type: ignore[assignment]
             await self._render_screen(c)
         else:
             self._start_booking(c, c.s.wish)
