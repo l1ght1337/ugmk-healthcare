@@ -66,7 +66,6 @@ DANGER_ADMIN_LATER = (
 # for the administrators: the first line of a request, and a line with a booking made later
 DANGER_ADMIN_MARK = "⚠️ угроза жизни: {phrase}"
 DANGER_WAS = "В разговоре была фраза из списка угрозы жизни: «{phrase}»"
-DANGER_BOOKED = "Запись № {number} ({when}, {doctor}). " + DANGER_WAS
 DANGER_BY_SCENARIO = "опасные признаки по сценарию {number} «{title}»"
 AMBULANCE_LINE = "Линия скорой помощи клиники: {phone}."
 ROUTE_LEAD = "С такой травмой Вам нужно обратиться:"  # script branch has no phrase
@@ -367,6 +366,14 @@ ADMIN_BOOKING = (
     "Telegram: {telegram}"
 )
 ADMIN_BOOKING_DEMO = " (демо)"
+# for the administrators, with a booking: what the conversation before it had
+ADMIN_BOOKING_NOTE = "Запись № {number} ({when}, {doctor})."
+# a route of a booking scenario (a burn of the face, a cosmetic suture), then a booking of
+# the same scenario with another answer
+ROUTE_ANSWER_CHANGED = (
+    "После маршрута ответ изменён: было «{before}», стало «{after}» (вопрос: «{ask}»)"
+)
+ROUTE_AUDIENCE = {"child": "для ребёнка", "adult": "для взрослого"}
 VISIT_KIND = {"primary": "первичный", "repeat": "повторный"}
 PAYMENT_KIND = {"self": "самостоятельно", "insurance": "по страховке", None: "не выбрана"}
 PATIENT_LINE = "{name}, {birth} — {who}"

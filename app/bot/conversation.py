@@ -358,6 +358,10 @@ class Talk(BaseModel):
 
     at: datetime | None = None  # the last turn
     routed: Routed | None = None
+    # a route of a booking scenario: it depends on the answers and does not lock the booking;
+    # a booking of that scenario with another answer tells the administrators so
+    answered: Routed | None = None
+    notes: dict[str, str] = {}  # booking id → lines for its card in the admin chat
     other: bool = False  # «Другая»: the booking after the route is about another injury
     # asked once: dropped when another person is named, on «Изменить», by a booking made
     who: Who | None = None
@@ -3245,6 +3249,9 @@ class Conversation:
         if done.kind != "book":  # the trauma centre does not book this: the wish is dropped
             c.s.wish, c.s.ended_at = None, c.now
             c.s.talk.guard = None  # a route or a handoff: the words of section 5 are answered
+        if done.kind == "route" and done.scenario.kind == "booking":
+            # «ожог лица — в ожоговый центр»: the patient may come back with another answer
+            c.s.talk.answered = Routed(dialog=c.s.dialog.model_copy(deep=True), at=c.now)
         if done.kind == "route" and done.scenario.kind == "routing":
             # section 5, «не принимаем, обратитесь в…»: not booked later in this talk
             c.s.talk.routed = Routed(dialog=c.s.dialog.model_copy(deep=True), at=c.now)
@@ -3755,18 +3762,20 @@ class Conversation:
         c.db.add(booking)
         await c.db.flush()
         self._plan_reminders(c, booking)
+        if changed := self._answers_changed(c):
+            c.s.talk.notes[str(booking.id)] = "\n".join(changed)
+        c.s.talk.answered = None
         if self._cards_on():
             text = await self._admin_booking(c, booking)
             c.turn.admin.append(AdminPost(text, booking_id=booking.id))
-        elif c.s.talk.danger_said and self.settings.admin_chat_id:
-            # no cards in the admin chat: the phrase still reaches the administrators
-            note = texts.DANGER_BOOKED.format(
+        elif (notes := self._booking_notes(c, booking)) and self.settings.admin_chat_id:
+            # no cards in the admin chat: the lines still reach the administrators
+            head = texts.ADMIN_BOOKING_NOTE.format(
                 number=booking.id,
                 when=render.format_day_time(self._local(booking.start_at)),
                 doctor=booking.doctor,
-                phrase=c.s.talk.danger_said,
             )
-            c.turn.admin.append(AdminPost(note))
+            c.turn.admin.append(AdminPost("\n".join([head, *notes])))
         c.say(self.kb.common.identify_thanks.text, remove_keyboard=True)
         c.say("", media=BOOKED, media_only=True)
         if photo := self.clinic.schedule.doctor_photos.get(slot.doctor):
@@ -3841,9 +3850,37 @@ class Conversation:
             payment=texts.PAYMENT_KIND.get(booking.payment, booking.payment),
             telegram=f"{telegram.strip() or '—'} (id {c.user.id})",
         )
-        if c.s.talk.danger_said:  # the «угроза жизни» state was on in this conversation
-            card += "\n" + texts.DANGER_WAS.format(phrase=c.s.talk.danger_said)
-        return card
+        return "\n".join([card, *self._booking_notes(c, booking)])
+
+    def _booking_notes(self, c: Ctx, booking: Booking) -> list[str]:
+        """What the administrators should know about the conversation before a booking: the
+        «угроза жизни» state was on; the answer was changed after a route."""
+        lines = []
+        if c.s.talk.danger_said:
+            lines.append(texts.DANGER_WAS.format(phrase=c.s.talk.danger_said))
+        if changed := c.s.talk.notes.get(str(booking.id)):
+            lines.append(changed)
+        return lines
+
+    def _answers_changed(self, c: Ctx) -> list[str]:
+        """A route of this scenario was given in the conversation, and now the booking is made
+        with other answers: «было «Лицо», стало «Другая часть тела»», one line an answer."""
+        before, d = c.s.talk.answered, c.s.dialog
+        if before is None or not d.trail or before.dialog.trail[:1] != d.trail[:1]:
+            return []
+        old = before.dialog
+        scenario = self.kb.scenarios.get(old.scenario_id or "")
+        lines = []
+        if old.audience and d.audience and old.audience != d.audience:
+            was, now = texts.ROUTE_AUDIENCE[old.audience], texts.ROUTE_AUDIENCE[d.audience]
+            lines.append(
+                texts.ROUTE_ANSWER_CHANGED.format(before=was, after=now, ask=texts.ASK_AUDIENCE)
+            )
+        for q in scenario.questions if scenario else ():
+            was, now = _answer_label(q, old.facts), _answer_label(q, d.facts)
+            if was and now and was != now:
+                lines.append(texts.ROUTE_ANSWER_CHANGED.format(before=was, after=now, ask=q.ask))
+        return lines
 
     def _unpin(self, c: Ctx, booking: Booking) -> None:
         if booking.chat_message_id:
