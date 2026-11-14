@@ -18,9 +18,12 @@ one: the scenarios, the mock schedule, a database of its own and the real DeepSe
 * no diagnoses and no medical advice.
 
 Nothing here is fixed automatically: the report lists what failed, with the transcript.
-Needs DEEPSEEK_API_KEY in .env. The transcripts of the last run stay in data/simulation.jsonl
-(not in git): ``--recheck`` applies the rules to them again after a rule or a persona is
-corrected, without calling DeepSeek. The rules are tested offline in tests/test_simulate.py.
+Needs DEEPSEEK_API_KEY in .env. Every full run keeps its transcripts in
+data/simulation.runN.jsonl (not in git), so the runs can be compared; a run of some personas
+(``--only``, ``--limit``) goes to data/simulation.partial.jsonl and leaves the report alone.
+``--recheck`` applies the rules to saved transcripts again after a rule or a persona is
+corrected, without calling DeepSeek: the last run, or ``--run N`` / ``--run partial``. The
+rules are tested offline in tests/test_simulate.py.
 """
 
 from __future__ import annotations
@@ -63,7 +66,9 @@ FIRST_DAY = date(2026, 11, 12)  # Thursday: the day every dialog starts on
 MAX_TURNS = 25
 TURN_SECONDS = 40  # the clinic's clock moves on with every turn of the patient
 REPORT = PROJECT_ROOT / "docs" / "simulation_report.md"
-RAW = PROJECT_ROOT / "data" / "simulation.jsonl"  # every transcript of the last run (not in git)
+RUNS_DIR = PROJECT_ROOT / "data"  # simulation.runN.jsonl — every full run is kept (not in git)
+PARTIAL = "simulation.partial.jsonl"  # a run of some personas: overwritten, not numbered
+_RUN_FILE = re.compile(r"^simulation\.run(\d+)\.jsonl$")
 BOOKED_DAYS = ("Завтра", "Вс")  # the days of the visits booked before the dialog
 
 # --- the rules, as the report names them ---------------------------------------------------
@@ -825,7 +830,8 @@ def render_report(
     ]
     if meta:
         lines += [
-            f"Запуск: {meta.get('at', '—')}. Модель: {meta.get('model', '—')}. "
+            (f"Прогон № {meta['run']}. " if meta.get("run") else "")
+            + f"Запуск: {meta.get('at', '—')}. Модель: {meta.get('model', '—')}. "
             f"Вызовов DeepSeek: пациент — {meta.get('patient_calls', 0)}, бот — "
             f"{meta.get('bot_calls', 0)}; время прогона — {meta.get('seconds', 0)} с.",
             "",
@@ -908,6 +914,36 @@ async def run(
     return list(await asyncio.gather(*tasks))
 
 
+def runs(folder: Path = RUNS_DIR) -> list[tuple[int, Path]]:
+    """The full runs kept in the folder, by their numbers."""
+    found = [(m, p) for p in folder.glob("simulation.run*.jsonl") if (m := _RUN_FILE.match(p.name))]
+    return sorted((int(m[1]), p) for m, p in found)
+
+
+def last_run(folder: Path = RUNS_DIR) -> Path | None:
+    kept = runs(folder)
+    return kept[-1][1] if kept else None
+
+
+def next_run(folder: Path = RUNS_DIR) -> Path:
+    """Where a new full run goes: no run is written over."""
+    kept = runs(folder)
+    return folder / f"simulation.run{kept[-1][0] + 1 if kept else 1}.jsonl"
+
+
+def run_file(which: str | None, folder: Path = RUNS_DIR) -> Path:
+    """``--run``: a number, «partial», or nothing for the last full run."""
+    if which == "partial":
+        path: Path | None = folder / PARTIAL
+    elif which is None:
+        path = last_run(folder)
+    else:
+        path = folder / f"simulation.run{int(which)}.jsonl"
+    if path is None or not path.is_file():
+        raise SystemExit(f"no saved transcripts for --run {which or 'last'} in {folder}")
+    return path
+
+
 def save_raw(
     results: Sequence[tuple[Dialog, list[Violation]]], meta: dict[str, Any], path: Path
 ) -> None:
@@ -985,13 +1021,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--turns", type=int, default=MAX_TURNS)
     parser.add_argument("--no-write", action="store_true", help="print the report, keep the file")
     parser.add_argument(
-        "--recheck", action="store_true", help="apply the rules to the last run again, no DeepSeek"
+        "--recheck", action="store_true", help="apply the rules to a saved run again, no DeepSeek"
     )
+    parser.add_argument("--run", help="with --recheck: the run's number or «partial» (the last)")
     args = parser.parse_args(argv)
     if args.recheck:
+        saved = run_file(args.run)
         with tempfile.TemporaryDirectory() as tmp:
             offline = Env(load_kb(), load_clinic_data(), None, Path(tmp))
-            results, meta = asyncio.run(recheck(RAW, offline))
+            results, meta = asyncio.run(recheck(saved, offline))
         report = render_report(results, meta)
         if args.no_write:
             print(report)
@@ -1045,14 +1083,23 @@ def main(argv: list[str] | None = None) -> None:
         "bot_calls": len(bot_calls),
         "seconds": int((datetime.now(TZ) - started).total_seconds()),
     }
+    failed = sum(1 for d, v in results if v)
+    if args.only or args.limit:  # some personas: not a run to compare, the report stays
+        save_raw(results, meta, RUNS_DIR / PARTIAL)
+        if args.no_write:
+            print(render_report(results, meta))
+        print(f"partial run: {len(results)} dialogs, with violations {failed}; transcripts in "
+              f"{RUNS_DIR / PARTIAL}, {REPORT.name} is kept")  # fmt: skip
+        return
+    kept = next_run()
+    meta["run"] = int(_RUN_FILE.match(kept.name)[1])  # type: ignore[index]
     report = render_report(results, meta)
     if args.no_write:
         print(report)
         return
     REPORT.write_text(report, encoding="utf-8")
-    save_raw(results, meta, RAW)
-    failed = sum(1 for d, v in results if v)
-    print(f"written {REPORT}: {len(results)} dialogs, with violations {failed}")
+    save_raw(results, meta, kept)
+    print(f"written {REPORT} and {kept}: {len(results)} dialogs, with violations {failed}")
 
 
 if __name__ == "__main__":

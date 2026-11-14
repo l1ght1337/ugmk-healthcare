@@ -87,8 +87,9 @@ docker run -d --name ugmk-bot --restart unless-stopped \
 uv run ruff check . && uv run pytest     # без сети: LLM и Telegram подменены
 uv run pytest -m live -s                 # живой DeepSeek (нужен ключ), печатает токены и долю кэша
 uv run python -m tests.live_report       # последние 3 live-прогона: тест, причина сбоя, время
-uv run python -m tests.simulate          # симулятор пациентов (нужен ключ) → docs/simulation_report.md
-uv run python -m tests.simulate --recheck  # те же расшифровки, правила заново, без DeepSeek
+uv run python -m tests.simulate          # симулятор пациентов (нужен ключ) → docs/simulation_report.md, data/simulation.runN.jsonl
+uv run python -m tests.simulate --only teen16,two_kids  # часть персонажей: data/simulation.partial.jsonl, отчёт не трогает
+uv run python -m tests.simulate --recheck  # расшифровки последнего прогона, правила заново, без DeepSeek (--run 2, --run partial)
 ```
 - `tests/simulate.py` — симулятор пациентов, запускается вручную, как live-тесты. DeepSeek играет 50 персонажей из `tests/simulate_personas.py` (мать с ребёнком ночью, пожилой человек, подросток, пишущий с опечатками или транслитом, раздражённый, передумывающий и т. д.) против настоящего диалога бота, до 25 ходов; пациент сам решает, нажать кнопку или написать. После диалога расшифровку проверяют правила без LLM: цель достигнута или получен понятный отказ с выходом; экран не показан дважды подряд без новой строки; вопрос не остался без ответа; названные врач, день и «для кого» не потерялись; у каждого ответа есть кнопка дальше; нет диагнозов и советов (бот не называет и вид травмы, которого нет в словах пациента и на нажатых им кнопках). Итог — `docs/simulation_report.md`: сколько диалогов прошло и расшифровка каждого провала. Имена и телефоны персонажей вымышленные. Опции: `--only ключ1,ключ2`, `--limit N`, `--parallel K`. Правила проверены офлайн в `tests/test_simulate.py`.
 - Тесты не трогают `data/`: там файлы работающего бота (`bot.db`, `llm_usage.jsonl`, `misses.jsonl`). На время прогона пути журналов и базы по умолчанию ведут во временную папку, запись в `data/` из теста останавливается на месте, а последний тест прогона (`tests/test_data_guard.py`) падает, если хоть один тест пытался туда писать. Исключение — `data/live_runs.jsonl`, собственный журнал live-тестов.

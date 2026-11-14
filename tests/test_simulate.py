@@ -288,6 +288,24 @@ def test_the_patient_prompt_states_the_rules_and_the_persona() -> None:
     assert persona.story in prompt and "Только JSON" in prompt
 
 
+def test_every_full_run_is_kept_under_its_own_number(tmp_path: Path) -> None:
+    assert sim.runs(tmp_path) == [] and sim.last_run(tmp_path) is None
+    assert sim.next_run(tmp_path) == tmp_path / "simulation.run1.jsonl"
+    for name in ("simulation.run1.jsonl", "simulation.run2.jsonl", "simulation.jsonl",
+                 "simulation.partial.jsonl", "misses.jsonl"):  # fmt: skip
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    assert [n for n, _ in sim.runs(tmp_path)] == [1, 2]  # the old single file is not a run
+    assert sim.next_run(tmp_path).name == "simulation.run3.jsonl"
+    (tmp_path / "simulation.run10.jsonl").write_text("{}", encoding="utf-8")
+    assert sim.last_run(tmp_path).name == "simulation.run10.jsonl"  # by the number, not the name
+    assert sim.next_run(tmp_path).name == "simulation.run11.jsonl"
+    assert sim.run_file("2", tmp_path).name == "simulation.run2.jsonl"
+    assert sim.run_file("partial", tmp_path).name == sim.PARTIAL
+    assert sim.run_file(None, tmp_path).name == "simulation.run10.jsonl"
+    with pytest.raises(SystemExit):
+        sim.run_file("7", tmp_path)
+
+
 async def test_saved_transcripts_are_rechecked_without_deepseek(
     env: sim.Env, tmp_path: Path
 ) -> None:
