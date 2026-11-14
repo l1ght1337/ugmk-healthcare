@@ -582,6 +582,26 @@ def says_self(text: str) -> bool:
     return _SELF_PATIENT.search(normalize(text)) is not None
 
 
+# «Её не трогаем», «завтрашнюю оставляем», «ничего не переношу», «запись на месте»
+_KEEPS = re.compile(
+    r"\b(?:запис\w+|ее|ту|эту|завтрашн\w+|втор\w+|перв\w+)\s+(?:\w+\s+){0,2}?"
+    r"(?:не\s+трога\w+|оставля\w+|оставь\w*|оставим|остается|на\s+месте)\b"
+    r"|\b(?:не\s+трога\w+|оставля\w+|оставь\w*|оставим|пусть)\s+(?:\w+\s+){0,2}?"
+    r"(?:запис\w+\s+(?:остается|как\s+есть)|запис\w+|ее\b|как\s+есть)"
+    r"|\bничего\s+не\s+(?:переношу|перенос\w+|меня\w+|отменя\w+)\b"
+    r"|\bзапис\w+\s+(?:\w+\s+){0,2}?остается\b"
+)
+
+
+def keeps_booking(text: str) -> bool:
+    """«Спасибо, её не трогаем», «завтрашнюю оставляем, ничего не переношу» — about a booking
+    the patient has: it stays. Not an order to cancel or to move one."""
+    t = normalize(text)
+    if re.search(rf"\b(?:{_CANCEL}|{_MOVE})\b", t) or _MOVE_INTENT.search(t):
+        return False
+    return _KEEPS.search(t) is not None
+
+
 def refuses_new_booking(text: str) -> bool:
     """«Я уже записан», «не надо меня заново записывать», «новая запись не нужна»: said in
     the middle of a booking by a patient who has one, it stops the new one."""

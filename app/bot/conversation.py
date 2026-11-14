@@ -56,6 +56,7 @@ from app.flow.commands import (
     is_booking_order,
     is_question,
     is_unsure,
+    keeps_booking,
     names_several,
     refuses_new_booking,
     says_self,
@@ -348,6 +349,7 @@ class Session(BaseModel):
     teen_months: int | None = None  # 15–17 booking for himself: his age, in months
     teen_passed: bool = True  # … and the request has gone to an administrator
     unclear: int = 0  # «не понял» in a row (NOT_UNDERSTOOD)
+    told_already: int = 0  # «уже у администратора» in a row: not twice the same line
     ended_at: datetime | None = None  # a route or a handoff was shown (not a booking)
     history: list[dict[str, Any]] = []  # earlier wizard screens, for «Назад»
 
@@ -388,6 +390,7 @@ class Ctx:
     limited: bool = False  # too many DeepSeek calls a minute: this turn went without it
     more: bool = False  # this message names more than one patient
     alone: bool = False  # «мужа после меня» from a patient who is booked: one patient
+    told_already: bool = False  # this turn said the request is with an administrator
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
@@ -700,6 +703,8 @@ class Conversation:
                 ctx.turn.replies.insert(0, Reply(texts.ONE_BY_ONE))
             if not ctx.deleted:
                 self._not_stuck(ctx, before.get("unclear", 0))
+                told = before.get("told_already", 0)
+                ctx.s.told_already = told + 1 if ctx.told_already else 0
             if ctx.limited and ctx.turn.replies:  # said once, above the buttons that work
                 ctx.turn.replies.insert(0, Reply(texts.TOO_MANY_MESSAGES))
             if said is not None:  # a text or a photo answered with a fallback phrase
@@ -1090,6 +1095,8 @@ class Conversation:
         if (talk := find_small_talk(text)) is not None:  # «привет», «спасибо», «ок», «пока»
             await self._small_talk(c, talk)
             return
+        if await self._keeps_booking(c, step, text):
+            return  # «спасибо, её не трогаем»: one line, the booking is not shown again
         if asks_when_admin(text) and await self._when_admin(c, step):
             return  # «когда позвонит администратор?»: the hours, nothing is added to the request
         if step == "offer_admin" and await self._on_offer_words(c, text):
@@ -1216,6 +1223,40 @@ class Conversation:
         await self._on_slot(c, slot.id)
         return True
 
+    async def _keeps_booking(self, c: Ctx, step: str, text: str) -> bool:
+        """«Её не трогаем», «завтрашнюю оставляем» about a booking the patient has."""
+        if step not in ("idle", "payment") or not keeps_booking(text):
+            return False
+        upcoming = await self._upcoming(c)
+        if not upcoming:
+            return False
+        line = texts.KEPT
+        if len(upcoming) == 1:
+            start = self._local(upcoming[0].start_at)
+            line = texts.KEPT_WHEN.format(
+                date=render.format_date(start.date()), time=f"{start:%H:%M}"
+            )
+        self._reset(c)
+        c.say(line, self._main_menu(c))
+        return True
+
+    def _already(self, c: Ctx, handoff: Handoff, why: str | None = None) -> str:
+        """«Ваше обращение № N уже у администратора…» — and, the second time in a row, what
+        was passed and that the bot has nothing new to say: never the same line twice."""
+        local = self._local(c.now)
+        c.told_already = True
+        if c.s.told_already % 2 == 0:
+            return render.handoff_message(
+                self.clinic, local, handoff.id, why, texts.HANDOFF_ALREADY
+            )
+        said = (handoff.last_note or "").partition("|")[2].strip()
+        what = texts.PASSED_ANSWERS
+        if said:
+            shown = said if len(said) <= 120 else said[:120] + "…"
+            what = texts.PASSED_MESSAGE.format(text=shown)
+        when = render.handoff_when(self.clinic, local)
+        return texts.HANDOFF_NOTHING_NEW.format(what=what, when=when)
+
     async def _when_admin(self, c: Ctx, step: str) -> bool:
         """«Когда позвонит администратор?»: the administrators' hours from config/contacts.yaml.
 
@@ -1323,10 +1364,7 @@ class Conversation:
         handoff = await self._open_handoff(c)
         if handoff is not None:  # the call is not instead of the route: both are said
             why = None if route else done.outcome.patient_reason
-            local = self._local(c.now)
-            said = render.handoff_message(
-                self.clinic, local, handoff.id, why, texts.HANDOFF_ALREADY
-            )
+            said = self._already(c, handoff, why)
             parts = [p for p in (route, said, self.kb.common.more_help.text) if p]
             c.say("\n\n".join(parts), self._main_menu(c))
             return True
@@ -4092,7 +4130,9 @@ class Conversation:
         now, why = self._local(c.now), c.s.handoff_why
         note = self._handoff_note(c)
         if note in (handoff.last_note, f"{handoff.reason}|"):
-            template = texts.HANDOFF_ALREADY
+            self._handoff_done(c)
+            self._handoff_said(c, self._already(c, handoff, why))
+            return
         else:
             handoff.last_note, handoff.updated_at = note, c.now
             thread = await self._first_admin_message(c, handoff.id)
