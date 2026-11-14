@@ -51,6 +51,7 @@ from app.flow.commands import (
     asks_about_there,
     asks_about_visit,
     asks_advice,
+    asks_to_be_taken,
     asks_when_admin,
     asks_where_to_go,
     danger_question,
@@ -1767,6 +1768,9 @@ class Conversation:
         named = [f"{p.facility.name}, {p.facility.address or ''}" for p in done.places]
         if is_question(text) and asks_about_there(text, named):
             await self._route_line(c, done, "there", text)
+            return True
+        if asks_to_be_taken(text):  # «а тут что, нельзя записаться?»: a question, not an order
+            await self._route_line(c, done, "not_here", text)
             return True
         return False
 

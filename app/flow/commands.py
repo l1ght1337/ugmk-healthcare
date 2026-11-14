@@ -109,7 +109,13 @@ COMMANDS: tuple[tuple[MenuAction, re.Pattern[str]], ...] = (
         ),
     ),
     ("admin", re.compile(r"^(?:человек\w*|сотрудник\w*|нужен\s+человек)$")),
-    ("admin", re.compile(r"\b(?:перезвони\w*|позвони\w*\s+мне|свяжитесь\s+со\s+мной)\b")),
+    (
+        "admin",
+        re.compile(
+            r"(?<!\bне\s)\b(?:перезвони\w*|позвони\w*\s+мне|свяжитесь\s+со\s+мной)\b"
+            r"(?<!\bне\sпозвоните\sмне)"
+        ),
+    ),
     # the whole message is «записаться» — nothing about an injury
     (
         "book",
@@ -402,6 +408,11 @@ _WAITING = re.compile(
     r"\b(?:буду|будем)\s+ждать\b|\bжду\s+(?:звонка|ответа)\b|\bвопросов\s+(?:больше\s+)?нет\b"
     r"|\bна\s+этом\s+все\b"
 )
+_TAKEN = re.compile(
+    r"\b(?:можно|нельзя|возможно)\b(?:\s+\w+){0,4}?\s+запис\w+"
+    r"|\bзапис\w+(?:\s+\w+){0,3}?\s+(?:можно|нельзя)\b|\bне\s+(?:записаться|запишете|запишут)\b"
+    r"|\b(?:примете|примут|принимаете|возьмете|возьмут)\b|\bможно\s+или\s+нет\b"
+)
 _DANGER_QUESTIONS: tuple[tuple[DangerQuestion, re.Pattern[str]], ...] = (
     (
         "where",
@@ -449,7 +460,7 @@ _WHERE_TO_GO = re.compile(
     r"|\b(?:103|112)\s+(?:\w+\s+){0,2}?(?:звонить|позвонить|набирать|вызывать)\b"
     r"|\b(?:звонить|позвонить|набирать)\s+(?:\w+\s+){0,2}?(?:103|112)\b"
 )
-_CALL = re.compile(r"\b(?:звонк\w+|администратор\w*|перезвон\w+|позвон\w+)\b")
+_CALL_WORDS = re.compile(r"\b(?:звонк\w+|администратор\w*|перезвон\w+|позвон\w+)\b")
 _PLACE_NOUN = r"(?:больниц\w+|центр\w*|учреждени\w+|клиник\w+|поликлиник\w+|отделени\w+)"
 _THAT_PLACE = re.compile(
     rf"\b(?:эту|этой|этот|этом|этого|той|том|ту|тот|того)\s+{_PLACE_NOUN}"
@@ -620,6 +631,13 @@ def danger_question(text: str) -> DangerQuestion:
     return "other"
 
 
+def asks_to_be_taken(text: str) -> bool:
+    """«А тут что, нельзя записаться?», «в травмпункт ваш можно записаться или нет?», «меня
+    всё-таки примут?» — a question whether the trauma centre takes the patient, not an order
+    to book («запишите меня на сегодня»)."""
+    return "?" in text and _TAKEN.search(normalize(text)) is not None
+
+
 def asks_where_to_go(text: str) -> bool:
     """«Ехать или ждать звонка?», «куда нам ехать-то?», «скорую вызывать, что ли?», «103
     звонить или нет?» — asked after a route: where to go and whether to wait."""
@@ -628,7 +646,7 @@ def asks_where_to_go(text: str) -> bool:
 
 def mentions_call(text: str) -> bool:
     """«…или ждать звонка администратора?»."""
-    return _CALL.search(normalize(text)) is not None
+    return _CALL_WORDS.search(normalize(text)) is not None
 
 
 def asks_about_there(text: str, places: Sequence[str]) -> bool:

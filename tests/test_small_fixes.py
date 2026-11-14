@@ -13,12 +13,13 @@ from __future__ import annotations
 import pytest
 
 from app.bot import texts
-from app.flow.commands import asks_about_visit, keeps_booking, says_no_more
+from app.flow.commands import asks_about_visit, find_command, keeps_booking, says_no_more
 from app.flow.loader import KnowledgeBase
 from tests.fake_deepseek import FakeDeepSeek
 from tests.test_conversation import book_dislocation, bookings
 from tests.test_manual_findings_3 import booked, when
 from tests.test_sim_findings_2 import LIGAMENT, MENU, handed, session
+from tests.test_wish_flow import through_dislocation
 
 KEEPS = (
     "Отлично, значит завтрашнюю оставляем, ничего не переношу. Спасибо!",
@@ -224,3 +225,38 @@ def test_a_question_about_the_visit_one_has(said: str) -> None:
 )  # fmt: skip
 def test_a_wish_for_another_time_is_not_a_question_about_the_visit(said: str) -> None:
     assert not asks_about_visit(said)
+
+
+# --- the second partial run of section 5 (questions) --------------------------------------------
+# «…вы же не позвоните мне вместо врача» on the consent of a booking was read as «позвоните
+# мне»: the booking turned into a request to the administrators.
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["а зачем вам мой телефон, если я всё равно приду? вы же не позвоните мне вместо врача",
+     "вы мне не позвоните?"],
+)  # fmt: skip
+def test_you_will_not_call_me_is_not_a_request_for_a_call(said: str) -> None:
+    assert find_command(said) != "admin"
+
+
+@pytest.mark.parametrize("said", ["позвоните мне", "перезвоните, пожалуйста"])
+def test_call_me_is_a_request(said: str) -> None:
+    assert find_command(said) == "admin"
+
+
+async def test_a_question_on_the_consent_does_not_turn_the_booking_into_a_request(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    chat = make_chat(assistant=FakeDeepSeek().assistant(kb))
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await through_dislocation(chat)
+    await chat.pick_slot("Завтра")
+    assert texts.CONSENT_YES in chat.labels()
+    slot = (await session(chat))["slot_id"]
+    await chat.say("а зачем вам мой телефон, если я всё равно приду? вы же не позвоните мне")
+    state = await session(chat)
+    assert (state["step"], state["resume"], state["slot_id"]) == ("consent", "identify", slot)
+    assert chat.admin == [] and texts.CONSENT_YES in chat.labels()

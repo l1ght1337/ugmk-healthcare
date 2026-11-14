@@ -25,7 +25,7 @@ from itertools import pairwise
 import pytest
 
 from app.bot import texts
-from app.flow.commands import asks_about_there, asks_where_to_go
+from app.flow.commands import asks_about_there, asks_to_be_taken, asks_where_to_go
 from app.flow.loader import KnowledgeBase
 from app.llm.guards import grounded
 from tests.fake_deepseek import FakeDeepSeek
@@ -407,3 +407,54 @@ async def test_thanks_twice_in_a_row_is_a_goodbye(make_chat, kb: KnowledgeBase) 
     assert chat.text == texts.WELCOME
     await chat.say("Нет, наверное больше нечего. Спасибо, буду ждать звонка")
     assert chat.text == kb.common.goodbye.text
+
+
+# --- the partial runs of section 5 (genital) ----------------------------------------------------
+# «А тут что, нельзя записаться? Я думал в травмпункт» after the route opened step 1, and the
+# same question there got «Мы на этом же шаге» until «Похоже, я Вас не понимаю».
+
+CAN_I_BOOK = (
+    "А тут что, нельзя записаться? Я думал в травмпункт. Мне бы сегодня, срочно надо",
+    "Так а в травмпункт у вас нельзя что ли записаться? Мне бы сегодня, дело срочное",
+    "Мне объясните, в травмпункт ваш можно записаться или нет? Мне сегодня надо",
+    "Мне не записаться что ли к вам? Скажите прямо, в травмпункт ваш можно или нет",
+    "А в травмпункт меня всё-таки примут?",
+)
+
+
+@pytest.mark.parametrize("said", CAN_I_BOOK)
+def test_words_that_ask_to_be_taken(said: str) -> None:
+    assert asks_to_be_taken(said)
+
+
+@pytest.mark.parametrize(
+    "said", ["запишите меня на сегодня", "хочу записаться", "а сколько стоит приём?"]
+)
+def test_an_order_to_book_is_not_such_a_question(said: str) -> None:
+    assert not asks_to_be_taken(said)
+
+
+@pytest.mark.parametrize("started", [False, True])
+async def test_can_i_book_here_after_the_route_is_the_route(
+    make_chat, kb: KnowledgeBase, started: bool
+) -> None:
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await needle_route(chat)
+    if started:
+        await chat.press(texts.MENU_BOOK)  # step 1 is open: the question is still a question
+    said = []
+    for text in CAN_I_BOOK[:3]:
+        await chat.say(text)
+        said.append(chat.replies[-1].text)
+        assert AIDS in chat.text and texts.SAME_STEP not in chat.text
+        assert "Шаг 1 из 5" not in chat.text and texts.STUCK not in chat.text
+    assert said[0] == NOT_HERE and all(a != b for a, b in pairwise(said))
+    assert fake.requests == []
+
+
+async def test_an_order_to_book_after_the_route_opens_step_one(make_chat) -> None:
+    chat = make_chat()
+    await needle_route(chat)
+    await chat.say("запишите меня на сегодня")
+    assert texts.ASK_COMPLAINT in chat.text  # the topic will be asked «та же или другая?»
