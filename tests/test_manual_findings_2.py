@@ -218,7 +218,8 @@ async def test_two_patients_in_the_text_are_asked_about(make_chat, kb: Knowledge
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
     await chat.say("меня и сына покусала собака")
-    assert texts.ASK_AUDIENCE in chat.text
+    assert texts.WHO_FIRST in chat.text and chat.labels()[:2] == ["Меня", "Сына"]
+    assert fake.requests == []  # one patient at a time: DeepSeek is asked about the chosen one
 
 
 async def test_the_last_said_wins_and_the_wish_stays(make_chat, kb: KnowledgeBase) -> None:
@@ -479,10 +480,10 @@ async def test_book_me_with_someone_is_asked_about(make_chat, text: str) -> None
     chat = make_chat()
     await chat.start()
     await chat.say(text)
-    assert texts.FOR_WHOM["self"] not in chat.text
-    await chat.press("Рука или нога")
-    await chat.press("Похоже на вывих")
-    assert texts.ASK_AUDIENCE in chat.text
+    assert texts.FOR_WHOM["self"] not in chat.text  # not taken silently for the writer
+    assert texts.WHO_FIRST in chat.text and chat.labels()[0] == "Меня"
+    await chat.press("Меня")
+    assert texts.PERSON_LINE.format(whom="Вас") in chat.text and texts.ASK_COMPLAINT in chat.text
 
 
 # --- 15.11: «что делать» with a cut, a dressing, a cast: the line of kb/info/uslugi.md ---------

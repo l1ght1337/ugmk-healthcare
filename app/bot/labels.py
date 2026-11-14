@@ -169,6 +169,15 @@ def render_labels(kb: KnowledgeBase) -> str:
             [texts.BOOK_MORE, texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN],
         ),
         _row(
+            "В сообщении названы двое: «Запишу по очереди… Кого записать первым?»",
+            ["Машу, 7 лет", "Ваню, 10 лет", texts.MENU],
+        ),
+        _row(
+            "После карточки, если ждёт ровно один названный пациент",
+            [texts.BOOK_PERSON.format(whom="Ваню"), texts.MENU_BOOK, texts.MENU_ASK],
+        ),
+        _row("Под строкой «Записываю Ваню: ногу подвернул» (шаги 1–3)", [texts.PERSON_EDIT]),
+        _row(
             "«Записать ещё одного»: «Для кого запись?» перед «Что случилось?»",
             [texts.WHOM_ADULT, texts.AUDIENCE_CHILD, texts.MENU],
         ),

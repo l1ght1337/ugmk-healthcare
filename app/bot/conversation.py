@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -87,6 +88,7 @@ from app.flow.identity import (
     parse_birth_date,
 )
 from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
+from app.flow.people import Person, find_people, merge, named_in
 from app.flow.safety import find_phrase
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import Choice, FactValue, Question, Scenario
@@ -128,6 +130,9 @@ TOPIC_DEPTH = 3  # how many topic menus one typed word may go through
 SAME_COMPLAINT = timedelta(minutes=30)  # the same complaint this soon is not a new one
 FEW_WORDS = 3  # «да, передайте», «для сына»: a longer message says something more
 TEEN_FROM_MONTHS = 15 * 12  # 15–17 booking for themselves: an administrator, not the bot
+PERSON_EDIT_UNTIL = 3  # «Изменить» under «Записываю Ваню: …» up to the scenario questions
+# Where a message that names several patients is asked «Кого записать первым?»
+SEVERAL_STEPS = frozenset({"idle", "complaint", "topic", "describe", "audience", "age", "whom"})
 STUCK_AFTER = 3  # «не понял» this many times in a row is said plainly, with an administrator
 # What the bot says when it did not understand a text; «Не получилось разобрать ответ…» of a
 # scenario question starts with texts.PICK_BUTTON.
@@ -225,6 +230,7 @@ StepName = Literal[
     "child_confirm",
     "audience",
     "whom",
+    "first",
     "teen",
     "age",
     "question",
@@ -253,6 +259,7 @@ STAGE_OF: dict[str, int] = {
     "child_confirm": 2,
     "audience": 2,
     "whom": 2,  # «Записать ещё одного»: «для кого» before «что случилось»
+    "first": 2,  # «Кого записать первым?»: several patients were named
     "age": 2,
     "question": 3,
     "days": 4,
@@ -332,6 +339,8 @@ class Session(BaseModel):
     second_ok: bool = False  # «Записать ещё раз»: the question is not asked again
     nudged: bool = False  # the reminder about this unfinished booking was sent
     more: bool = False  # two patients were named: the second is offered after the card
+    people: list[Person] = []  # the patients named in the conversation, not booked yet
+    person: Person | None = None  # … and the one of them being booked now
     teen_months: int | None = None  # 15–17 booking for himself: his age, in months
     teen_passed: bool = True  # … and the request has gone to an administrator
     unclear: int = 0  # «не понял» in a row (NOT_UNDERSTOOD)
@@ -374,6 +383,7 @@ class Ctx:
     notices_said: bool = False  # this turn has said the scenario's notice already
     limited: bool = False  # too many DeepSeek calls a minute: this turn went without it
     more: bool = False  # this message names more than one patient
+    alone: bool = False  # «мужа после меня» from a patient who is booked: one patient
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
@@ -788,8 +798,15 @@ class Conversation:
         ``booking`` — the same booking goes on: the second patient to offer after the card and
         «Записать ещё раз» stay.
         """
-        more, again = booking and c.s.more, booking and c.s.second_ok
-        c.s = Session(paused=c.s.paused, paused_at=c.s.paused_at, more=more, second_ok=again)
+        s = c.s
+        c.s = Session(paused=s.paused, paused_at=s.paused_at)
+        if booking:
+            c.s.more, c.s.second_ok, c.s.people, c.s.person = (
+                s.more,
+                s.second_ok,
+                s.people,
+                s.person,
+            )
 
     def _paused_fresh(self, c: Ctx) -> bool:
         at = c.s.paused_at
@@ -867,13 +884,15 @@ class Conversation:
     def _header(self, c: Ctx) -> str | None:
         """«Шаг 2 из 5 · Для кого запись» and the patient's wish, while booking."""
         stage = STAGE_OF.get(c.s.step)
-        if stage is None or c.s.resume == "handoff" or c.s.step in ("whom", "teen"):
+        if stage is None or c.s.resume == "handoff" or c.s.step in ("whom", "teen", "first"):
             return None
         lines = []
         if c.s.wizard:
             name = texts.STAGES[stage - 1]
             lines.append(texts.STEP.format(n=stage, total=len(texts.STAGES), name=name))
-        if c.s.wizard and c.s.for_whom and stage == 1:
+        if c.s.wizard and c.s.person is not None and stage <= WISH_SHOWN_UNTIL:
+            lines.append(self._person_line(c.s.person))  # «Записываю Ваню: ногу подвернул»
+        elif c.s.wizard and c.s.for_whom and stage == 1:
             lines.append(texts.FOR_WHOM[c.s.for_whom])
         wish = self._wish(c)
         booking = c.s.wizard or c.s.reschedule_of is not None
@@ -925,6 +944,8 @@ class Conversation:
             back = past or self._audience_skipped(c)
         if c.s.reschedule_of is not None:  # a move: the way out is on every screen
             layout.append([Button(texts.KEEP_AS_IS, f"b:keep:{c.s.reschedule_of}")])
+        if c.s.person is not None and STAGE_OF.get(c.s.step, 9) <= PERSON_EDIT_UNTIL:
+            layout.append([Button(texts.PERSON_EDIT, "pe:edit")])  # not this patient after all
         layout.append(self._nav_row(back))
         c.say(body, layout, edit=c.first(), screen=True)
 
@@ -947,6 +968,8 @@ class Conversation:
             await self._show(c, AskPatient(step))  # type: ignore[arg-type]
         elif step == "whom":
             self._whom_screen(c)
+        elif step == "first":
+            self._first_screen(c)
         elif step == "question" and c.s.dialog.scenario_id and c.s.dialog.question_id:
             scenario = self.kb.scenario(c.s.dialog.scenario_id)
             c.s.dialog.asks = 1
@@ -1048,7 +1071,8 @@ class Conversation:
         step = c.s.step
         c.for_whom, c.more = find_audience(text), names_several(text)
         if (other := after_me(text)) is not None and await self._upcoming(c):
-            c.for_whom, c.more = other, False  # «мужа после меня»: the writer is booked already
+            # «мужа после меня»: the writer is booked already
+            c.for_whom, c.more, c.alone = other, False, True
         if step not in MESSAGE_STEPS and await self._press_typed(c, text, shown):
             return  # a button's label typed as text: «бытовая», «вечер», «14:30», «да»
         if (move := find_navigation(text)) is not None:  # «назад», «в меню», «отмена»
@@ -1083,6 +1107,8 @@ class Conversation:
                 unclear = len(days_named(text, today)) > 1  # «на завтра и на воскресенье»
                 await self._cancel_by_text(c, wish, everything=wants_all(text), unclear=unclear)
             return
+        if await self._several(c, step, text):
+            return  # «Маша 7 лет руку ушибла, Ваня 10 лет ногу подвернул»: who is first
         if step in INPUT_STEPS:
             await self._on_input_text(c, step, text, action)
             return
@@ -1523,6 +1549,7 @@ class Conversation:
             "question": self._on_answer_text,
             "audience": self._on_audience_text,
             "whom": self._on_whom_text,
+            "first": self._on_first_text,
             "name": self._on_name,
             "birth": self._on_birth,
             "contact": self._on_phone_text,
@@ -2032,6 +2059,8 @@ class Conversation:
             "sec": self._on_second,
             "mo": self._on_whom,
             "tn": self._on_teen,
+            "pf": self._on_first,
+            "pe": self._on_person,
         }.get(head)
         if handler is None:
             c.say(texts.STALE, [_home()])
@@ -2051,7 +2080,11 @@ class Conversation:
             await self._my_bookings(c)
         elif item == "admin":  # keep the scenario answers: the administrator sees the context
             await self._handoff(c, texts.ASK_ADMIN_REASON)
-        elif item == "more":  # «Записать ещё одного»
+        elif item == "next" and len(c.s.people) == 1:  # «Записать Ваню»: he was named before
+            person = c.s.people[0]
+            c.s.people = []
+            await self._take_person(c, person)
+        elif item in ("more", "next"):  # «Записать ещё одного»
             self._reset(c)
             c.s.wizard, c.s.second_ok = True, True  # the first booking is not asked about
             self._whom_screen(c)
@@ -2209,11 +2242,122 @@ class Conversation:
             if self._cards_on() and booking.admin_message_id:  # the card shows the payment
                 text = await self._admin_booking(c, booking)
                 c.turn.admin.append(AdminPost(text, edit_message=booking.admin_message_id))
-        more = c.s.more  # a second patient was named at the start: now is the time
+        people, more = c.s.people, c.s.more  # patients named before: now is their time
         self._reset(c)
-        text = texts.NEXT_PATIENT if more else f"{texts.THANKS} {self.kb.common.more_help.text}"
-        one_more = Button(texts.BOOK_MORE, "m:more", "primary" if more else None)
+        c.s.people = people
+        waits = bool(people) or more
+        text = texts.NEXT_PATIENT if waits else f"{texts.THANKS} {self.kb.common.more_help.text}"
+        if len(people) == 1:  # exactly one named and not booked: by name, «для кого» is not asked
+            label = texts.BOOK_PERSON.format(whom=people[0].whom)
+            one_more = Button(label, "m:next", "primary")
+        else:
+            one_more = Button(texts.BOOK_MORE, "m:more", "primary" if waits else None)
         c.say(text, [[one_more], *self._main_menu(c)])
+
+    # --- several patients named in the conversation (app/flow/people.py) ----------------------
+
+    def _person_line(self, person: Person) -> str:
+        line = texts.PERSON_LINE.format(whom=person.whom if person.name else "Вас")
+        return f"{line}: {person.complaint}" if person.complaint else line
+
+    async def _several(self, c: Ctx, step: str, text: str) -> bool:
+        """A message that names two patients or more: one booking at a time.
+
+        The first is taken if the text says who («сначала для себя, потом сына»); otherwise
+        the bot asks «Кого записать первым?» with a button for each. DeepSeek is not asked
+        about two injuries at once: step 1 gets the part about the chosen patient only.
+        """
+        named = find_people(text)
+        if c.s.people:
+            merge(c.s.people, named)  # «сыну 12 лет»: what is new about those who wait
+        if len(named) < 2 or step not in SEVERAL_STEPS or c.alone:
+            return False
+        c.more = False  # said here, with the names
+        wanted = {"self": "self", "child": "child", "adult": "adult"}.get(c.for_whom or "")
+        first = next((p for p in named if p.audience == wanted), None) if wanted else None
+        c.s.people = named
+        if first is None:
+            if c.s.dialog.scenario_id is None:  # nothing is chosen yet: a booking begins here
+                self._reset(c)
+                c.s.wizard, c.s.people = True, named
+            self._first_screen(c)
+            return True
+        c.say(texts.ONE_BY_ONE)
+        c.s.people = [p for p in named if p is not first]
+        await self._take_person(c, first)
+        return True
+
+    def _first_screen(self, c: Ctx) -> None:
+        c.s.step = "first"
+        buttons = []
+        for at, person in enumerate(c.s.people):
+            label = person.whom[:1].upper() + person.whom[1:]
+            if person.age_months is not None:
+                label += f", {format_age(person.age_months)}"
+            buttons.append(Button(label, f"pf:{at}"))
+        self._screen(c, f"{texts.ONE_BY_ONE} {texts.WHO_FIRST}", buttons)
+
+    async def _on_first(self, c: Ctx, value: str) -> None:
+        at = int(value) if value.isdigit() else -1
+        if c.s.step != "first" or not 0 <= at < len(c.s.people):
+            c.say(texts.STALE, [_home()])
+            return
+        person = c.s.people.pop(at)
+        await self._take_person(c, person)
+
+    async def _on_first_text(self, c: Ctx, text: str) -> None:
+        """«Сначала Ваню», «второго», «с Маши» on «Кого записать первым?»."""
+        low = text.lower().replace("ё", "е")
+        at = named_in(text, c.s.people)
+        if at is None and re.search(r"\bперв\w+", low):
+            at = 0
+        if at is None and re.search(r"\bвтор\w+", low) and len(c.s.people) > 1:
+            at = 1
+        if at is None:
+            c.say(texts.HINT_BUTTONS)
+            await self._render_screen(c)
+            return
+        await self._on_first(c, str(at))
+
+    async def _take_person(self, c: Ctx, person: Person) -> None:
+        """A booking for a patient named in the conversation: «для кого» is not asked, the
+        age told is not asked, step 1 gets the part of the message about this patient.
+
+        A scenario already chosen (the patients were named on «Для кого запись?» or on the
+        age) goes on; otherwise the booking starts from «Что случилось?».
+        """
+        rest = [p for p in c.s.people if not p.same(person)]
+        chosen = c.s.dialog.scenario_id is not None and c.s.dialog.outcome_id is None
+        if chosen and c.s.step in ("first", "audience", "age"):
+            c.s.person, c.s.people, c.s.for_whom = person, rest, person.audience
+            if person.audience is None:
+                await self._show(c, AskPatient("audience"))
+                return
+            child = person.audience == "child"
+            step = self.engine.set_patient(
+                c.s.dialog, "child" if child else "adult", person.age_months if child else None
+            )
+            if step is not None:
+                await self._show(c, step)
+            return
+        self._reset(c)
+        c.s.wizard, c.s.second_ok = True, True  # the booking made before is not asked about
+        c.s.person, c.s.people, c.s.for_whom = person, rest, person.audience
+        if person.complaint:
+            c.s.step, c.for_whom = "complaint", person.audience
+            await self._on_free_text(c, person.complaint)
+        else:
+            self._complaint_screen(c)
+
+    async def _on_person(self, c: Ctx, value: str) -> None:
+        """«Изменить» under «Записываю Ваню: …»: the usual «Для кого запись?»."""
+        if c.s.person is None or value != "edit":
+            c.say(texts.STALE, [_home()])
+            return
+        people = c.s.people
+        self._reset(c)
+        c.s.wizard, c.s.second_ok, c.s.people = True, True, people
+        self._whom_screen(c)
 
     def _whom_screen(self, c: Ctx) -> None:
         """«Записать ещё одного» starts from «для кого»: the consent and the phone given
@@ -2263,7 +2407,9 @@ class Conversation:
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
         c.s.notices_said = c.notices_said
         if for_whom and child_age is None:  # «запишите ребёнка», «меня укусила»: not asked again
-            self.engine.set_patient(c.s.dialog, "child" if for_whom == "child" else "adult")
+            person = c.s.person  # … and the age told with the name: «Маша 7 лет»
+            age = person.age_months if person is not None and for_whom == "child" else None
+            self.engine.set_patient(c.s.dialog, "child" if for_whom == "child" else "adult", age)
         facts = {**topics.area_facts(self.kb, scenario_id, area), **facts}
         if child_age is not None:
             c.s.step = "child_confirm"

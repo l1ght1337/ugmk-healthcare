@@ -494,26 +494,30 @@ async def test_first_for_myself_then_the_son_is_not_read_as_a_child(make_chat) -
     assert line.text == texts.ONE_BY_ONE
     assert "Как получена травма" in screen.text  # not «Сколько лет ребёнку?»
     state = await session(chat)
-    assert state["dialog"]["facts"]["audience"] == "adult" and state["more"]
+    assert state["dialog"]["facts"]["audience"] == "adult"
+    assert [p["name"] for p in state["people"]] == ["сын"]  # he waits for the card
 
 
 async def test_two_named_without_an_order_are_asked(make_chat) -> None:
     chat = make_chat()
     await to_step(chat, m.AUDIENCE)
     await chat.say("меня и сына")
-    assert chat.replies[0].text == texts.ONE_BY_ONE
-    state = await session(chat)
-    assert state["step"] == "audience" and state["more"]
-    assert texts.AUDIENCE_SELF in chat.labels()
+    assert chat.replies[0].text == f"{texts.ONE_BY_ONE} {texts.WHO_FIRST}"
+    assert (await session(chat))["step"] == "first" and chat.labels()[:2] == ["Меня", "Сына"]
+    await chat.press("Сына")  # the scenario chosen before goes on: his age is asked
+    assert chat.text.endswith(texts.ASK_CHILD_AGE)
 
 
 async def test_two_ages_are_not_taken_silently(make_chat) -> None:
     chat = make_chat()
     await to_step(chat, m.AGE)
     await chat.say("Маше 7 лет, а Ване 10. Мне обоих надо записать")
-    assert chat.replies[0].text == texts.ONE_BY_ONE
+    assert chat.replies[0].text == f"{texts.ONE_BY_ONE} {texts.WHO_FIRST}"
+    assert chat.labels()[:2] == ["Машу, 7 лет", "Ваню, 10 лет"]
+    await chat.press("Машу, 7 лет")
     state = await session(chat)
-    assert state["dialog"]["age_months"] == 84 and state["more"]
+    assert state["dialog"]["age_months"] == 84 and "Как получена травма" in chat.text
+    assert [p["name"] for p in state["people"]] == ["Ваня"]
 
 
 async def test_the_second_patient_is_offered_after_the_card(make_chat) -> None:
@@ -528,13 +532,10 @@ async def test_the_second_patient_is_offered_after_the_card(make_chat) -> None:
     await chat.contact()
     await chat.press(texts.PAYMENT_SELF)
     assert chat.text == texts.NEXT_PATIENT
-    assert chat.labels() == [texts.BOOK_MORE, *MENU]
+    assert chat.labels() == ["Записать сына", *MENU]
 
-    await chat.press(texts.BOOK_MORE)  # a new booking, from «для кого»
-    assert texts.ASK_AUDIENCE in chat.text and "Шаг" not in chat.text
-    assert chat.labels() == [texts.WHOM_ADULT, texts.AUDIENCE_CHILD, texts.MENU]
-    await chat.press(texts.AUDIENCE_CHILD)
-    assert chat.text.startswith("Шаг 1 из 5") and texts.FOR_WHOM["child"] in chat.text
+    await chat.press("Записать сына")  # he was named: «для кого» is not asked
+    assert chat.text.startswith("Шаг 1 из 5") and "Записываю сына" in chat.text
     await chat.press("Рука или нога")
     await chat.press("Похоже на вывих")
     assert chat.text.endswith(texts.ASK_CHILD_AGE)  # «для кого» is not asked again
