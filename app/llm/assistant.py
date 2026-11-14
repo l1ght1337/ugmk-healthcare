@@ -145,9 +145,17 @@ class AnswerResult(BaseModel):
     offer_admin: bool = False
 
 
-def _valid_facts(scenario: Scenario, facts: dict[str, Any]) -> dict[str, FactValue]:
+def _valid_facts(
+    scenario: Scenario, facts: dict[str, Any], own: set[str] | None = None
+) -> dict[str, FactValue]:
+    """The answers that fit the scenario's fields. A field with ``upfront: false`` is kept
+    only from the answer to its own question (``own`` — the fields of that question)."""
     fields = scenario.fields()
-    return {k: v for k, v in facts.items() if k in fields and fields[k].accepts(v)}
+    return {
+        k: v
+        for k, v in facts.items()
+        if k in fields and fields[k].accepts(v) and (fields[k].upfront or k in (own or ()))
+    }
 
 
 class Assistant:
@@ -265,7 +273,7 @@ class Assistant:
             out = ExtractOut.model_validate(data)
             if out.crisis:
                 return ExtractResult(crisis=True)
-            facts = _valid_facts(scenario, out.facts)
+            facts = _valid_facts(scenario, out.facts, own)
             if out.unclear or not own & set(facts):
                 return ExtractResult(facts=facts, clarify=safe_clarify(out.clarify, question.ask))
             return ExtractResult(facts=facts)

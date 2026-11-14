@@ -141,13 +141,50 @@ def test_sick_leave_open_here_extends_via_repeat_visit(run) -> None:
     assert w.step.outcome_id == "book_near_repeat_window"
 
 
-def test_ligament_certainty_is_asked_only_if_unclear(run) -> None:
+def test_ligament_certainty_is_always_asked(run) -> None:
+    """«Разрыв подтвердил врач или МРТ?» decides between a booking and a refusal: the field is
+    ``upfront: false`` — never taken from the complaint, only from the answer to the question."""
     w = run("ligament_rupture", {"assault": False, "rupture_certainty": "suspects"})
-    assert w.asked == ["how", "certainty"]
+    assert w.asked == ["how", "certainty"] and w.step.outcome_id == "book_primary"
     w = run("ligament_rupture", {"rupture_certainty": "insists"}, upfront={"assault": False})
-    assert w.asked == ["certainty"]
-    w = run("ligament_rupture", {}, upfront={"assault": False, "rupture_certainty": "insists"})
-    assert w.asked == []
+    assert w.asked == ["certainty"] and w.step.outcome_id == "insists_adult"
+    given = {"assault": False, "rupture_certainty": "insists"}  # as route once put it in
+    w = run("ligament_rupture", {"rupture_certainty": "suspects"}, upfront=given)
+    assert w.asked == ["certainty"] and w.step.outcome_id == "book_primary"
+
+
+def test_a_field_that_is_not_upfront_comes_only_from_its_own_question(engine: Engine) -> None:
+    state = DialogState()
+    engine.set_patient(state, "adult")
+    step = engine.start(state, "ligament_rupture", {"rupture_certainty": "insists"})
+    assert isinstance(step, AskQuestion) and step.question.id == "how"
+    assert "rupture_certainty" not in state.facts
+    # the answer to «Как получена травма?» says something about the rupture too: not taken
+    step = engine.answer(state, {"assault": False, "rupture_certainty": "insists"})
+    assert isinstance(step, AskQuestion) and step.question.id == "certainty"
+    assert "rupture_certainty" not in state.facts
+    step = engine.answer(state, {"rupture_certainty": "suspects"})  # the answer to the question
+    assert isinstance(step, Done) and step.outcome_id == "book_primary"
+
+
+def test_answers_already_given_stay_when_the_scenario_is_led_again(engine: Engine) -> None:
+    """Another age after the birth date: the questions answered before are not asked again."""
+    state = DialogState()
+    engine.set_patient(state, "child", 16 * 12)
+    answered = {"assault": False, "rupture_certainty": "insists"}
+    step = engine.start(state, "ligament_rupture", answered=answered)
+    assert isinstance(step, Done) and step.outcome_id == "insists_child"
+
+
+def test_only_the_rupture_certainty_is_not_upfront(kb) -> None:
+    closed = {
+        (scenario.id, field.name)
+        for scenario in kb.scenarios.values()
+        for question in scenario.questions
+        for field in question.fields
+        if not field.upfront
+    }
+    assert closed == {("ligament_rupture", "rupture_certainty")}
 
 
 def test_ligament_clarifying_question(kb: KnowledgeBase) -> None:

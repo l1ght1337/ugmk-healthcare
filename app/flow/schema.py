@@ -70,6 +70,13 @@ class FieldSpec(_Model):
     )
     yes_label: str | None = Field(default=None, max_length=BUTTON_MAX)
     no_label: str | None = Field(default=None, max_length=BUTTON_MAX)
+    upfront: bool = Field(
+        default=True,
+        description="false — the field decides between a booking and a refusal on the patient's "
+        "own word: it is never taken from the complaint (route) or from an answer to another "
+        "question. Its question is always asked; the value comes from the answer to it or from "
+        "its button",
+    )
 
     @model_validator(mode="after")
     def _check_options(self) -> FieldSpec:

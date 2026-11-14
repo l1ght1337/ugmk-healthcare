@@ -989,7 +989,7 @@ class Conversation:
         facts = {k: v for k, v in d.facts.items() if k != "audience"}
         c.s.for_whom, c.s.dialog = None, DialogState()
         c.back = True  # the screens before stay in the history
-        await self._show(c, self.engine.start(c.s.dialog, first, facts))
+        await self._show(c, self.engine.start(c.s.dialog, first, answered=facts))
 
     async def _on_back(self, c: Ctx, _: str) -> None:
         if self._audience_skipped(c):
@@ -1953,7 +1953,7 @@ class Conversation:
         state = DialogState()
         self.engine.set_patient(state, audience, age)  # type: ignore[arg-type]
         c.s.dialog, c.s.for_whom = state, None
-        step = self.engine.start(state, first, facts)
+        step = self.engine.start(state, first, answered=facts)
         same = isinstance(step, Done) and (step.scenario.id, step.outcome_id) == before
         if same and step.kind == "book" and c.s.slot_id is not None:  # type: ignore[union-attr]
             await self._identify(c)

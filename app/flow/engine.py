@@ -124,9 +124,19 @@ class Engine:
     # --- public API --------------------------------------------------------------------
 
     def start(
-        self, state: DialogState, scenario_id: str, facts: Mapping[str, object] | None = None
+        self,
+        state: DialogState,
+        scenario_id: str,
+        facts: Mapping[str, object] | None = None,
+        *,
+        answered: Mapping[str, object] | None = None,
     ) -> Step:
-        """Begin a scenario. ``facts`` may already hold answers taken from the complaint."""
+        """Begin a scenario. ``facts`` may already hold answers taken from the complaint.
+
+        ``answered`` — answers the patient has given to the questions themselves, when the
+        scenario is led again (another age after the birth date): they are kept as they are.
+        A field with ``upfront: false`` is taken from ``answered`` only, never from ``facts``.
+        """
         scenario = self.kb.scenario(scenario_id)
         state.scenario_id = scenario.id
         state.question_id = None
@@ -134,7 +144,8 @@ class Engine:
         state.asks = 0
         state.trail = [scenario.id]
         state.facts = {k: v for k, v in state.facts.items() if k in CONTEXT_FACTS}
-        self._absorb(state, scenario, facts or {})
+        self._absorb(state, scenario, facts or {}, upfront=True)
+        self._absorb(state, scenario, answered or {})
         return self._enter(state, jumps=0)
 
     def set_patient(
@@ -153,8 +164,9 @@ class Engine:
         if state.scenario_id is None or state.question_id is None:
             raise RuntimeError("no question is waiting for an answer")
         scenario = self.kb.scenario(state.scenario_id)
-        self._absorb(state, scenario, facts)
-        return self._visit(state, scenario, scenario.question(state.question_id), jumps=0)
+        question = scenario.question(state.question_id)
+        self._absorb(state, scenario, facts, question=question)
+        return self._visit(state, scenario, question, jumps=0)
 
     # --- graph walking -----------------------------------------------------------------
 
@@ -237,9 +249,23 @@ class Engine:
 
     # --- helpers -----------------------------------------------------------------------
 
-    def _absorb(self, state: DialogState, scenario: Scenario, facts: Mapping[str, object]) -> None:
-        """Keep valid answers for this scenario's fields; ignore anything else."""
+    def _absorb(
+        self,
+        state: DialogState,
+        scenario: Scenario,
+        facts: Mapping[str, object],
+        *,
+        upfront: bool = False,
+        question: Question | None = None,
+    ) -> None:
+        """Keep valid answers for this scenario's fields; ignore anything else.
+
+        ``upfront`` — the facts come from the complaint, before any question; ``question`` —
+        they come from the answer to this question. A field with ``upfront: false`` is kept
+        only from the answer to its own question.
+        """
         fields = scenario.fields()
+        own = {f.name for f in question.fields} if question is not None else None
         for key, value in facts.items():
             if value is None:
                 continue
@@ -250,6 +276,9 @@ class Engine:
             spec = fields.get(key)
             if spec is None or not spec.accepts(value):
                 log.warning("scenario %s: ignored fact %s=%r", scenario.id, key, value)
+                continue
+            if not spec.upfront and (upfront or (own is not None and key not in own)):
+                log.info("scenario %s: %s is asked, not taken from other words", scenario.id, key)
                 continue
             state.facts[key] = value  # type: ignore[assignment]
 
