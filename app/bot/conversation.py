@@ -57,6 +57,7 @@ from app.flow.commands import (
     is_question,
     is_unsure,
     keeps_booking,
+    names_parent,
     names_several,
     refuses_new_booking,
     says_self,
@@ -350,6 +351,7 @@ class Session(BaseModel):
     person: Person | None = None  # … and the one of them being booked now
     teen_months: int | None = None  # 15–17 booking for himself: his age, in months
     teen_passed: bool = True  # … and the request has gone to an administrator
+    teen_line: str | None = None  # the one-line answer of the last turn on that screen
     unclear: int = 0  # «не понял» in a row (NOT_UNDERSTOOD)
     told_already: int = 0  # «уже у администратора» in a row: not twice the same line
     ended_at: datetime | None = None  # a route or a handoff was shown (not a booking)
@@ -393,6 +395,7 @@ class Ctx:
     more: bool = False  # this message names more than one patient
     alone: bool = False  # «мужа после меня» from a patient who is booked: one patient
     told_already: bool = False  # this turn said the request is with an administrator
+    teen_line: str | None = None  # this turn's one-line answer on the screen of 15–17
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
@@ -707,6 +710,7 @@ class Conversation:
                 self._not_stuck(ctx, before.get("unclear", 0))
                 told = before.get("told_already", 0)
                 ctx.s.told_already = told + 1 if ctx.told_already else 0
+                ctx.s.teen_line = ctx.teen_line
             if ctx.limited and ctx.turn.replies:  # said once, above the buttons that work
                 ctx.turn.replies.insert(0, Reply(texts.TOO_MANY_MESSAGES))
             if said is not None:  # a text or a photo answered with a fallback phrase
@@ -1094,8 +1098,8 @@ class Conversation:
         if step in MESSAGE_STEPS:  # the text goes to an administrator as it is
             await self._on_step_text(c, step, text)
             return
-        if step == "teen" and await self._teen_waits(c, text):
-            return  # «буду ждать звонка», «родитель не рядом»: one line, not the screen again
+        if step == "teen" and await self._teen_words(c, text):
+            return  # «буду ждать звонка», «а если мама запишет?»: one line, not the screen
         if (talk := find_small_talk(text)) is not None:  # «привет», «спасибо», «ок», «пока»
             await self._small_talk(c, talk)
             return
@@ -1270,7 +1274,9 @@ class Conversation:
             return False
         hours = self.clinic.contacts.admin_working_hours
         line = texts.HANDOFF_WHEN.format(start=f"{hours.start:%H:%M}", end=f"{hours.end:%H:%M}")
-        if step == "offer_admin" or step in WIZARD_STEPS:
+        if step == "teen":  # one line under the buttons of that screen
+            await self._teen_say(c, "hours", line)
+        elif step == "offer_admin" or step in WIZARD_STEPS:
             c.say(line)
             await self._repeat_buttons(c)
         else:
@@ -1625,7 +1631,7 @@ class Conversation:
             c.say(texts.CONSENT_WHY if is_question(text) else texts.CONSENT_HINT)
             await self._repeat_buttons(c)
         elif step == "teen":  # one line with the buttons of the screen, not the screen again
-            c.say(texts.TEEN_AGAIN, self._teen_buttons())
+            await self._teen_say(c, "again", texts.TEEN_AGAIN)
         elif step in ("child_confirm", "patient", "second"):
             c.say(texts.HINT_BUTTONS)
             await self._repeat_buttons(c)
@@ -2031,20 +2037,36 @@ class Conversation:
         """The buttons of that screen under a one-line answer: the screen is not drawn again."""
         return [[Button(texts.TEEN_PARENT, "tn:parent", "primary")], self._nav_row(False)]
 
-    async def _teen_waits(self, c: Ctx, text: str) -> bool:
-        """«Буду ждать звонка», «родитель не рядом, значит жду звонка, да?» on that screen.
+    async def _teen_say(self, c: Ctx, key: str, line: str) -> None:
+        """One line under the buttons of that screen. The same one is not said twice in a
+        row: the second time the bot says that the request is with the administrators."""
+        if c.s.teen_line == key:
+            handoff = await self._open_handoff(c) if c.s.teen_passed else None
+            if handoff is not None:
+                key, line = "already", self._already(c, handoff)
+        c.teen_line = key
+        c.say(line, self._teen_buttons())
 
-        The request is with the administrators: one line says so («Хорошо, ждите звонка.
-        Ваше обращение № 1 уже у администратора…»). «Когда позвонят?» is answered with the
-        administrators' hours as everywhere.
+    async def _teen_words(self, c: Ctx, text: str) -> bool:
+        """What the words on that screen say without DeepSeek.
+
+        «Буду ждать звонка», «родитель не рядом, значит жду звонка, да?»: the request is
+        with the administrators — «Хорошо, ждите звонка. Ваше обращение № 1 уже у
+        администратора…». «А если мама сама запишет?»: the parent can, by the button.
+        «Когда позвонят?» is answered with the administrators' hours as everywhere.
         """
-        if not c.s.teen_passed or asks_when_admin(text) or not waits_for_call(text):
+        if asks_when_admin(text):
             return False
-        handoff = await self._open_handoff(c)
-        if handoff is None:
-            return False
-        c.say(f"{texts.TEEN_WAIT} {self._already(c, handoff)}", self._teen_buttons())
-        return True
+        if c.s.teen_passed and waits_for_call(text):
+            handoff = await self._open_handoff(c)
+            if handoff is not None:
+                c.teen_line = "waits"
+                c.say(f"{texts.TEEN_WAIT} {self._already(c, handoff)}", self._teen_buttons())
+                return True
+        if names_parent(text) and not waits_for_call(text):
+            await self._teen_say(c, "parent", texts.TEEN_PARENT_CAN)
+            return True
+        return False
 
     async def _on_teen(self, c: Ctx, value: str) -> None:
         """«Запись оформляет родитель»: the consent with the representative's line; the

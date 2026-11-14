@@ -16,17 +16,24 @@ The clinic clock is Thursday, 12 November 2026, 12:00.
 from __future__ import annotations
 
 from datetime import date, time
+from itertools import pairwise
 
 import pytest
 
 from app.bot import texts
 from app.config import ClinicData
-from app.flow.commands import find_small_talk, names_several, waits_for_call
+from app.flow.commands import (
+    asks_when_admin,
+    find_small_talk,
+    keeps_booking,
+    names_several,
+    waits_for_call,
+)
 from app.flow.loader import KnowledgeBase
 from app.flow.wishes import parse as parse_wish
 from tests.fake_deepseek import FakeDeepSeek
 from tests.test_safeguards import to_birth
-from tests.test_sim_findings_2 import MENU, session
+from tests.test_sim_findings_2 import MENU, handed, session
 from tests.test_wish_flow import through_dislocation
 
 TODAY = date(2026, 11, 12)
@@ -253,3 +260,93 @@ async def test_a_text_that_is_not_a_question_on_the_day_step_gets_the_hint(
     await through_dislocation(chat)
     await chat.say("абракадабра какая-то")
     assert chat.replies[0].text == texts.HINT_TIME and len(fake.requests) == 1
+
+
+# --- after run 3 (not checked by a live run) ---------------------------------------------------
+# teen16: four different questions on the screen of a patient of 15–17 got the same line four
+# times. price_xray: «Нет, спасибо, больше ничего. Буду ждать звонка администратора, надеюсь…»
+# (17 words) was added to the request twice. cancel_by_day: «значит запись на 13 ноября
+# осталась. Спасибо, больше ничего не нужно» showed the booking once more.
+
+STAYED = "Отлично, значит запись на 13 ноября осталась. Спасибо, больше ничего не нужно."
+WAITS_LONG = (
+    "Нет, спасибо, больше ничего. Буду ждать звонка администратора, надеюсь, он мне всё про "
+    "рентген и оплату объяснит."
+)
+
+
+@pytest.mark.parametrize(
+    "said", ["а долго ждать администратора? я хочу сегодня, нога реально болит",
+             "ну так а когда он ответит? мне бы сегодня, нога опухла уже",
+             "когда ответит администратор?", "долго ли ждать звонка?"],
+)  # fmt: skip
+def test_how_long_to_wait_for_the_administrator(said: str) -> None:
+    assert asks_when_admin(said)
+
+
+@pytest.mark.parametrize(
+    "said", ["долго ждать в очереди?", "когда ответит врач на приёме?", "долго заживает перелом?"]
+)
+def test_not_about_the_administrators_call(said: str) -> None:
+    assert not asks_when_admin(said)
+
+
+async def test_a_teen_never_reads_the_same_line_twice_in_a_row(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await to_teen(chat)
+    said: list[str] = []
+    for text in (
+        "а сам я не могу записаться? нога болит, хочу сегодня попасть",
+        "а долго ждать администратора? я хочу сегодня, нога реально болит",
+        "ну так а когда он ответит? мне бы сегодня, нога опухла уже",
+        "ладно, а если мама со мной придёт или она сама запишет, сегодня получится?",
+        "ну а так-то че делать",
+        "ну а так-то че делать то",
+    ):
+        await chat.say(text)
+        (only,) = chat.replies  # one line each time, with the buttons of the screen
+        assert chat.labels() == [texts.TEEN_PARENT, texts.MENU]
+        assert "Вам 16 лет" not in only.text and only.text != texts.STUCK
+        said.append(only.text)
+    hours = "Администраторы отвечают с 08:00 до 20:00"
+    assert said[0] == texts.TEEN_AGAIN
+    assert said[1].startswith(hours) and not said[2].startswith(hours)  # not the hours twice
+    assert said[3] == texts.TEEN_PARENT_CAN  # «мама сама запишет»: the parent can
+    assert all(a != b for a, b in pairwise(said))
+    assert (await session(chat))["step"] == "teen"
+    assert len(chat.admin) == 1  # nothing was added to the request
+
+
+def test_the_teen_screen_is_made_of_the_same_sentences() -> None:
+    assert texts.TEEN.endswith(texts.TEEN_PARENT_CAN)
+
+
+@pytest.mark.parametrize("said", [STAYED, "запись на пятницу осталась, спасибо"])
+def test_the_booking_has_stayed(said: str) -> None:
+    assert keeps_booking(said)
+
+
+@pytest.mark.parametrize(
+    "said", ["Спасибо, а запись на 13 ноября в 11:00 осталась?", "осталась боль в ноге"]
+)
+def test_a_question_whether_it_stayed_is_not_a_statement(said: str) -> None:
+    assert not keeps_booking(said)
+
+
+def test_a_long_thanks_that_waits_for_the_call_is_small_talk() -> None:
+    assert find_small_talk(WAITS_LONG) == "thanks"
+
+
+async def test_waiting_for_the_call_in_a_long_message_adds_nothing_to_the_request(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await handed(chat)
+    posted = len(chat.admin)
+    await chat.say(WAITS_LONG)
+    assert chat.text == texts.WELCOME and chat.labels() == MENU
+    assert len(chat.admin) == posted and fake.requests == []

@@ -386,13 +386,22 @@ _HANDOFF_NO = re.compile(r"^нет\b|\bне\s+(?:надо|нужно|стоит|
 _WHEN_CALL = re.compile(
     r"\b(?:когда|во\s+сколько|через\s+сколько|как\s+скоро|скоро\s+ли|как\s+быстро)\b"
     r"(?:\s+\w+){0,4}?\s+(?:позвон\w+|перезвон\w+|свяж\w+|ждать\s+звонка)\b"
-    r"|\bсколько\s+(?:\w+\s+){0,2}?ждать\b(?!\s+(?:в\s+)?(?:очеред\w+|прием\w*|врача|доктора))"
+    r"|\b(?:сколько|долго)\s+(?:\w+\s+){0,2}?ждать\b"
+    r"(?!\s+(?:в\s+)?(?:очеред\w+|прием\w*|врача|доктора))"
+)
+# «когда он ответит?» — about the administrator, unless a doctor is named
+_WHEN_ANSWER = re.compile(
+    r"\b(?:когда|через\s+сколько|как\s+скоро|скоро\s+ли)\b(?:\s+\w+){0,3}?\s+ответ(?:ит|ят)\b"
 )
 # «Буду ждать звонка», «больше вопросов нет», «всего доброго» — with a «спасибо» or without:
 # the talk is over. Anything asked for in the same message makes it not small talk.
 _WAITING = re.compile(
     r"\b(?:буду|будем)\s+ждать\b|\bжду\s+(?:звонка|ответа)\b|\bвопросов\s+(?:больше\s+)?нет\b"
     r"|\bна\s+этом\s+все\b"
+)
+_PARENT = re.compile(
+    r"\b(?:мам\w+|пап\w+|родител\w+|отец|отц\w+|мать|матер\w+|бабушк\w+|дедушк\w+|опекун\w*|"
+    r"представител\w+|взросл\w+)\b"
 )
 _WAITS_FOR_CALL = re.compile(
     r"\b(?:буду|будем)\s+ждать\b|\b(?:жду|подожду|дождусь)\b(?:\s+(?:звонка|ответа))?"
@@ -478,7 +487,8 @@ def find_small_talk(text: str) -> SmallTalk | None:
     """«Привет», «спасибо», «ок», «пока» as the whole message — and the end of a talk said
     in a sentence: «спасибо, больше вопросов нет, буду ждать звонка», «всего доброго». A
     longer message is a goodbye when it thanks and ends with one: «Ладно, спасибо хоть за
-    это. Пойду сама разбираться, а то с вами до вечера просижу с клещом. До свидания»."""
+    это. Пойду сама разбираться, а то с вами до вечера просижу с клещом. До свидания» — or
+    thanks and waits: «Нет, спасибо, больше ничего. Буду ждать звонка администратора…»."""
     t = normalize(text)
     exact = next((kind for kind, pattern in SMALL_TALK if pattern.search(t)), None)
     if exact is not None:
@@ -489,9 +499,13 @@ def find_small_talk(text: str) -> SmallTalk | None:
     if _ASKS_FOR.search(t) or _QUESTION_START.search(t):
         return None  # something is asked for: the message is not only a goodbye
     waiting = _WAITING.search(t) is not None
-    if words > SMALL_TALK_WORDS:  # a long one: only «спасибо … до свидания» as its last words
-        said_bye = _THANKS_WORD.search(t) and _BYE_AT_END.search(t.rstrip(" .!)"))
-        return "bye" if said_bye else None
+    if words > SMALL_TALK_WORDS:  # a long one: «спасибо» with «до свидания» as its last
+        # words, or with «буду ждать звонка» — nothing else is wanted
+        if _THANKS_WORD.search(t) is None:
+            return None
+        if _BYE_AT_END.search(t.rstrip(" .!)")):
+            return "bye"
+        return "thanks" if waiting else None
     if _BYE.search(t) and (waiting or _THANKS_WORD.search(t)):
         return "bye"
     return "thanks" if waiting else None
@@ -509,8 +523,18 @@ def wants_handoff(text: str) -> bool | None:
 
 
 def asks_when_admin(text: str) -> bool:
-    """«Когда позвонит администратор?», «сколько ждать звонка?»."""
-    return _WHEN_CALL.search(normalize(text)) is not None
+    """«Когда позвонит администратор?», «сколько ждать звонка?», «долго ждать
+    администратора?», «когда он ответит?»."""
+    t = normalize(text)
+    if _WHEN_CALL.search(t):
+        return True
+    doctor = re.search(r"\b(?:врач\w*|доктор\w*)\b", t)
+    return _WHEN_ANSWER.search(t) is not None and doctor is None
+
+
+def names_parent(text: str) -> bool:
+    """«А если мама сама запишет?», «папа рядом» — on the screen of a patient of 15–17."""
+    return _PARENT.search(normalize(text)) is not None
 
 
 def waits_for_call(text: str) -> bool:
@@ -614,15 +638,20 @@ _KEEPS = re.compile(
     r"|\bничего\s+не\s+(?:переношу|перенос\w+|меня\w+|отменя\w+)\b"
     r"|\bзапис\w+\s+(?:\w+\s+){0,2}?остается\b"
 )
+# «значит запись на 13 ноября осталась» — said, not asked
+_STAYED = re.compile(r"\bзапис\w+\s+(?:\w+\s+){0,4}?(?:осталась|остались|сохранилась|в\s+силе)\b")
 
 
 def keeps_booking(text: str) -> bool:
-    """«Спасибо, её не трогаем», «завтрашнюю оставляем, ничего не переношу» — about a booking
-    the patient has: it stays. Not an order to cancel or to move one."""
+    """«Спасибо, её не трогаем», «завтрашнюю оставляем, ничего не переношу», «значит запись
+    на 13 ноября осталась» — about a booking the patient has: it stays. Not an order to
+    cancel or to move one, and not a question («запись осталась?»)."""
     t = normalize(text)
     if re.search(rf"\b(?:{_CANCEL}|{_MOVE})\b", t) or _MOVE_INTENT.search(t):
         return False
-    return _KEEPS.search(t) is not None
+    if _KEEPS.search(t):
+        return True
+    return "?" not in text and _STAYED.search(t) is not None  # «…осталась?» is a question
 
 
 def refuses_new_booking(text: str) -> bool:

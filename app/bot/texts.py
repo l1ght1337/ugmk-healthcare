@@ -264,9 +264,11 @@ CONSENT_BY_PARENT = (
 # 15–17 and «для себя»: the clinic's rule for a visit without a parent is not known yet
 # (docs/clinic_requests.md, item 10) — the bot neither asks for «я законный представитель» nor
 # books; the request goes to an administrator
+# the second sentence of that screen; alone — the answer to «а если мама сама запишет?»
+TEEN_PARENT_CAN = "Если рядом родитель или законный представитель, запись может оформить он."
 TEEN = (
     "Вам {age}. Правила самостоятельной записи с 15 до 18 лет уточнит администратор{passed}. "
-    "Если рядом родитель или законный представитель, запись может оформить он."
+    + TEEN_PARENT_CAN
 )
 TEEN_PASSED = " — я передал ему обращение, с Вами свяжутся"
 TEEN_PARENT = "Запись оформляет родитель"
