@@ -77,7 +77,10 @@ docker run -d --name ugmk-bot --restart unless-stopped \
 uv run ruff check . && uv run pytest     # без сети: LLM и Telegram подменены
 uv run pytest -m live -s                 # живой DeepSeek (нужен ключ), печатает токены и долю кэша
 uv run python -m tests.live_report       # последние 3 live-прогона: тест, причина сбоя, время
+uv run python -m tests.simulate          # симулятор пациентов (нужен ключ) → docs/simulation_report.md
+uv run python -m tests.simulate --recheck  # те же расшифровки, правила заново, без DeepSeek
 ```
+- `tests/simulate.py` — симулятор пациентов, запускается вручную, как live-тесты. DeepSeek играет 50 персонажей из `tests/simulate_personas.py` (мать с ребёнком ночью, пожилой человек, подросток, пишущий с опечатками или транслитом, раздражённый, передумывающий и т. д.) против настоящего диалога бота, до 25 ходов; пациент сам решает, нажать кнопку или написать. После диалога расшифровку проверяют правила без LLM: цель достигнута или получен понятный отказ с выходом; экран не показан дважды подряд без новой строки; вопрос не остался без ответа; названные врач, день и «для кого» не потерялись; у каждого ответа есть кнопка дальше; нет диагнозов и советов. Итог — `docs/simulation_report.md`: сколько диалогов прошло и расшифровка каждого провала. Имена и телефоны персонажей вымышленные. Опции: `--only ключ1,ключ2`, `--limit N`, `--parallel K`. Правила проверены офлайн в `tests/test_simulate.py`.
 - `tests/test_acceptance.py` — исходы движка по кейсам из `docs/test_cases.md`.
 - `tests/test_manual_cases.py` — все 20 приёмочных кейсов одним аккаунтом через логику диалога, как в Telegram.
 - `docs/manual_test.md` — те же шаги для ручного прогона в Telegram. Собирается командой `uv run python -m tests.manual_cases --write`.
@@ -119,4 +122,5 @@ docs/              ТЗ, карта скриптов, кейсы, исходы, 
 - `docs/clinic_load.md` — загрузка травмпункта и расчёт стоимости DeepSeek
 - `docs/faq_matrix.md` — вопросы пациентов и откуда бот берёт ответ (`uv run python -m tests.faq_cases --write`)
 - `docs/manual_test.md` — ручной прогон в Telegram; `docs/button_labels.md` — подписи кнопок
+- `docs/simulation_report.md` — последний прогон симулятора пациентов: провалы с расшифровками
 - `docs/clinic_requests.md` — что нужно получить и согласовать с клиникой
