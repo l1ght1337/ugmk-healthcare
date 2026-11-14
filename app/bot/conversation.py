@@ -19,7 +19,7 @@ import logging
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -49,9 +49,11 @@ from app.flow.commands import (
     find_command,
     find_navigation,
     find_small_talk,
+    gives_consent,
     is_booking_order,
     is_question,
     is_unsure,
+    refuses_new_booking,
     wants_all,
     wants_cancel,
     wants_move,
@@ -73,10 +75,10 @@ from app.flow.engine import (
 )
 from app.flow.identity import (
     age_in_months,
+    find_full_name,
+    find_phone,
     normalize_phone,
     parse_birth_date,
-    parse_full_name,
-    parse_phone,
 )
 from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
 from app.flow.safety import find_phrase
@@ -267,6 +269,7 @@ class Session(BaseModel):
     slot_id: str | None = None
     patient_id: int | None = None
     draft_name: list[str | None] | None = None
+    name_asks: int = 0  # full names in a row that could not be read
     resume: Literal["identify", "handoff"] | None = None
     handoff_reason: str | None = None  # for the administrators
     handoff_context: str | None = None
@@ -924,7 +927,7 @@ class Conversation:
             earlier = (c.s.wish or Wish()).without("doctor", "day", "noted")
             wish = wish.without_time().merge(earlier)
             wish = None if wish.empty else wish
-        c.s.history, c.s.wish, c.s.nudged = rest, wish, nudged
+        c.s.history, c.s.wish, c.s.nudged, c.s.name_asks = rest, wish, nudged, 0
         c.back = True
         await self._render_screen(c)
 
@@ -974,6 +977,12 @@ class Conversation:
         if (talk := find_small_talk(text)) is not None:  # «привет», «спасибо», «ок», «пока»
             await self._small_talk(c, talk)
             return
+        if step == "consent" and gives_consent(text):  # «согласна, записывайте»
+            await self._on_button(c, "c:yes")
+            await self._carry_on(c, text)  # the name and the rest may be in the same message
+            return
+        if await self._no_new_booking(c, step, text):
+            return  # «я уже записан, новую запись не надо» in the middle of a new booking
         action = find_command(text)
         if action == "my_bookings" and (wants_move(text) or wants_cancel(text)):
             wish = self._read_wish(c, text).wish  # the day, the doctor or the time named
@@ -994,6 +1003,8 @@ class Conversation:
             # of the booking, not a wish for a new one
             await self._command(c, action)
             return
+        if step in TIME_STEPS and await self._press_time(c, text, found, shown):
+            return  # «записывайте на 13:30»: the time is on a button of this screen
         if await self._on_wish_text(c, found):
             return
         if action == "book":
@@ -1051,6 +1062,76 @@ class Conversation:
             await self._on_button(c, data)
         return True
 
+    async def _press_time(self, c: Ctx, text: str, found: Parsed, shown: Sequence[Reply]) -> bool:
+        """A time named in a sentence presses its button: «записывайте на сегодня на 13:30».
+
+        The time must be on one button of this screen («Ближе всего к 13:30: 13:30» and
+        «13:30» are one time) and the only one the message names. A «не» next to it («только
+        не на 13:30»), a question about the schedule («13:30 свободно?») or another day
+        («завтра в 13:30» on today's grid) leave the text to the wish parser.
+        """
+        named = typed.clock_times(text)
+        if not named or found.question is not None or typed.refuses_time(text):
+            return False
+        tz = self.settings.tz
+        on_screen: dict[time, set[str]] = defaultdict(set)
+        ids = {b.data[2:] for r in shown for row in r.buttons for b in row if b.data[:2] == "s:"}
+        for slot_id in ids:
+            slot = await self.schedule.get(slot_id)
+            if slot is not None:
+                on_screen[slots_view.local(slot, tz).time()].add(slot.id)
+        wanted = {moment for moment, _ in named if moment in on_screen}
+        with_colon = {moment for moment, colon in named if colon}
+        if len(wanted) != 1 or not with_colon <= wanted:
+            return False  # none, «13:30 или 14:30», or a time that is not on this screen
+        slots = on_screen[wanted.pop()]
+        slot = await self.schedule.get(next(iter(slots))) if len(slots) == 1 else None
+        day = found.wish.day
+        if slot is None or (day is not None and day != slots_view.local(slot, tz).date()):
+            return False
+        await self._on_slot(c, slot.id)
+        return True
+
+    async def _no_new_booking(self, c: Ctx, step: str, text: str) -> bool:
+        """«Я уже записан, новую запись не надо» while a new booking is under way.
+
+        The new booking is dropped and the one the patient has is shown; a question in the
+        same message («…плечо на этом приёме тоже осмотрят?») is answered first.
+        """
+        under_way = c.s.wizard and step in WIZARD_STEPS and c.s.reschedule_of is None
+        if not under_way or not refuses_new_booking(text) or not await self._upcoming(c):
+            return False
+        if is_question(text):
+            info = await read_question(self._llm(c), text, await self._known(c))
+            if info.answer:
+                c.say(info.answer)
+        c.say(texts.NO_NEW_BOOKING)
+        await self._my_bookings(c)
+        return True
+
+    async def _carry_on(self, c: Ctx, text: str) -> None:
+        """«Дроздов Павел Сергеевич, 12.12.1986»: the message answers the next request too.
+
+        The name, the birth date and the phone, as far as the message goes; a request it has
+        already answered is not shown.
+        """
+        today = self._local(c.now).date()
+        for _ in range(3):
+            step = c.s.step
+            if step == "name" and find_full_name(text, whole=False) is not None:
+                handler = self._on_name
+            elif step == "birth" and parse_birth_date(text, today) is not None:
+                handler = self._on_birth
+            elif step == "contact" and find_phone(text) is not None:
+                handler = self._on_phone_text
+            else:
+                return
+            if c.turn.replies:
+                c.turn.replies.pop()  # the request this message has answered already
+            await handler(c, text)
+            if c.s.step == step:
+                return
+
     async def _navigate(self, c: Ctx, move: str) -> None:
         """«Назад», «в меню», «отмена» typed as text — on any step."""
         if move == "back":
@@ -1096,12 +1177,15 @@ class Conversation:
         today = self._local(c.now).date()
         valid = {
             "age": lambda: parse_age_months(text) is not None,
-            "name": lambda: parse_full_name(text) is not None,
+            "name": lambda: find_full_name(text) is not None,
             "birth": lambda: parse_birth_date(text, today) is not None,
-            "contact": lambda: parse_phone(text) is not None,
+            "contact": lambda: find_phone(text) is not None,
         }[step]()
-        if not valid and is_question(text) and await self._aside(c, text):
-            return
+        if is_question(text):
+            # «а зачем вам телефон? ладно, +7…»: the question is answered, the data is taken
+            handled = await self._aside(c, text, data=valid)
+            if handled and (not valid or c.s.step != step):
+                return
         await self._on_step_text(c, step, text)
 
     async def _on_short_text(self, c: Ctx, step: str, text: str) -> bool:
@@ -1141,11 +1225,16 @@ class Conversation:
         else:
             await self._on_day(c, "other")
 
-    async def _aside(self, c: Ctx, text: str, reading: TextReading | None = None) -> bool:
+    async def _aside(
+        self, c: Ctx, text: str, reading: TextReading | None = None, *, data: bool = False
+    ) -> bool:
         """A question typed in the middle of booking: the answer, then the same step again.
 
         True — the text was a question and it is dealt with; False — it was not, and the
         step reads it as usual. ``reading`` — what route already said about the text.
+        ``data`` — the message also holds the answer to the step (a name, a date, a phone):
+        only the answer to the question is said, the step goes on by itself, and no other
+        screen is opened.
         """
         known = await self._known(c)
         if reading is None:
@@ -1155,16 +1244,23 @@ class Conversation:
         if reading.kind == "crisis":
             await self._crisis(c, text)
             return True
+        if data and reading.kind in ("schedule_question", "menu_action"):
+            return False
         if reading.kind == "schedule_question":
             await self._answer_schedule(c, self._read_wish(c, text), text)
             return True
         if reading.kind == "menu_action" and reading.action in NAV_ACTIONS:
             await self._navigate(c, reading.action)  # «хочу на стартовый экран»
             return True
-        if reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS - {"book"}:
-            await self._command(c, reading.action)
+        # «задать вопрос», as route reads a question typed in the middle of a booking: the
+        # question itself is answered here, the booking is not dropped for the questions screen
+        asks = reading.kind == "menu_action" and reading.action == "ask"
+        asks = asks and c.s.step in WIZARD_STEPS
+        command = reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS - {"book"}
+        if command and not asks:
+            await self._command(c, reading.action)  # type: ignore[arg-type]
             return True
-        if reading.kind == "clinic_question":
+        if reading.kind == "clinic_question" or asks:
             info = await read_question(self._llm(c), text, known, on_partial=c.draft)
             c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
         elif reading.kind == "about_bot":
@@ -1173,7 +1269,8 @@ class Conversation:
             c.say(texts.MEDICAL_ASIDE)
         else:
             return False
-        await self._render_screen(c)
+        if not data:
+            await self._render_screen(c)
         return True
 
     async def _answer_too(self, c: Ctx, text: str) -> None:
@@ -1222,6 +1319,8 @@ class Conversation:
         }
         if step in handlers:
             await handlers[step](c, text)
+            if step in ("name", "birth"):
+                await self._carry_on(c, text)  # «…, 12.12.1986, телефон +7…» in the same message
         elif step in TIME_STEPS:  # neither the code nor route understood: what can be typed
             c.say(texts.HINT_TIME)
             await self._render_screen(c)
@@ -1485,11 +1584,16 @@ class Conversation:
             await self._show(c, step)
 
     async def _on_name(self, c: Ctx, text: str) -> None:
-        name = parse_full_name(text)
+        name = find_full_name(text)
         if name is None:
-            c.say(texts.ASK_NAME_AGAIN, self._back_row())
+            c.s.name_asks += 1
+            if c.s.name_asks < 2:
+                c.say(texts.ASK_NAME_AGAIN, self._back_row())
+            else:  # the same line again would not help: another one, and a way out
+                rows = [[Button(texts.MENU_ADMIN, "m:admin")], self._nav_row()]
+                c.say(texts.NAME_HELP, rows)
             return
-        c.s.draft_name = list(name)
+        c.s.draft_name, c.s.name_asks = list(name), 0
         self._ask_birth(c)
 
     def _ask_birth(self, c: Ctx) -> None:
@@ -1574,7 +1678,7 @@ class Conversation:
         await self._show(c, step)
 
     async def _on_phone_text(self, c: Ctx, text: str) -> None:
-        phone = parse_phone(text)
+        phone = find_phone(text)
         if phone is None:  # what is wrong, not the same request once more
             c.say(texts.ASK_CONTACT_AGAIN, ask_contact=True)
             return

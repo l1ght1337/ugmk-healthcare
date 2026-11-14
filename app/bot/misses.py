@@ -48,6 +48,7 @@ PHRASES: tuple[tuple[str, str], ...] = (
     (texts.REQUEST_UNCLEAR, UNCLEAR),
     (texts.TOPIC_UNCLEAR, UNCLEAR),
     (texts.ASK_NAME_AGAIN, UNREAD),
+    (texts.NAME_HELP, UNREAD),
     (texts.ASK_BIRTH_AGAIN, UNREAD),
     (texts.ASK_CONTACT_AGAIN, UNREAD),
     (texts.ASK_CHILD_AGE_AGAIN, UNREAD),

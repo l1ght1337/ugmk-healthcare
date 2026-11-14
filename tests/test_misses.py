@@ -94,11 +94,11 @@ async def test_not_a_text_and_unread_data(make_chat, journal) -> None:
     chat._take(await chat.conversation.other(chat.user))  # a photo, a voice message
     await chat.pick_slot("Завтра")
     await chat.press(texts.CONSENT_YES)
-    await chat.say("Громова Нина Васильевна. Это я сама и есть")  # the name inside a sentence
+    await chat.say("я же всё написала выше")  # no name in it
     got = [(r["step"], r["kind"], r["text"]) for r in lines(journal)]
     assert got == [
         ("days", misses.NOT_TEXT, ""),
-        ("name", misses.UNREAD, "[ИМЯ]. Это я сама и есть"),
+        ("name", misses.UNREAD, "я же всё написала выше"),
     ]
 
 

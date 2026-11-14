@@ -57,7 +57,15 @@ COMMANDS: tuple[tuple[MenuAction, re.Pattern[str]], ...] = (
     ("my_bookings", re.compile(rf"\bмо[йяеиюё]\w*\s+{_BOOKING}")),
     ("my_bookings", re.compile(rf"\bкогда\b.*\bу\s+меня\b.*\b{_BOOKING}")),
     ("my_bookings", re.compile(r"\b(?:я|мы)\s+записан\w*")),
-    ("my_bookings", re.compile(rf"\bнапомни\w*\b.*\b{_BOOKING}")),
+    # «напомни про мои записи», «напомните, когда у меня приём» — not «напомните, плечо тоже
+    # посмотрят на приёме?»: only small words may stand between
+    (
+        "my_bookings",
+        re.compile(
+            r"\bнапомни\w*\s+(?:(?:мне|нам|пожалуйста|про|о|об|мо\w+|наш\w+|когда|во|сколько|у|"
+            rf"меня|нас|на|какое|время|дату|день)\s+)*{_BOOKING}"
+        ),
+    ),
     ("my_bookings", re.compile(r"\bпокажи\w*\s+записи\b")),
     # «во сколько мне приходить?» — about the patient's own visit, not the opening hours
     (
@@ -340,14 +348,47 @@ _BOOK_MARK = re.compile(
 )
 
 
+# An order to book someone else, or one more visit: «хочу записать мужа… после моего приёма»,
+# «нужен второй приём для мужа» are about a new booking, not about «Мои записи».
+_BOOKS_ANOTHER = re.compile(
+    rf"\b(?:записать|запиши|запишите|запишу|запишем)\s+(?:еще\s+)?(?:и\s+)?{_MY}"
+    rf"(?:{_CHILD_WORDS}|{_ADULT_WORDS})\b"
+    r"|\b(?:втор\w+|еще\s+од\w+)\s+(?:запис\w+|прием\w*)\b"
+)
+# «Я уже записан», «не надо меня заново записывать», «мне не нужна новая запись»
+_NO_NEW_BOOKING = re.compile(
+    r"\b(?:я|мы)\s+уже\s+записан\w*"
+    r"|\bне\s+(?:надо|нужно|нужна|нужен|хочу|стоит|требуется)(?:\s+\w+){0,3}?\s+"
+    r"(?:нов\w+\s+запис\w+|втор\w+\s+запис\w+|заново|записывать|оформлять)\b"
+    r"|\b(?:нов\w+|втор\w+)\s+запис\w+\s+(?:мне\s+)?не\s+(?:надо|нужно|нужна)\b"
+)
+# Consent to the processing of personal data, said in words — and what makes it no consent.
+_CONSENT = re.compile(
+    r"\b(?:согласен|согласна|согласны|соглашаюсь|соглашаемся)\b|\bдаю\s+согласие\b|"
+    r"\bсогласие\s+даю\b"
+)
+_CONSENT_NOT = re.compile(r"\b(?:не|ни|нет|несогласен|несогласна|против|отказ\w*|отзыва\w+)\b")
+_CONSENT_IF = re.compile(
+    r"\b(?:если|но|однако|только|лишь|пока|сначала|сперва|прежде|кроме|услови\w+)\b"
+)
+_CONSENT_ASKS = re.compile(
+    r"\b(?:с\s+чем|на\s+что|что\s+значит|зачем|почему|для\s+чего|как\w+|ли)\b"
+)
+_SENTENCE_END = re.compile(r"[.!;…]+(?:\s+|$)")
+
+
 def normalize(text: str) -> str:
     return " ".join(re.sub(r"[^\w]+", " ", text.lower().replace("ё", "е")).split())
 
 
 def find_command(text: str) -> MenuAction | None:
     t = normalize(text)
+    another = _BOOKS_ANOTHER.search(t) is not None and _MOVE_INTENT.search(t) is None
+    another = another and re.search(rf"\b{_CANCEL}\b", t) is None
     for action, pattern in COMMANDS:
         if pattern.search(t):
+            if action == "my_bookings" and another:
+                continue  # a new booking for someone else: the text goes on to the complaint
             return action
     if _BOOK_MARK.search(t) and all(_BOOK_FILLER.match(word) for word in t.split()):
         return "book"  # «хочу к врачу», «запишыте пожалуста», «можно к вам на приём?»
@@ -425,6 +466,34 @@ def wants_all(text: str) -> bool:
         re.search(rf"\b{_CANCEL}\s+{_ALL}\b(?!\s+равно)", t) is not None
         or re.search(rf"\b{_ALL}\s+{_BOOKING}\s+(?:пожалуйста\s+)?{_CANCEL}\b", t) is not None
     )
+
+
+def refuses_new_booking(text: str) -> bool:
+    """«Я уже записан», «не надо меня заново записывать», «новая запись не нужна»: said in
+    the middle of a booking by a patient who has one, it stops the new one."""
+    return _NO_NEW_BOOKING.search(normalize(text)) is not None
+
+
+def gives_consent(text: str) -> bool:
+    """Consent inside a sentence: «согласна, записывайте», «на обработку данных согласен».
+
+    Only a plain consent counts. A «не» or a condition in the sentence with the word
+    («не согласен», «согласен, если…», «согласна, но только…»), a refusal anywhere, or a
+    question («а с чем я согласен?») — and it is no consent: the bot shows the consent again.
+    """
+    if "?" in text:
+        return False
+    said = False
+    for sentence in _SENTENCE_END.split(text):
+        t = normalize(sentence)
+        if re.search(r"\b(?:против|отказ\w*|отзыва\w+)\b", t):
+            return False
+        if _CONSENT.search(t) is None:
+            continue
+        if _CONSENT_NOT.search(t) or _CONSENT_IF.search(t) or _CONSENT_ASKS.search(t):
+            return False
+        said = True
+    return said
 
 
 def is_unsure(text: str) -> bool:

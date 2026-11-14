@@ -7,7 +7,9 @@ word must name one button and only one, otherwise the text goes on to the usual 
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
+from datetime import time
 
 from app.flow.commands import normalize, yes_no
 
@@ -24,6 +26,28 @@ _SMALL_WORDS = frozenset({"или", "и", "на", "до", "в", "у", "с", "п�
 MIN_PREFIX = 4
 # Words that are on topic buttons but name no topic: «травма» is not «Травма глаза».
 _TOPIC_STOP_WORDS = frozenset({"травма", "травмы", "прием", "другой", "другая"})
+
+
+# «13:30», «13.30» — not a part of a date («12.11.2026») or of a longer number.
+_CLOCK = re.compile(r"(?<![\d:.])([01]?\d|2[0-3])([:.])([0-5]\d)(?![\d:]|\.\d)")
+_SENTENCE_END = re.compile(r"[.!?;…]+(?:\s+|$)")
+_NOT_THIS = re.compile(r"\b(?:не|ни|нет|кроме|вместо)\b")
+
+
+def clock_times(text: str) -> list[tuple[time, bool]]:
+    """The clock times a text names: (the time, written with a colon).
+
+    «13.30» may be a time or a date («12.11»): the caller counts it only if such a time is
+    on the screen.
+    """
+    return [(time(int(m[1]), int(m[3])), m[2] == ":") for m in _CLOCK.finditer(text)]
+
+
+def refuses_time(text: str) -> bool:
+    """A «не», «кроме», «вместо» in a sentence that names a time: «только не на 13:30»,
+    «13:30 не подходит». «Я кнопки не нажимаю. Запишите на 13:30» is not a refusal."""
+    sentences = _SENTENCE_END.split(text)
+    return any(_CLOCK.search(s) and _NOT_THIS.search(normalize(s)) for s in sentences)
 
 
 def _words(label: str) -> list[str]:

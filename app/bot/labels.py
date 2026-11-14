@@ -198,6 +198,13 @@ def render_labels(kb: KnowledgeBase) -> str:
             "Возраст, ФИО или дата рождения не разобраны: бот просит ещё раз",
             [texts.BACK, texts.MENU],
         ),
+        _row(
+            "ФИО не разобрано второй раз подряд: «Не получается разобрать ФИО…»",
+            [texts.MENU_ADMIN, texts.BACK, texts.MENU],
+        ),
+        _row(
+            "«Я уже записан, новую запись не надо» посреди новой записи", [texts.MOVE, texts.CANCEL]
+        ),
         _row("Отмена записи", [texts.CANCEL_YES, texts.CANCEL_KEEP]),
         _row(
             "«Отмени запись», когда записей несколько: какую отменить",

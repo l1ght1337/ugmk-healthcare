@@ -301,6 +301,11 @@ ASK_NAME = "Начнём с ФИО."
 ASK_NAME_AGAIN = (
     "Напишите, пожалуйста, фамилию, имя и отчество полностью, например: Иванов Иван Иванович."
 )
+# the second name in a row that could not be read: another line and a way out
+NAME_HELP = (
+    "Не получается разобрать ФИО. Напишите, пожалуйста, одним сообщением только три слова: "
+    "фамилию, имя и отчество. Или позовите администратора."
+)
 # how the full name was read (any word order): shown above the request for the birth date
 PATIENT_IS = "Пациент: {name}. Если неверно, нажмите «Назад»."
 ASK_BIRTH = "Дата рождения пациента — например, 12.03.2015."
@@ -353,6 +358,8 @@ ALREADY_BOOKED = (
 ALREADY_MOVE = "Перенести ту запись"
 ALREADY_AGAIN = "Записать ещё раз"
 KEPT = "Хорошо, запись остаётся."
+# «я уже записан, новую запись не надо» in the middle of a new booking
+NO_NEW_BOOKING = "Хорошо, новую запись не оформляю."
 # «Переношу запись с субботы, 14 ноября, 11:30.» — above the day and the time of the move
 MOVING = "Переношу запись {weekday}, {date}, {time}."
 KEEP_AS_IS = "Оставить как есть"
