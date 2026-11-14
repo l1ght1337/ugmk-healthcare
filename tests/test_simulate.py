@@ -15,7 +15,7 @@ from app.config import ClinicData
 from app.flow.loader import KnowledgeBase
 from tests import simulate as sim
 from tests.simulate import Action, Dialog, ScriptedPatient, Shown, Step, check, play, render_report
-from tests.simulate_personas import PERSONAS, Persona
+from tests.simulate_personas import PERSONAS, SECTION_5, Persona
 
 BY_KEY = {p.key: p for p in PERSONAS}
 BOOK_BY_BUTTONS = (
@@ -64,8 +64,8 @@ def step(n: int, action: Action, *replies: Shown, **changes: object) -> Step:
 # --- the personas -------------------------------------------------------------------------------
 
 
-def test_personas_are_forty_to_fifty_and_made_up() -> None:
-    assert 40 <= len(PERSONAS) <= 50
+def test_personas_are_forty_to_sixty_and_made_up() -> None:
+    assert 40 <= len(PERSONAS) <= 60
     assert len(BY_KEY) == len(PERSONAS) == len({p.name for p in PERSONAS})
     assert all(p.phone.startswith("+7900") for p in PERSONAS)  # a range no operator uses
     goals = {p.goal for p in PERSONAS}
@@ -331,7 +331,7 @@ async def test_saved_transcripts_are_rechecked_without_deepseek(
 
 # --- a patient who is due a route (section 5) or an ambulance ---------------------------------
 
-ROUTED = {"head", "infant", "criminal", "needle", "burn_face", "bleeding"}
+ROUTED = {"head", "infant", "criminal", "needle", "burn_face", "bleeding", *SECTION_5}
 
 
 def test_the_personas_due_a_route_are_marked() -> None:
@@ -399,3 +399,28 @@ def test_a_one_line_answer_under_the_same_buttons_is_an_answer(env: sim.Env) -> 
     first = step(1, Action("press", "x"), days, step="days", wizard=True)
     shown = step(2, Action("say", "а сколько стоит приём?"), again, step="days", wizard=True)
     assert sim.UNANSWERED in rules(made(BY_KEY["questions"], first, shown), env)
+
+
+# --- every scenario of section 5 has a patient ---------------------------------------------------
+
+
+def test_every_scenario_of_section_5_has_a_persona(env: sim.Env) -> None:
+    section = {s.id for s in env.kb.scenarios.values() if s.number.startswith("5.")}
+    played = {p.scenario for p in PERSONAS if p.scenario}
+    assert played == section and len(section) == 10
+    for persona in PERSONAS:
+        if persona.scenario:
+            assert persona.route and persona.goal == "book", persona.key
+    assert len([p for p in PERSONAS if p.scenario == "needle_injury"]) == 2  # two wordings
+    assert len([p for p in PERSONAS if p.scenario == "head_trauma"]) == 2
+    assert set(SECTION_5) == {p.key for p in PERSONAS if p.scenario} and len(SECTION_5) == 12
+
+
+def test_the_stories_of_section_5_have_no_emergency_phrase(env: sim.Env) -> None:
+    """«Трудно дышать» in a story would play the «угроза жизни» state, not the route."""
+    from app.flow.safety import find_phrase
+
+    phrases = env.clinic.clinic.emergency.phrases
+    for persona in PERSONAS:
+        if persona.scenario:
+            assert find_phrase(persona.story, phrases) is None, persona.key
