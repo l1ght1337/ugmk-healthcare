@@ -450,6 +450,10 @@ class MenuItem(_Model):
     scenario: str | None = None
     action: Literal["describe", "admin"] | None = None
     area: Area | None = Field(default=None, description="Choosing it names the body area")
+    unsure: bool = Field(
+        default=False,
+        description="«Не знаю»: the scenario is taken for the route, the patient named no injury",
+    )
     facts: dict[str, FactValue] = Field(
         default={}, description="Answers the button already gives (passed to the scenario)"
     )

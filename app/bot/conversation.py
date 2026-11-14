@@ -287,6 +287,9 @@ class Session(BaseModel):
     patient_id: int | None = None
     draft_name: list[str | None] | None = None
     name_asks: int = 0  # full names in a row that could not be read
+    # the scenario was not named by the patient: «Не знаю», or route picked it from a
+    # description — the summary does not call the injury by the scenario's name
+    picked: Literal["unsure", "words"] | None = None
     resume: Literal["identify", "handoff"] | None = None
     handoff_reason: str | None = None  # for the administrators
     handoff_context: str | None = None
@@ -1532,6 +1535,8 @@ class Conversation:
             if advice:
                 self._advice(c, reading.scenario_id)
             await self._begin(c, reading.scenario_id, reading.facts, find_child_age(text))
+            if not topics.names_kind(reading.scenario_id, text):
+                c.s.picked = "words"  # DeepSeek's choice, not the patient's word for the injury
         elif reading.kind == "complaint":
             area = reading.area or topics.guess_area(text) or c.s.area
             # «ударился, болит сильно» with the area known: the word list names the kinds
@@ -1619,6 +1624,7 @@ class Conversation:
         if only is not None:
             c.s.area = area
             await self._begin(c, only, {}, None)
+            c.s.picked = "words" if only in topics.KIND_WORDS else None  # the word lists' guess
         else:
             self._topics_for(c, area, fitting, texts.PICK_TOPIC, said=advice)
 
@@ -1968,6 +1974,7 @@ class Conversation:
             self._menu_screen(c, item.menu)
         elif item.scenario is not None:
             await self._begin(c, item.scenario, dict(item.facts), None)
+            c.s.picked = "unsure" if item.unsure else None
         elif item.action == "describe":
             c.s.step = "describe"
             self._screen(c, texts.DESCRIBE)
@@ -2287,7 +2294,8 @@ class Conversation:
         d = c.s.dialog
         if c.s.control_of is not None or not d.trail or d.scenario_id is None:
             return None
-        parts = [self.kb.scenario(d.trail[0]).menu_label]
+        named = {"unsure": texts.SUMMARY_UNSURE, "words": texts.SUMMARY_BY_WORDS}
+        parts = [named.get(c.s.picked or "", self.kb.scenario(d.trail[0]).menu_label)]
         if d.audience == "child":
             who = texts.SUMMARY_CHILD
             parts.append(f"{who}, {format_age(d.age_months)}" if d.age_months is not None else who)

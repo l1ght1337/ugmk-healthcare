@@ -47,6 +47,7 @@ from app.bot.conversation import Conversation, Reply, UserRef
 from app.config import PROJECT_ROOT, ClinicData, get_settings, load_clinic_data
 from app.db.models import Booking, Handoff, Patient, User
 from app.db.session import Database
+from app.flow import topics
 from app.flow.commands import find_audience, is_question
 from app.flow.loader import KnowledgeBase, load_kb
 from app.llm.assistant import Assistant
@@ -489,7 +490,7 @@ ADVICE_WORDS = re.compile(
 
 def fixed_phrases(kb: KnowledgeBase) -> list[str]:
     """Texts the bot says as they are written: the scripts and app/bot/texts.py."""
-    found = set(kb.patient_phrases())
+    found = set(kb.patient_phrases()) | {p.short for p in kb.shorts.phrases}
     for value in vars(texts).values():
         values = value.values() if isinstance(value, dict) else [value]
         found |= {v for v in values if isinstance(v, str) and "{" not in v and len(v) > 12}
@@ -697,6 +698,50 @@ def _advice(dialog: Dialog, phrases: Sequence[str]) -> list[Violation]:
     return found
 
 
+UNSURE = re.compile(
+    r"^(?:я\s+)?(?:не\s+знаю|не\s+уверен\w*|затрудняюсь|хз|другое)\b", re.IGNORECASE
+)
+_SENTENCE = re.compile(r"[^.!?\n]+[.!?]?")
+_NOT_A_STATEMENT = re.compile(r"\b(?:если|или)\b")
+
+
+def _kinds(text: str) -> set[str]:
+    """The injuries a text names, by the scenarios whose names are diagnoses (KIND_WORDS)."""
+    said = text.lower().replace("ё", "е")
+    return {kind for kind, stems in topics.KIND_WORDS.items() if any(s in said for s in stems)}
+
+
+def _named(dialog: Dialog) -> list[Violation]:
+    """The bot names an injury the patient has not: «Не знаю» → «Ваши ответы: вывих».
+
+    An injury is the patient's once it is in his words, on a button he pressed, or in the
+    question he answered with a button («Разрыв уже подтвердил врач или МРТ?»). A question of
+    the bot's, a list of options («вывих, перелом или растяжение») and a condition («если это
+    вывих…») name nothing.
+    """
+    found = []
+    known: set[str] = set()
+    shown = list(dialog.opening)
+    for step in dialog.steps:
+        action = step.action
+        if action.kind in ("say", "press"):
+            known |= _kinds(action.value)
+        if action.kind == "press" and not UNSURE.match(action.value.strip()):
+            known |= {kind for reply in shown for kind in _kinds(reply.text)}
+        for reply in step.replies:
+            said = [
+                sentence.strip()
+                for sentence in _SENTENCE.findall(reply.text)
+                if "?" not in sentence
+                and not _NOT_A_STATEMENT.search(sentence.lower())
+                and _kinds(sentence) - known
+            ]
+            if said:
+                found.append(Violation(ADVICE, step.n, said[0][:160]))
+        shown = step.replies
+    return found
+
+
 def check(dialog: Dialog, kb: KnowledgeBase, clinic: ClinicData) -> list[Violation]:
     """Every rule the dialog breaks; an empty list — the dialog passed."""
     if dialog.ended == "patient":
@@ -713,6 +758,7 @@ def check(dialog: Dialog, kb: KnowledgeBase, clinic: ClinicData) -> list[Violati
     found += _lost(dialog)
     found += _no_button(dialog)
     found += _advice(dialog, fixed_phrases(kb))
+    found += _named(dialog)
     return found
 
 

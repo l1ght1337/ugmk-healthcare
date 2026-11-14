@@ -387,7 +387,8 @@
           "id": "f_unsure",
           "label": "Не знаю",
           "scenario": "dislocation",
-          "icon": "❔"
+          "icon": "❔",
+          "unsure": true
         }
       ]
     },

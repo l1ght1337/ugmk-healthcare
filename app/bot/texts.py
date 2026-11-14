@@ -175,6 +175,10 @@ SUMMARY_EDIT = "Изменить ответы"
 SUMMARY_SELF = "для себя"
 SUMMARY_ADULT = "для взрослого"
 SUMMARY_CHILD = "для ребёнка"
+# the topic in the summary when the patient named no injury: «Не знаю» on «На что больше
+# похоже?», or a description from which DeepSeek picked the scenario (rule 1: no diagnoses)
+SUMMARY_UNSURE = "не знаю, на что похоже"
+SUMMARY_BY_WORDS = "травма по Вашему описанию"
 # Answers that mean nothing without their question («да», «нет», «нет, не обращались») — in
 # the bot's own words, by the fact the button sets: (field, value) → words. Not script phrases.
 SUMMARY_ANSWERS = {

@@ -193,6 +193,22 @@ def stays(
     return found is None or shown in _menus_under(kb, found, area)
 
 
+# The scenarios whose names are diagnoses. The bot says such a name only after the patient:
+# «подвернул ногу» does not make the summary say «вывих».
+KIND_WORDS: dict[str, tuple[str, ...]] = {
+    "dislocation": ("вывих",),
+    "fracture": ("перелом", "слома"),
+    "ligament_rupture": ("растяж", "разрыв", "связк", "порва"),
+}
+
+
+def names_kind(scenario_id: str, text: str) -> bool:
+    """The patient's words name the injury of the scenario (or its name is not a diagnosis)."""
+    stems = KIND_WORDS.get(scenario_id)
+    said = text.lower().replace("ё", "е")
+    return stems is None or any(stem in said for stem in stems)
+
+
 def area_facts(kb: KnowledgeBase, scenario_id: str, area: str | None) -> dict[str, FactValue]:
     """Answers the area already gives: a burn on a hand is «другая часть тела», not the face."""
     if area is None:

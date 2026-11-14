@@ -160,7 +160,7 @@ async def test_long_question_in_short_with_more(make_chat, kb: KnowledgeBase) ->
     await chat.press("Порез, рана")
     for label in ("Для себя", "Руки, ноги, тело", "Да, двигается", "Менее суток назад"):
         await chat.press(label)
-    assert "В травмпункте делают только хирургический шов, не косметический." in chat.text
+    assert "Только хирургический шов. Если нужен косметический — в другое учреждение." in chat.text
     assert texts.MORE in chat.labels()
     await chat.press(texts.MORE)
     full = kb.scenario("cut_sutures").question("suture_type").ask

@@ -64,7 +64,7 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     assert info.text == (
         "Ваши ответы: вывих; для себя; бытовая травма; в течение 7 дней; к врачу не "
         "обращались.\n\n"
-        "Можно записаться к травматологу-ортопеду: врач попробует вправить вывих."
+        "Можно записаться к травматологу-ортопеду. Если это вывих, врач попробует его вправить."
     )
     labels = [b.label for row in info.buttons for b in row]
     assert labels == [texts.SUMMARY_EDIT, texts.MORE]  # change the answers; the full phrase

@@ -216,8 +216,9 @@ def test_what_the_scripts_and_the_bot_say_is_not_advice(env: sim.Env) -> None:
         "Антирабической вакцины нет — доктор может обработать место укуса и сделать перевязку.",
         *[line for s in env.kb.scenarios.values() for o in s.outcomes.values() for line in o.say],
     ]
+    asked = Action("say", "вывих, перелом или разрыв связок — сколько стоит?")  # he named them
     for said in phrases:
-        dialog = made(PRICE, step(1, Action("say", "сколько стоит?"), Shown(said, ("Меню",))))
+        dialog = made(PRICE, step(1, asked, Shown(said, ("Меню",))))
         assert sim.ADVICE not in rules(dialog, env), said
 
 
