@@ -260,3 +260,32 @@ async def test_a_question_on_the_consent_does_not_turn_the_booking_into_a_reques
     state = await session(chat)
     assert (state["step"], state["resume"], state["slot_id"]) == ("consent", "identify", slot)
     assert chat.admin == [] and texts.CONSENT_YES in chat.labels()
+
+
+# --- the third partial run of section 5 (needle, criminal) --------------------------------------
+
+
+async def test_asking_for_a_call_on_the_consent_to_it_is_not_the_same_step(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_ADMIN)
+    assert texts.CONSENT_YES in chat.labels()
+    await chat.say(
+        "Да, конечно, согласна. Пусть администратор мне перезвонит и объяснит, что делать. "
+        "А телефон я вам сейчас скажу или как?"
+    )
+    hint, screen = chat.replies  # a question in the message: the consent is not taken silently
+    assert hint.text == texts.CONSENT_HINT and texts.SAME_STEP not in chat.text
+    assert texts.CONSENT_YES in chat.labels() and screen.text
+    await chat.press(texts.CONSENT_YES)
+    assert chat.replies[-1].ask_contact
+
+
+async def test_the_hours_are_not_said_twice_in_a_row(make_chat) -> None:
+    chat = make_chat()
+    await handed(chat)
+    await chat.say("Когда администратор позвонит? Мне сегодня надо, не через неделю.")
+    assert chat.text.startswith("Администраторы отвечают с 08:00 до 20:00")
+    await chat.say("Сейчас 8 утра? Я не понял, когда ждать звонка. Мне сегодня надо.")
+    assert not chat.text.startswith("Администраторы отвечают") and "№ 1" in chat.text
+    assert len(chat.admin) == 1  # nothing was added to the request

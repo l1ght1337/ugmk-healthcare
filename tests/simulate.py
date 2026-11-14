@@ -695,6 +695,7 @@ def _lost(dialog: Dialog) -> list[Violation]:
         (s.n for s in steps if s.action.kind == "say" and find_audience(s.action.value)), None
     )
     if told_at is not None:
+        after = {a.n: b for a, b in pairwise(steps)}
         for prev, step in pairwise(steps):
             asked = any(texts.ASK_AUDIENCE in r.text for r in step.replies)
             again = any(texts.ASK_AUDIENCE in r.text for r in prev.replies)
@@ -702,7 +703,11 @@ def _lost(dialog: Dialog) -> list[Violation]:
                 texts.BACK,
                 texts.SUMMARY_EDIT,
             )
-            if asked and not again and step.n > told_at and not went_back:
+            # asked again on purpose when the route depends on the answer (other hospitals
+            # for a child and for an adult): the answer is followed by the route at once
+            answered = after.get(step.n)
+            for_route = answered is not None and answered.state["outcome"] == "route"
+            if asked and not again and step.n > told_at and not went_back and not for_route:
                 found.append(Violation(LOST, step.n, "бот спросил «для кого», хотя это сказано"))
                 break
     if persona.goal == "book" and new and persona.other is None:

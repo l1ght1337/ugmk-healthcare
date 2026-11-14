@@ -424,3 +424,18 @@ def test_the_stories_of_section_5_have_no_emergency_phrase(env: sim.Env) -> None
     for persona in PERSONAS:
         if persona.scenario:
             assert find_phrase(persona.story, phrases) is None, persona.key
+
+
+def test_for_whom_asked_before_a_route_is_not_lost(env: sim.Env) -> None:
+    """The customer's decision: «для кого» is asked again when the route depends on it."""
+    told = step(1, Action("say", "я упала грудью на край ванны, болят рёбра"),
+                Shown("У меня нет этой информации."))  # fmt: skip
+    asked = step(2, Action("press", "Удар в грудь или живот"),
+                 Shown(f"Шаг 2 из 5\n\n{texts.ASK_AUDIENCE}", ("Для себя",)),
+                 step="audience", wizard=True)  # fmt: skip
+    routed = step(3, Action("press", "Для себя"), Shown("Вам нужно обратиться: …", ("Меню",)),
+                  outcome="route")  # fmt: skip
+    assert sim.LOST not in rules(made(BY_KEY["chest"], told, asked, routed), env)
+    booked_on = step(3, Action("press", "Для себя"), Shown("Шаг 3 из 5", ("Да",)),
+                     step="question", wizard=True)  # fmt: skip
+    assert sim.LOST in rules(made(BY_KEY["chest"], told, asked, booked_on), env)

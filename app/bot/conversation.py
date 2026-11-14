@@ -1445,12 +1445,17 @@ class Conversation:
             return False
         hours = self.clinic.contacts.admin_working_hours
         line = texts.HANDOFF_WHEN.format(start=f"{hours.start:%H:%M}", end=f"{hours.end:%H:%M}")
+        handoff = await self._open_handoff(c)
         if step == "teen":  # one line under the buttons of that screen
             await self._teen_say(c, "hours", line)
+        elif c.s.talk.line == "hours" and handoff is not None and step not in WIZARD_STEPS:
+            # asked once more: not the same line again — that the request is with them
+            c.say(self._already(c, handoff), self._main_menu(c))
         elif step == "offer_admin" or step in WIZARD_STEPS:
             c.say(line)
             await self._repeat_buttons(c)
         else:
+            c.line = "hours"
             c.say(line, self._main_menu(c))
         return True
 
@@ -4733,6 +4738,12 @@ class Conversation:
             log.error("ADMIN_CHAT_ID is not set: cannot hand off %r", reason)
             c.s.step = "idle"
             c.say(texts.ADMIN_UNAVAILABLE, self._main_menu(c))
+            return
+        if c.s.step == "consent" and c.s.resume == "handoff":
+            # «пусть администратор перезвонит» on the consent to that very request: what is
+            # to be pressed, not the same screen with no word why
+            c.say(texts.CONSENT_HINT)
+            self._consent_prompt(c, "handoff")
             return
         hours = self.clinic.contacts.admin_working_hours
         if c.s.talk.danger is not None and not hours.contains(self._local(c.now).time()):
