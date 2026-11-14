@@ -75,6 +75,7 @@ from app.flow.engine import (
     DialogState,
     Done,
     Engine,
+    Place,
     Step,
 )
 from app.flow.identity import (
@@ -1148,6 +1149,8 @@ class Conversation:
     async def _on_offer_words(self, c: Ctx, text: str) -> bool:
         """«Передать администратору?» answered in words: «да, передайте…», «не надо»."""
         answer = wants_handoff(text)
+        if answer is None and find_command(text) == "admin":
+            answer = True  # «позовите администратора»: this very request goes to him
         if answer is None or not c.s.handoff_reason:
             return False
         if answer and len(text.split()) > FEW_WORDS:  # what is said with the «да» goes too
@@ -1171,8 +1174,11 @@ class Conversation:
             await self._crisis(c, text)
             return
         elif reading.kind == "menu_action" and reading.action == "admin":
-            await self._on_offer_admin(c, "yes")
-            return
+            if not is_question(text):
+                await self._on_offer_admin(c, "yes")
+                return
+            # asked about, not asked for: «а администратор скажет то же самое?»
+            line, note = texts.ADMIN_WILL_ANSWER, True
         elif reading.kind in ("clinic_question", "medical_question") or (
             reading.kind == "menu_action" and reading.action == "ask"
         ):
@@ -1181,6 +1187,10 @@ class Conversation:
             line = info.answer or texts.ADMIN_WILL_ANSWER
         elif reading.kind == "about_bot":
             line = texts.ABOUT_BOT
+        elif reading.kind == "complaint" and self._same_complaint(c, reading):
+            # the injury the route was about, once more: a question for the administrator,
+            # not a new booking
+            line, note = texts.ADMIN_WILL_ANSWER, True
         elif reading.kind in ("complaint", "menu_action", "schedule_question"):
             await self._on_free_text(c, text, reading)  # the patient has moved on
             return
@@ -1191,13 +1201,20 @@ class Conversation:
         c.say(line)
         await self._repeat_buttons(c)
 
+    def _same_complaint(self, c: Ctx, reading: TextReading) -> bool:
+        """The complaint is about the injury the scenario has just ended with."""
+        d = c.s.dialog
+        named = reading.scenario_id
+        return d.outcome_id is not None and (named is None or named in d.trail)
+
     async def _said_already(self, c: Ctx, text: str, reading: TextReading) -> bool:
         """The same complaint right after its route or handoff: the scenario is not run again.
 
         The patient has read the answer and writes about the same injury once more («это же
-        травма ноги! вы меня примете или нет?»): the same questions and the same screen would
-        say nothing new. With a request at the administrators — that it is there; after a
-        route — a plain line and «Передать вопрос администратору». New facts, another
+        травма ноги! вы меня примете или нет?»): the same questions and the script phrase
+        once more would say nothing new. The answer is said plainly instead — where to go
+        (a route) or who books it (the outcome's reason) — with the request, if one is at
+        the administrators, or with «Передать вопрос администратору». New facts, another
         patient or a later time run the scenario as usual.
         """
         d, ended = c.s.dialog, c.s.ended_at
@@ -1212,20 +1229,27 @@ class Conversation:
         done = self._dialog_done(c)
         if done is None or done.kind == "book":
             return False
+        places = [
+            render.place_line(Place(self.kb.facilities[d.facility], d.label, d.note))
+            for d in done.outcome.destinations
+        ]
+        route = "\n".join([texts.NOT_BOOKED_HERE, *places]) if places else None
         handoff = await self._open_handoff(c)
-        if handoff is not None:
+        if handoff is not None:  # the call is not instead of the route: both are said
+            why = None if route else done.outcome.patient_reason
             local = self._local(c.now)
             said = render.handoff_message(
-                self.clinic, local, handoff.id, None, texts.HANDOFF_ALREADY
+                self.clinic, local, handoff.id, why, texts.HANDOFF_ALREADY
             )
-            c.say(f"{said}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
+            parts = [p for p in (route, said, self.kb.common.more_help.text) if p]
+            c.say("\n\n".join(parts), self._main_menu(c))
             return True
-        if done.kind == "handoff":
-            return False  # no request went out: the scenario offers it again
+        if route is None:
+            return False  # a handoff that did not go out: the scenario offers it again
         c.s.step = "offer_admin"
         c.s.handoff_reason = done.outcome.handoff_reason or texts.QUESTION_REASON
         c.s.handoff_context, c.s.handoff_why = text, done.outcome.patient_reason
-        c.say(texts.NOT_BOOKED_HERE, self._ask_admin_buttons())
+        c.say(f"{route}\n\n{texts.QUESTIONS_TO_ADMIN}", self._ask_admin_buttons())
         return True
 
     async def _no_new_booking(self, c: Ctx, step: str, text: str) -> bool:

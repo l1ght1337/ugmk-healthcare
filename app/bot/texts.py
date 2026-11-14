@@ -125,10 +125,8 @@ OFFER_HANDOFF = "Передать вопрос администратору?"
 # a question typed on «Передать администратору?» that the reference does not answer
 ADMIN_WILL_ANSWER = "На этот вопрос ответит администратор."
 # the same complaint again right after its route: said plainly, with a way on
-NOT_BOOKED_HERE = (
-    "С этим в травмпункт не записываем — обратиться нужно по адресу из сообщения выше. Если "
-    "остались вопросы, я передам их администратору."
-)
+NOT_BOOKED_HERE = "С этим в травмпункт не записываем. Обратиться нужно:"  # the places follow
+QUESTIONS_TO_ADMIN = "Если остались вопросы, я передам их администратору."
 # «когда позвонит администратор?»: the hours from config/contacts.yaml
 HANDOFF_WHEN = (
     "Администраторы отвечают с {start} до {end} — в это время с Вами свяжутся. Точное время "

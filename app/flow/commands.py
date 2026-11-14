@@ -503,7 +503,11 @@ def names_several(text: str) -> bool:
     if _MANY.search(t):
         return True
     other = re.search(rf"\b(?:{_CHILD_WORDS}|{_ADULT_WORDS})\b", t) is not None
-    return other and _SELF_TOO.search(t) is not None
+    if other and _SELF_TOO.search(t):
+        return True
+    # «у меня запястье, у сына колено»
+    theirs = re.search(rf"\bу\s+{_MY}(?:{_CHILD_WORDS}|{_ADULT_WORDS})\b", t) is not None
+    return theirs and re.search(r"\bу\s+меня\b", t) is not None
 
 
 def after_me(text: str) -> Audience | None:
@@ -521,10 +525,8 @@ def find_audience(text: str) -> Audience | None:
     self, «запишите меня» → self; None — the bot asks («меня и сына», «запишите меня с
     ребёнком», «гуляла с сыном», «запишите брата»)."""
     t = normalize(text)
-    if names_several(text):  # «сначала для себя, потом сына»: the first, if the text says who
-        for first, pattern in _FIRST_OF_TWO:
-            if pattern.search(t):
-                return first
+    if names_several(text):  # the first — only if the text says who: «сначала для себя, потом…»
+        return next((first for first, pattern in _FIRST_OF_TWO if pattern.search(t)), None)
     if _WITH_SOMEONE.search(t):
         return None
     child, adult = bool(_FOR_CHILD.search(t)), bool(_FOR_ADULT.search(t))

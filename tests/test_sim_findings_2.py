@@ -180,8 +180,9 @@ async def test_the_same_complaint_after_a_route_is_not_the_same_screen(
 
     clock.now += timedelta(minutes=2)
     await chat.say("Это же и есть травма ноги! Вы меня примете или нет?")
-    (only,) = chat.replies
-    assert only.text == texts.NOT_BOOKED_HERE and "Центр борьбы" not in only.text
+    (only,) = chat.replies  # a plain «no» and where to go, not the script phrase once more
+    assert only.text.startswith(texts.NOT_BOOKED_HERE) and "Центр борьбы со СПИДом" in only.text
+    assert only.text.endswith(texts.QUESTIONS_TO_ADMIN) and "травматолог-ортопед" not in only.text
     assert chat.labels() == [texts.ASK_ADMIN_QUESTION, texts.MENU_HOME]
     state = await session(chat)
     assert state["step"] == "offer_admin" and "примете или нет" in state["handoff_context"]
@@ -195,10 +196,81 @@ async def test_the_same_complaint_after_a_handoff_does_not_ask_the_questions_aga
     await handed(chat)
     posted = len(chat.admin)
     await chat.say("Так вы меня запишете или нет? Связки же порваны, нога болит")
-    (only,) = chat.replies
+    (only,) = chat.replies  # where to go is said again: the call is not instead of the route
+    assert only.text.startswith(texts.NOT_BOOKED_HERE)
+    assert "Городская клиническая больница № 40" in only.text
     assert "Ваше обращение № 1 уже у администратора" in only.text
     assert "Как получена травма" not in chat.text and chat.labels() == MENU
     assert len(chat.admin) == posted and (await session(chat))["step"] == "idle"
+
+
+async def test_the_same_complaint_after_a_plain_handoff_says_who_books_it(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    again = {"type": "complaint", "area": "limb", "scenario": "repeat_visit",
+             "candidates": ["repeat_visit"], "facts": {}, "clarify": None}  # fmt: skip
+    fake = FakeDeepSeek(again)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    for label in ("Уже лечусь у вас", "Повторный приём", "Для себя", "Нет, в другом месте"):
+        await chat.press(label)
+    await chat.press(texts.CONSENT_YES)
+    await chat.contact()
+    assert "обращение № 1" in chat.text
+    await chat.say("Так вы меня запишете на повторный приём или нет? Нога всё ещё болит")
+    (only,) = chat.replies
+    assert only.text.startswith("С такой ситуацией взрослых записывает на приём оператор")
+    assert "Ваше обращение № 1 уже у администратора" in only.text
+    assert "Первично помощь получали" not in chat.text and chat.labels() == MENU
+
+
+async def test_the_same_complaint_on_the_offer_does_not_start_a_booking(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    unclear = {
+        "type": "complaint",
+        "area": "limb",
+        "scenario": None,
+        "question": True,
+        "candidates": ["ligament_rupture"],
+        "facts": {},
+        "clarify": "Что случилось?",
+    }
+    fake = FakeDeepSeek(unclear, LIGAMENT)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await to_offer(chat)
+    for said in (
+        "Ладно, а по какому из этих адресов ближе к центру? Нога болит сильно",
+        "Да я уже понял, что вы не принимаете. Мне бы понять, куда ехать с ногой",
+    ):
+        await chat.say(said)
+        line, offer = chat.replies
+        assert line.text == texts.ADMIN_WILL_ANSWER and offer.text == texts.OFFER_HANDOFF
+        state = await session(chat)
+        assert state["step"] == "offer_admin" and said in state["handoff_context"]
+
+
+async def test_another_complaint_on_the_offer_is_a_new_booking(make_chat, kb) -> None:
+    fake = FakeDeepSeek(NEEDLE)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await to_offer(chat)
+    await chat.say("а ещё я вчера наступила на иглу от шприца")
+    assert "Центр борьбы со СПИДом" in chat.text and (await session(chat))["step"] == "idle"
+
+
+async def test_a_question_about_the_administrator_is_not_a_yes(make_chat, kb) -> None:
+    fake = FakeDeepSeek(
+        {"type": "menu_action", "action": "admin"}, {"type": "menu_action", "action": "admin"}
+    )
+    chat = make_chat(assistant=fake.assistant(kb))
+    await to_offer(chat)
+    await chat.say("А администратор скажет то же самое? Я не понимаю, вдруг что-то не так")
+    line, offer = chat.replies
+    assert line.text == texts.ADMIN_WILL_ANSWER and offer.text == texts.OFFER_HANDOFF
+    assert (await session(chat))["step"] == "offer_admin" and not chat.admin
+    await chat.say("мне нужен администратор")  # asked for, not asked about
+    assert (await session(chat))["resume"] == "handoff"
 
 
 @pytest.mark.parametrize(
@@ -394,6 +466,8 @@ async def test_one_day_in_a_request_to_cancel_is_asked_at_once(make_chat) -> Non
         ("сначала сына запишите, потом меня", "child"),
         ("запишите мужа после меня", "self"),
         ("меня и сына", None),
+        ("У меня запястье — похоже на перелом. У сына колено — ушиб.", None),
+        ("запишите сына и меня", None),
         ("Мы с сыном упали на катке. Надо записать обоих.", None),
         ("двоих детей надо записать", None),
     ],
