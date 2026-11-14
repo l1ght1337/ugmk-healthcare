@@ -49,6 +49,7 @@ from app.flow.commands import (
     YES,
     after_me,
     asks_about_there,
+    asks_about_visit,
     asks_advice,
     asks_when_admin,
     asks_where_to_go,
@@ -463,6 +464,7 @@ class Ctx:
     told_already: bool = False  # this turn said the request is with an administrator
     teen_line: str | None = None  # this turn's one-line answer on the screen of 15–17
     line: str | None = None  # this turn's template after a route (Talk.line)
+    text: str | None = None  # the message of this turn, if it is a text
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
@@ -1217,6 +1219,7 @@ class Conversation:
     async def _on_text(self, c: Ctx, text: str) -> None:
         if not text:
             return
+        c.text = text
         shown = await self._screen_now(c)
         await self._read_text(c, text, shown)
         replies = c.turn.replies
@@ -3882,8 +3885,21 @@ class Conversation:
             c.say(texts.MY_EMPTY, self._main_menu(c))
             return
         title = texts.MY_ONE if len(bookings) == 1 else texts.MY_TITLE
+        today = self._local(c.now).date()
+        # «то есть мне завтра к 13:30?» asks about the visit, it does not ask to move it: the
+        # day is said in words («сегодня, 12 ноября»), «При переносе…» is not offered
+        asked = c.text is not None and asks_about_visit(c.text) and not wants_move(c.text)
+        if asked and len(bookings) == 1 and c.s.talk.line == "my":
+            # asked once more: not the same screen again — one line with the day in words
+            start = self._local(bookings[0].start_at)
+            day = render.booking_day(start.date(), today)
+            c.line = "kept"
+            c.say(texts.KEPT_WHEN.format(date=day, time=f"{start:%H:%M}"), self._main_menu(c))
+            return
+        if c.text is not None and len(bookings) == 1:
+            c.line = "my"
         note = None  # the booking first, then what «Перенести» will do
-        if wish is not None and not wish.empty:
+        if wish is not None and not wish.empty and not asked:
             c.s.wish = wish
             words = render.wish_words(wish, self._local(c.now).date())
             note = texts.WISH_MOVE.format(wish=words)
@@ -3892,8 +3908,9 @@ class Conversation:
         for b in bookings:
             patient = await c.db.get(Patient, b.patient_id)
             start = self._local(b.start_at)
+            day = start.date()
             item = texts.MY_ITEM.format(
-                date=render.format_date(start.date()),
+                date=render.booking_day(day, today) if asked else render.format_date(day),
                 time=f"{start:%H:%M}",
                 patient=patient.full_name if patient else "—",
                 doctor=b.doctor,

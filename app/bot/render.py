@@ -27,6 +27,16 @@ def format_date(day: date) -> str:
     return f"{day.day} {texts.MONTHS_GENITIVE[day.month - 1]} ({texts.WEEKDAYS[day.weekday()]})"
 
 
+def booking_day(day: date, today: date) -> str:
+    """«сегодня, 12 ноября (четверг)», «завтра, 13 ноября (пятница)» — the day of a visit
+    in answer to «это сегодня или завтра?»; any other day as ``format_date``."""
+    if day == today:
+        return f"{texts.TODAY.lower()}, {format_date(day)}"
+    if day == today + timedelta(days=1):
+        return f"{texts.TOMORROW.lower()}, {format_date(day)}"
+    return format_date(day)
+
+
 def format_when(moment: datetime) -> str:
     """«в пятницу, 13 ноября, в 14:30» (clinic time expected)."""
     day = f"{moment.day} {texts.MONTHS_GENITIVE[moment.month - 1]}"

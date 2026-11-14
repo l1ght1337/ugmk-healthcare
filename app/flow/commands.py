@@ -664,6 +664,16 @@ def same_or_other(text: str) -> str | None:
     return "same" if same else "other"
 
 
+def asks_about_visit(text: str) -> bool:
+    """«То есть мне завтра к 13:30 приходить?», «точно записали?», «это сегодня или
+    завтра?» — a question about the visit the patient has. «Можно на воскресенье?» asks for
+    another time: that is a wish, not this."""
+    t = normalize(text)
+    if "?" not in text or _OTHER_TIME_WANTED.search(t):
+        return False
+    return _ABOUT_VISIT.search(t) is not None
+
+
 def says_no_more(text: str) -> bool:
     """«Нет», «нет, всё», «нет, спасибо», «Нет. Всё, поеду сам» — the answer to «Могу я ещё
     чем-нибудь Вам помочь?»; «нет, запишите на завтра» asks for something."""
@@ -780,9 +790,17 @@ _KEEPS = re.compile(
     r"|\bничего\s+не\s+(?:переношу|перенос\w+|меня\w+|отменя\w+)\b"
     r"|\bзапис\w+\s+(?:\w+\s+){0,2}?остается\b"
 )
+_ABOUT_VISIT = re.compile(
+    r"\b(?:точно|то\s+есть|значит|получается)\b|\bзаписал\w*|\bзаписан\w*"
+    r"|\b(?:приходить|прийти|идти|подходить|подойти|явиться)\b"
+    r"|\bэто\s+(?:сегодня|завтра)\b|\b(?:сегодня|завтра)\s+или\s+(?:сегодня|завтра)\b"
+)
+_OTHER_TIME_WANTED = re.compile(
+    rf"\bможно\b|\bполучится\s+ли\b|\bвместо\b|\bдруг\w+\s+(?:день|время|дат\w+)\b|\b{_MOVE}\b"
+)
 # a move the patient does not want: «зачем переносить?», «не надо ничего переносить»
 _NO_MOVE = re.compile(
-    r"\bзачем\s+(?:\w+\s+)?перенос\w+"
+    r"\bзачем\s+(?:\w+\s+){0,3}?перенос\w+"
     r"|\bне\s+(?:надо|нужно|хочу|буду|собира\w+)\s+(?:\w+\s+)?перенос\w+"
     r"|\bперенос\w+\s+не\s+(?:надо|нужно|хочу|буду)\b"
 )

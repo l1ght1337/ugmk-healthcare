@@ -13,12 +13,12 @@ from __future__ import annotations
 import pytest
 
 from app.bot import texts
-from app.flow.commands import keeps_booking, says_no_more
+from app.flow.commands import asks_about_visit, keeps_booking, says_no_more
 from app.flow.loader import KnowledgeBase
 from tests.fake_deepseek import FakeDeepSeek
 from tests.test_conversation import book_dislocation, bookings
 from tests.test_manual_findings_3 import booked, when
-from tests.test_sim_findings_2 import LIGAMENT, MENU, handed
+from tests.test_sim_findings_2 import LIGAMENT, MENU, handed, session
 
 KEEPS = (
     "Отлично, значит завтрашнюю оставляем, ничего не переношу. Спасибо!",
@@ -162,3 +162,65 @@ async def test_no_to_anything_else_is_a_goodbye(make_chat, kb: KnowledgeBase, sa
 @pytest.mark.parametrize("said", ["нет, запишите меня на завтра", "нет, а сколько стоит приём?"])
 def test_no_with_a_request_is_not_the_end(said: str) -> None:
     assert not says_no_more(said)
+
+
+# --- the first partial run of section 5 (questions) ---------------------------------------------
+# «то есть мне завтра к 13:30?» about a visit booked for today: the bot showed «12 ноября
+# (четверг)» with «При переносе сразу покажу время по пожеланию: … завтра…», never said
+# «сегодня», and showed the same screen five times.
+
+MY = {"type": "menu_action", "action": "my_bookings"}
+
+
+async def test_a_question_about_the_visit_says_today_and_offers_no_move(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    fake = FakeDeepSeek(MY, MY, MY)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await book_dislocation(chat)  # today
+    await chat.press(texts.PAYMENT_SELF)
+    (booking,) = await bookings(chat.conversation.db)
+    _, time = when(booking)
+    await chat.say("а вы точно записали? то есть мне завтра к 13:30 приходить?")
+    view = chat.replies[-1].text
+    assert view.startswith(f"{texts.MY_ONE}\nсегодня, 12 ноября (четверг) в {time} — ")
+    assert "При переносе" not in view and (await session(chat))["wish"] is None
+    await chat.say("а 12 ноября это сегодня или завтра? мне к 13:30 когда приходить-то?")
+    (again,) = chat.replies  # not the same screen once more: one line with the day in words
+    assert again.text == f"Хорошо, запись на сегодня, 12 ноября (четверг) в {time} остаётся."
+
+
+async def test_my_bookings_by_the_button_is_as_it_was(make_chat) -> None:
+    chat = make_chat()
+    await book_dislocation(chat)
+    await chat.press(texts.PAYMENT_SELF)
+    (booking,) = await bookings(chat.conversation.db)
+    date, time = when(booking)
+    for _ in range(2):  # a button may be pressed twice: the same list
+        await chat.data("m:my")
+        assert chat.text.startswith(f"{texts.MY_ONE}\n{date} в {time} — ")
+
+
+def test_why_move_anything_keeps_the_booking() -> None:
+    assert keeps_booking("а зачем мне что-то переносить? мне и так нормально")
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["а вы точно записали? то есть мне завтра к 13:30 приходить?",
+     "то есть точно завтра в 13:30 к Кузнецову, да?",
+     "а 12 ноября это сегодня или завтра? мне к 13:30 когда приходить-то?",
+     "я спрашиваю просто: мне сегодня к 13:30 приходить или нет?",
+     "а 11:00 точно ко мне записали, ничего не перепутали?"],
+)  # fmt: skip
+def test_a_question_about_the_visit_one_has(said: str) -> None:
+    assert asks_about_visit(said)
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["с записью не получается, можно на воскресенье?", "а можно прийти завтра вместо сегодня?",
+     "перенесите на завтра", "мои записи"],
+)  # fmt: skip
+def test_a_wish_for_another_time_is_not_a_question_about_the_visit(said: str) -> None:
+    assert not asks_about_visit(said)
