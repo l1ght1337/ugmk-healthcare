@@ -92,7 +92,9 @@ async def test_all_manual_cases_in_order(
         demo_mode=True,
         admin_chat_id=-100123,
         handoff_daily_limit=10,  # the run has more than three requests in a day
+        booking_limit=10,  # … and more than three bookings ahead for the one account
         misses_log=tmp_path / "misses.jsonl",  # the journal is on, as in the bot — not in data/
+        llm_per_minute=10000,  # the clock of the run stands still
     )
     conversation = Conversation(
         kb=kb,

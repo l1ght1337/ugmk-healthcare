@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     allowed_user_ids: Annotated[list[int], NoDecode] = []
     # Requests to the administrators per user per day; then the bot names the clinic phone.
     handoff_daily_limit: int = Field(default=3, ge=1, le=100)
+    # No more upcoming bookings than this for one Telegram user (a move is not a new booking).
+    booking_limit: int = Field(default=3, ge=1, le=50)
+    # DeepSeek calls a minute for one user; over it the bot works on buttons and word lists.
+    llm_per_minute: int = Field(default=20, ge=1, le=10000)
     # For the test: every booking as a card in ADMIN_CHAT_ID, changes as replies, /today.
     bookings_to_admin_chat: bool = False
     # Animations and photos from assets/ (welcome.mp4, booked.mp4, reminder.mp4,
@@ -162,16 +166,22 @@ class Contacts(_Data):
     privacy_policy_url: str | None
 
 
+EVERYDAY_WORDS = frozenset({"больно", "сильно", "срочно", "плохо", "упала", "ударился", "опухло"})
+
+
 class Emergency(_Data):
     reply: str
     phrases: tuple[str, ...] = Field(min_length=1)
 
     @field_validator("phrases")
     @classmethod
-    def _phrases_not_words(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        single = [p for p in value if len(p.split()) < 2]
-        if single:
-            raise ValueError(f"emergency triggers must be phrases, not single words: {single}")
+    def _no_everyday_words(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """A single word is a trigger only if it cannot be an ordinary complaint: «задыхается»,
+        «судороги» — yes; «кровь», «боль», «упал» — no."""
+        single = [p for p in value if " " not in p.strip()]
+        everyday = [p for p in single if len(p) < 6 or p in EVERYDAY_WORDS]
+        if everyday:
+            raise ValueError(f"emergency triggers must not be everyday words: {everyday}")
         return value
 
 

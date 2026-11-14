@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
@@ -61,7 +61,9 @@ from app.flow.commands import (
     yes_no,
 )
 from app.flow.engine import (
+    ADULT_FROM_MONTHS,
     FALLBACK_OUTCOME,
+    INFANT_UNDER_MONTHS,
     AskPatient,
     AskQuestion,
     DialogState,
@@ -323,6 +325,7 @@ class Ctx:
     had_history: bool = False  # «Назад» had somewhere to go when the turn began
     came_from: tuple[object, ...] | None = None  # the wizard screen the turn began on
     notices_said: bool = False  # this turn has said the scenario's notice already
+    limited: bool = False  # too many DeepSeek calls a minute: this turn went without it
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         rows = tuple(tuple(row) for row in (buttons or []))
@@ -398,6 +401,7 @@ class Conversation:
         if path is not None and not path.is_absolute():
             path = PROJECT_ROOT / path
         self.misses = misses.MissLog(path)  # fallback answers, for /misses
+        self._llm_calls: defaultdict[int, deque[datetime]] = defaultdict(deque)
         self._locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     # --- entry points ------------------------------------------------------------------
@@ -629,6 +633,8 @@ class Conversation:
             ctx.had_history = bool(session.history)
             ctx.came_from = before_key if session.step in WIZARD_STEPS else None
             await handler(ctx)
+            if ctx.limited and ctx.turn.replies:  # said once, above the buttons that work
+                ctx.turn.replies.insert(0, Reply(texts.TOO_MANY_MESSAGES))
             if said is not None:  # a text or a photo answered with a fallback phrase
                 await self._note_misses(ctx, step, said)
             if not ctx.deleted:
@@ -655,6 +661,22 @@ class Conversation:
 
     def _local(self, moment: datetime) -> datetime:
         return moment.astimezone(self.settings.tz)
+
+    def _llm(self, c: Ctx) -> Assistant | None:
+        """DeepSeek for one call — or None over LLM_PER_MINUTE for this user.
+
+        Over the limit the bot works as when DeepSeek is down: buttons and word lists.
+        """
+        if self.assistant is None:
+            return None
+        calls = self._llm_calls[c.user.id]
+        while calls and c.now - calls[0] >= timedelta(minutes=1):
+            calls.popleft()
+        if len(calls) >= self.settings.llm_per_minute:
+            c.limited = True
+            return None
+        calls.append(c.now)
+        return self.assistant
 
     async def _miss(self, c: Ctx, step: str, kind: str, said: str) -> None:
         """One line of the journal: the masked text, the step and the kind — no user."""
@@ -1127,7 +1149,7 @@ class Conversation:
         """
         known = await self._known(c)
         if reading is None:
-            reading = await read_text(self.assistant, text, known)
+            reading = await read_text(self._llm(c), text, known)
         if reading.unavailable:
             return False
         if reading.kind == "crisis":
@@ -1143,7 +1165,7 @@ class Conversation:
             await self._command(c, reading.action)
             return True
         if reading.kind == "clinic_question":
-            info = await read_question(self.assistant, text, known, on_partial=c.draft)
+            info = await read_question(self._llm(c), text, known, on_partial=c.draft)
             c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
         elif reading.kind == "about_bot":
             c.say(texts.ABOUT_BOT)
@@ -1156,7 +1178,7 @@ class Conversation:
 
     async def _answer_too(self, c: Ctx, text: str) -> None:
         """«Сколько стоит и запишите на завтра»: the answer first, then the request."""
-        info = await read_question(self.assistant, text, await self._known(c))
+        info = await read_question(self._llm(c), text, await self._known(c))
         c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
 
     async def _next_booking(self, c: Ctx) -> Booking | None:
@@ -1219,7 +1241,7 @@ class Conversation:
         """
         asked = c.s.step == "info"
         at_start = c.s.wizard and c.s.step in START_STEPS  # step 1 of a booking: it goes on
-        reading = await read_text(self.assistant, text, await self._known(c))
+        reading = await read_text(self._llm(c), text, await self._known(c))
         if reading.unavailable:
             if asked:
                 c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
@@ -1447,7 +1469,7 @@ class Conversation:
             reading = AnswerReading()  # «да», «не знаю» name no button: the question again
         else:
             known = await self._known(c)
-            reading = await read_answer(self.assistant, scenario, question, text, known)
+            reading = await read_answer(self._llm(c), scenario, question, text, known)
         if reading.crisis:
             await self._crisis(c, text)
             return
@@ -1483,9 +1505,11 @@ class Conversation:
             c.say(texts.ASK_BIRTH_AGAIN, self._back_row())
             return
         last, first, patronymic = c.s.draft_name
+        months = age_in_months(birth, self._local(c.now).date())
+        line, audience, age = self._age_by_birth(c, months)
         patient = Patient(
             user_id=c.user.id,
-            audience=c.s.dialog.audience or "adult",
+            audience=audience,
             last_name=last or "",
             first_name=first or "",
             patronymic=patronymic,
@@ -1494,7 +1518,60 @@ class Conversation:
         c.db.add(patient)
         await c.db.flush()
         c.s.patient_id, c.s.draft_name = patient.id, None
-        await self._identify(c)
+        if line is None:
+            await self._identify(c)
+            return
+        c.say(line)  # the birth date says otherwise: the scenario again, with the right age
+        await self._with_right_age(c, audience, age)
+
+    def _age_by_birth(self, c: Ctx, months: int) -> tuple[str | None, str, int | None]:
+        """The birth date against «для себя / для ребёнка» and the age said on step 2.
+
+        (the line to say or None, the audience, the child's age in months). An adult under
+        18, a child of 18 or older, an age that is off by more than a year, a baby under 6
+        months: the bot says so and leads the scenario again — see ``_with_right_age``.
+        """
+
+        def words(age: int) -> str:
+            return years_word(age // 12) if age >= 12 else format_age(age)
+
+        d = c.s.dialog
+        chosen, said = d.audience or "adult", d.age_months
+        if months >= ADULT_FROM_MONTHS:
+            line = texts.AGE_IS_ADULT.format(age=words(months)) if chosen == "child" else None
+            return line, "adult", None
+        if chosen == "adult":
+            return texts.AGE_IS_CHILD.format(age=words(months)), "child", months
+        if said is None:
+            return None, "child", months
+        baby = months < INFANT_UNDER_MONTHS <= said  # the 05-04 route depends on it
+        if abs(said - months) > 12 or baby:
+            line = texts.AGE_DIFFERS.format(age=words(months), said=words(said))
+            return line, "child", months
+        return None, "child", said
+
+    async def _with_right_age(self, c: Ctx, audience: str, age: int | None) -> None:
+        """The scenario again with the right age; the answers that do not depend on it stay.
+
+        The same booking outcome — the booking goes on with the time already chosen (and
+        the consent of a child's representative, if it is a child now). Another outcome —
+        it is shown instead: nothing is booked on the wrong branch.
+        """
+        d = c.s.dialog
+        before = (d.scenario_id, d.outcome_id)
+        first = d.trail[0] if d.trail else d.scenario_id
+        assert first is not None
+        facts = {k: v for k, v in d.facts.items() if k != "audience"}
+        state = DialogState()
+        self.engine.set_patient(state, audience, age)  # type: ignore[arg-type]
+        c.s.dialog, c.s.for_whom = state, None
+        step = self.engine.start(state, first, facts)
+        same = isinstance(step, Done) and (step.scenario.id, step.outcome_id) == before
+        if same and step.kind == "book" and c.s.slot_id is not None:  # type: ignore[union-attr]
+            await self._identify(c)
+            return
+        c.s.slot_id = c.s.day = c.s.period = c.s.day_from = None
+        await self._show(c, step)
 
     async def _on_phone_text(self, c: Ctx, text: str) -> None:
         phone = parse_phone(text)
@@ -1849,6 +1926,8 @@ class Conversation:
         text, more = self._shorten(render.outcome_message(done, self.clinic, local))
         if done.kind != "book":  # the trauma centre does not book this: the wish is dropped
             c.s.wish = None
+        if done.kind == "book" and await self._too_many_bookings(c):
+            return
         if done.kind == "book":
             summary = self._summary(c)  # the answers and the wish, with «Изменить ответы»
             parts = [p for p in (summary, text) if p]
@@ -2294,7 +2373,23 @@ class Conversation:
             return
         await self._book(c)
 
+    async def _too_many_bookings(self, c: Ctx) -> bool:
+        """BOOKING_LIMIT upcoming bookings for one Telegram user; a move is not a new one."""
+        limit = self.settings.booking_limit
+        if c.s.reschedule_of is not None or len(await self._upcoming(c)) < limit:
+            return False
+        self._reset(c)
+        rows = [
+            [Button(texts.MENU_MY, "m:my", "primary")],
+            [Button(texts.MENU_ADMIN, "m:admin")],
+            _home(),
+        ]
+        c.say(texts.TOO_MANY_BOOKINGS.format(limit=limit), rows, edit=c.first())
+        return True
+
     async def _book(self, c: Ctx) -> None:
+        if await self._too_many_bookings(c):  # e.g. a control visit, or booked meanwhile
+            return
         found = await self._booking_spec(c)
         done = self._dialog_done(c)
         patient = await c.db.get(Patient, c.s.patient_id) if c.s.patient_id else None
@@ -2809,6 +2904,7 @@ class Conversation:
             (
                 (Button(texts.AFTER_VISIT_OK, f"v:ok:{b.id}"),),
                 (Button(texts.AFTER_VISIT_QUESTION, f"v:q:{b.id}"),),
+                (Button(texts.AFTER_VISIT_MISSED, f"v:missed:{b.id}"),),
             ),
             chat_id=chat_id,
             media=FEEDBACK,
@@ -2864,6 +2960,12 @@ class Conversation:
         booking = await self._user_booking(c, ref)
         if booking is None:
             c.say(texts.BOOKING_GONE)
+            return
+        if answer == "missed":  # no control visit is offered: a new booking instead
+            booking.survey = "missed"
+            self._booking_note(c, booking, texts.ADMIN_SURVEY["missed"])
+            self._reset(c)
+            c.say(texts.MISSED, [[Button(texts.MENU_BOOK, "m:book", "primary")], _home()])
             return
         booking.survey = "ok" if answer == "ok" else "question"
         survey = texts.ADMIN_FEELING if booking.cycle >= 2 else texts.ADMIN_SURVEY
@@ -3209,7 +3311,7 @@ class Conversation:
     async def _answer_question(self, c: Ctx, text: str) -> None:
         """A question about the trauma centre, from kb/info; an administrator only by button."""
         known = await self._known(c)
-        reading = await read_question(self.assistant, text, known, on_partial=c.draft)
+        reading = await read_question(self._llm(c), text, known, on_partial=c.draft)
         self._reset(c)
         if reading.answer and not reading.offer_admin:
             c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text

@@ -213,7 +213,18 @@ def render_labels(kb: KnowledgeBase) -> str:
             [texts.ALREADY_MOVE, texts.ALREADY_AGAIN],
         ),
         _row("Напоминания за 24 и за 2 часа", [texts.CONFIRM, texts.MOVE, texts.CANCEL]),
-        _row("«Как прошёл приём?»", [texts.AFTER_VISIT_OK, texts.AFTER_VISIT_QUESTION]),
+        _row(
+            "«Как прошёл приём?»",
+            [texts.AFTER_VISIT_OK, texts.AFTER_VISIT_QUESTION, texts.AFTER_VISIT_MISSED],
+        ),
+        _row(
+            "«Не был на приёме»: предложение записаться заново", [texts.MENU_BOOK, texts.MENU_HOME]
+        ),
+        _row(
+            "Больше трёх предстоящих записей (BOOKING_LIMIT)",
+            [texts.MENU_MY, texts.MENU_ADMIN, texts.MENU_HOME],
+        ),
+        _row("Ошибка в обработчике: «Что-то пошло не так…»", [texts.MENU, texts.MENU_ADMIN]),
         _row("Контрольный приём", [texts.CONTROL_YES, texts.CONTROL_NO]),
         _row(
             "«Как Вы себя чувствуете?» (после контрольного)",

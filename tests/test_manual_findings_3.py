@@ -151,7 +151,7 @@ async def test_cancel_the_booking_named_by_day_doctor_or_time(make_chat) -> None
 
 
 async def test_several_found_are_shown_alone(make_chat) -> None:
-    chat = await booked(make_chat, "Завтра", "Завтра", "Вс")
+    chat = await booked(make_chat, "Завтра", "Завтра", "Вс", booking_limit=10)
     _, first, second, sunday = await active(chat)
     await chat.say("отмени запись на завтра")
     (only,) = chat.replies

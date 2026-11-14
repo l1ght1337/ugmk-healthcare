@@ -28,6 +28,7 @@ def make_settings(**overrides: object) -> Settings:
         "demo_mode": True,
         "admin_chat_id": ADMIN_CHAT,
         "misses_log": None,  # the journal of fallback answers: a test turns it on with a path
+        "llm_per_minute": 10000,  # the clock of a test stands still: the limit has its own tests
     }
     return Settings(_env_file=None, **(base | overrides))  # type: ignore[arg-type]
 

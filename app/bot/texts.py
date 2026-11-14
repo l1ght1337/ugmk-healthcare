@@ -263,6 +263,7 @@ ADMIN_CANCELLED = "Отменена пациентом."
 ADMIN_SURVEY = {
     "ok": "«Как прошёл приём?» — «Всё хорошо».",
     "question": "«Как прошёл приём?» — «Есть вопрос» (обращение администратору).",
+    "missed": "«Как прошёл приём?» — «Не был на приёме».",
 }
 ADMIN_FEELING = {
     "ok": "«Как Вы себя чувствуете?» — «Хорошо».",
@@ -275,6 +276,20 @@ TODAY_DAY = "\n{date}"
 TODAY_ITEM = "• {time} — № {number}, {patient}, {topic}, {visit}. Врач: {doctor}"
 TODAY_EMPTY = "На {days} записей нет."
 TODAY_OFF = "Записи в этот чат не отправляются: включите BOOKINGS_TO_ADMIN_CHAT=true в .env."
+# an exception inside a handler: the patient is told, the administrators get a short note
+FAILED = "Что-то пошло не так, попробуйте ещё раз."
+ADMIN_FAILURE = (
+    "Ошибка в боте: {error} ({where}). Пациент получил «Что-то пошло не так, попробуйте ещё "
+    "раз». Подробности — в логе бота."
+)
+# limits (BOOKING_LIMIT, LLM_PER_MINUTE)
+TOO_MANY_BOOKINGS = (
+    "У Вас уже есть предстоящие записи: {limit}. Больше записать не могу — отмените или "
+    "перенесите одну из них либо позовите администратора."
+)
+TOO_MANY_MESSAGES = (
+    "Слишком много сообщений подряд. Подождите, пожалуйста, минуту — или выберите кнопкой."
+)
 # /misses in the administrators' group: the journal of fallback answers (app/bot/misses.py)
 MISSES_OFF = "Журнал непонятого выключен: задайте MISSES_LOG в .env."
 MISSES_EMPTY = "Журнал непонятого пуст."
@@ -289,6 +304,11 @@ ASK_NAME_AGAIN = (
 # how the full name was read (any word order): shown above the request for the birth date
 PATIENT_IS = "Пациент: {name}. Если неверно, нажмите «Назад»."
 ASK_BIRTH = "Дата рождения пациента — например, 12.03.2015."
+# the birth date does not fit «для себя / для ребёнка» or the age said: the scenario is led
+# again with the right age, nothing is booked on the wrong branch
+AGE_IS_CHILD = "По дате рождения пациенту {age} — это запись для ребёнка. Проверю ответы ещё раз."
+AGE_IS_ADULT = "По дате рождения пациенту {age} — это запись для взрослого. Проверю ответы ещё раз."
+AGE_DIFFERS = "По дате рождения ребёнку {age}, а не {said}. Проверю ответы ещё раз."
 ASK_BIRTH_AGAIN = (
     "Не получилось разобрать дату. Напишите, пожалуйста, в формате ДД.ММ.ГГГГ, "
     "например: 12.03.2015."
@@ -362,6 +382,8 @@ CONFIRMED = "Спасибо, ждём Вас!"
 AFTER_VISIT = "Как прошёл приём?"
 AFTER_VISIT_OK = "Всё хорошо"
 AFTER_VISIT_QUESTION = "Есть вопрос"
+AFTER_VISIT_MISSED = "Не был на приёме"
+MISSED = "Жаль, что не получилось прийти. Записать Вас заново?"
 GLAD = "Рады, что всё хорошо!"
 OFFER_CONTROL = (
     "Контрольный приём обычно назначают примерно через {days}, точный срок определяет врач. "

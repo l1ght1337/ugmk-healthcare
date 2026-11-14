@@ -25,6 +25,7 @@ import json
 import logging
 import random
 import time
+import traceback
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -487,6 +488,63 @@ class AllowedUsers(BaseMiddleware):
         return None
 
 
+class Failures:
+    """An exception inside a handler: the patient is told, the administrators get a note.
+
+    The patient: «Что-то пошло не так, попробуйте ещё раз» with «Меню» and «Позвать
+    администратора». The administrators' group: the kind of the error and where in the code
+    it happened — no texts, no names, no ids — at most once in ``every`` seconds for one
+    kind of error. The traceback goes to the bot's log.
+    """
+
+    def __init__(
+        self,
+        admin_chat_id: int | None,
+        *,
+        every: float = 600.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.admin_chat_id = admin_chat_id
+        self.every = every
+        self.clock = clock
+        self._noted: dict[str, float] = {}
+
+    @staticmethod
+    def _chat(update: Any) -> int | None:
+        message = getattr(update, "message", None)
+        if message is None and getattr(update, "callback_query", None) is not None:
+            message = update.callback_query.message
+        return message.chat.id if message is not None else None
+
+    @staticmethod
+    def _where(exc: BaseException) -> str:
+        """The place in the code: the file, the line, the function — never the message."""
+        frames = traceback.extract_tb(exc.__traceback__)
+        if not frames:
+            return "место неизвестно"
+        ours = [f for f in frames if "site-packages" not in f.filename] or list(frames)
+        frame = ours[-1]
+        return f"{Path(frame.filename).name}:{frame.lineno}, {frame.name}"
+
+    async def handle(self, event: Any, bot: Any) -> bool:
+        exc = event.exception
+        kind, where = type(exc).__name__, self._where(exc)
+        log.error("unhandled %s at %s", kind, where, exc_info=exc)
+        chat_id = self._chat(event.update)
+        try:
+            if chat_id is not None and chat_id != self.admin_chat_id:
+                buttons = ((Button(texts.MENU, "m:home"), Button(texts.MENU_ADMIN, "m:admin")),)
+                await bot.send_message(chat_id, texts.FAILED, reply_markup=inline(buttons))
+            last = self._noted.get(kind)
+            if self.admin_chat_id and (last is None or self.clock() - last >= self.every):
+                self._noted[kind] = self.clock()
+                note = texts.ADMIN_FAILURE.format(error=kind, where=where)
+                await bot.send_message(self.admin_chat_id, note)
+        except TelegramAPIError:
+            log.exception("could not report the error")
+        return True
+
+
 def _pressed_label(callback: CallbackQuery) -> str | None:
     message = callback.message
     keyboard = getattr(message, "reply_markup", None)
@@ -661,4 +719,5 @@ def build_dispatcher(
 
     dp.include_router(admin)
     dp.include_router(patients)
+    dp.errors.register(Failures(settings.admin_chat_id).handle)
     return dp

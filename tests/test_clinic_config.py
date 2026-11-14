@@ -34,9 +34,10 @@ def test_clinic_answers_of_13_november() -> None:
     assert "спрыгнул с крыши" not in data.clinic.crisis.phrases  # an injury, not a crisis
 
 
-def test_emergency_triggers_must_be_phrases() -> None:
-    with pytest.raises(ValidationError, match="phrases, not single words"):
+def test_emergency_triggers_are_not_everyday_words() -> None:
+    with pytest.raises(ValidationError, match="everyday words"):
         Emergency(reply="x", phrases=("кровь не останавливается", "кровь"))
+    Emergency(reply="x", phrases=("кровь не останавливается", "задыхается"))
 
 
 def test_working_hours_overnight() -> None:
