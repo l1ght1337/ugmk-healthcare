@@ -133,6 +133,16 @@ async def test_phrase_on_step(
         if step in (m.BOOKED, m.REMINDED, m.PAYMENT):  # one booking: one message
             assert texts.MY_ONE in text and {texts.MOVE, texts.CANCEL} <= set(labels)
             assert len(chat.replies) == 1
+    elif must == m.CANCEL_ASKS:
+        if step == m.MENU:  # no bookings
+            assert text == texts.MY_EMPTY and texts.MENU_BOOK in labels
+        else:  # one booking: the question at once, never the plain list
+            assert text.startswith("Отменить запись на 1") and len(chat.replies) == 1
+            assert labels == [texts.CANCEL_YES, texts.CANCEL_KEEP] and texts.MY_ONE not in text
+            async with chat.conversation.db() as s:
+                from sqlalchemy import select
+
+                assert (await s.scalars(select(Booking))).one().status == "active"
     elif must == m.MY_MOVE:
         assert text.startswith("Переношу запись с пятницы, 13 ноября, 1")
         assert now in ("days", "periods", "times") and after.get("reschedule_of")

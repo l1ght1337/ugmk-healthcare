@@ -27,6 +27,8 @@ _BOOKING = r"(?:запис\w*|при[её]м\w*|визит\w*)"
 # Requests, not stories: «отмени запись», not «приём у врача отменили».
 _CANCEL = r"(?:отмени|отмените|отменить|отменю|отмена)"
 _MOVE = r"(?:перенеси|перенесите|перенести|перенос|поменяй|поменяйте|поменять|изменить|измените)"
+_ALL = r"(?:пожалуйста\s+)?все(?:\s+(?:мои|наши|эти|три|две|оба|обе))?"
+_BOOK_ORDER = r"(?:запиши|запишите|запишусь|записать|записаться)"
 _PERSON = r"(?:администратор\w*|админ\w*|оператор\w*|жив\w+\s+человек\w*)"
 _CALL = (
     r"(?:позови|позовите|позвать|соедини|соедините|соединить|переключи|переключите|свяжите|"
@@ -65,6 +67,11 @@ COMMANDS: tuple[tuple[MenuAction, re.Pattern[str]], ...] = (
             rf"\s+(?:мне|нам)\s+{_COME}\b"
         ),
     ),
+    # «Отмени все», «отмените все записи», «все записи отмени» (see ``wants_all``)
+    ("my_bookings", re.compile(rf"\b{_CANCEL}\s+{_ALL}\b(?!\s+равно)")),
+    ("my_bookings", re.compile(rf"\b{_ALL}\s+{_BOOKING}\s+(?:пожалуйста\s+)?{_CANCEL}\b")),
+    # «Отмени и запиши на воскресенье»: the old time is dropped for a new one — a move
+    ("my_bookings", re.compile(rf"\b{_CANCEL}\b.*\b{_BOOK_ORDER}\b")),
     # «Отмени запись», «перенеси запись на завтра», «запись нужно перенести»
     ("my_bookings", re.compile(rf"\b(?:{_CANCEL}|{_MOVE})\b.*\b{_BOOKING}")),
     ("my_bookings", re.compile(rf"\b{_BOOKING}\b.*\b(?:{_CANCEL}|{_MOVE})\b")),
@@ -269,7 +276,6 @@ _ADULT_WORDS = (
     r"тещ\w+|свекров\w+|тест\w+|свекр\w*)"
 )
 _BOOK_VERB = r"(?:запис\w+|запиш\w+)"
-_BOOK_ORDER = r"(?:запиши|запишите|запишусь|записать|записаться)"
 _MOVE_INTENT = re.compile(
     rf"\b(?:{_MOVE}|перезапи[сш]\w+)\b"
     rf"|\b{_CANCEL}\b.*\b{_BOOK_ORDER}\b|\b{_BOOK_ORDER}\b.*\b{_CANCEL}\b"
@@ -404,6 +410,21 @@ def wants_move(text: str) -> bool:
     """A new time is wanted, not only the old one dropped: «перенеси на завтра», «отмени и
     запиши на воскресенье», «перезапишите на пятницу». «Отмени запись» is not a move."""
     return _MOVE_INTENT.search(normalize(text)) is not None
+
+
+def wants_cancel(text: str) -> bool:
+    """A request to cancel a booking: «отмени запись», «отмените запись на воскресенье»,
+    «отмени все». «Я не приду» is not: the patient may want another time."""
+    return re.search(rf"\b{_CANCEL}\b", normalize(text)) is not None
+
+
+def wants_all(text: str) -> bool:
+    """«Отмени все», «отмените все записи», «все записи отмени» — every booking at once."""
+    t = normalize(text)
+    return (
+        re.search(rf"\b{_CANCEL}\s+{_ALL}\b(?!\s+равно)", t) is not None
+        or re.search(rf"\b{_ALL}\s+{_BOOKING}\s+(?:пожалуйста\s+)?{_CANCEL}\b", t) is not None
+    )
 
 
 def is_unsure(text: str) -> bool:

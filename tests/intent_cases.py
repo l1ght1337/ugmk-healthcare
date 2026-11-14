@@ -50,6 +50,10 @@ BOOK_ADULT = "Начинает запись для взрослого: «Для 
 GO_ON = "Запись уже идёт: показывает тот же шаг, ничего не сбрасывает"
 TOPICS_CHILD = "Темы по жалобе; запись для ребёнка — «Для кого запись?» не спрашивает"
 MY = "«Мои записи»: запись с кнопками «Перенести» и «Отменить» (или «записей нет» и меню)"
+CANCEL_ASKS = (
+    "Запись одна — сразу «Отменить запись на … в …?» с кнопками «Да, отменить» и «Нет, "
+    "оставить»; записей нет — «У Вас нет предстоящих записей» и меню"
+)
 MY_MOVE = (
     "Перенос сразу: «Переношу запись с …» и выбор времени (назван день — сразу он), "
     "внизу «Оставить как есть»"
@@ -85,7 +89,8 @@ TWO_ADVICE = (
 )
 
 NO_LLM = frozenset(
-    {BOOK, BOOK_WISH, BOOK_CHILD, BOOK_ADULT, GO_ON, MY, MY_MOVE, CONFIRM, CONFIRM_NONE, ADMIN,
+    {BOOK, BOOK_WISH, BOOK_CHILD, BOOK_ADULT, GO_ON, MY, MY_MOVE, CANCEL_ASKS, CONFIRM,
+     CONFIRM_NONE, ADMIN,
      FEEDBACK_ASK, THANKS, GREETING, STAY, ACK, BYE, FORGET, BACK, HOME, CANCEL, NEXT, SAME,
      UNCLEAR, TOPICS, NEAREST, TO_DAYS, TO_PERIODS}
 )  # fmt: skip
@@ -186,11 +191,17 @@ INTENTS: tuple[Intent, ...] = (
     Intent(G_MOVE, "перезапишите меня на пятницу", ((BOOKED, MY_MOVE),), was=BY_LLM),
     Intent(G_MOVE, "можно прийти в другой день?", ((BOOKED, MY),), was=BY_LLM),
     # --- Отменить -----------------------------------------------------------------------------
-    Intent(G_CANCEL, "отмени запись", everywhere((BOOKED, MENU), MY)),
+    Intent(G_CANCEL, "отмени запись", everywhere((BOOKED, MENU), CANCEL_ASKS),
+           was="Показывал «Мои записи» с кнопками «Перенести» и «Отменить»"),
+    Intent(G_CANCEL, "отмени все", everywhere((BOOKED, MENU), CANCEL_ASKS),
+           was="Не понимал: второй раз показывал тот же список записей"),
+    Intent(G_CANCEL, "отмени запись на завтра", ((BOOKED, CANCEL_ASKS),),
+           was="Показывал весь список, не выбирая запись"),
     Intent(G_CANCEL, "я не приду", everywhere((BOOKED, REMINDED), MY), was=OFFTOPIC),
     Intent(G_CANCEL, "не смогу прийти завтра", ((BOOKED, MY),), was=BY_LLM),
     Intent(G_CANCEL, "отмена",
-           (*everywhere(WIZARD, CANCEL), (MENU, HOME), (ASK, HOME), (BOOKED, MY), (PAYMENT, MY)),
+           (*everywhere(WIZARD, CANCEL), (MENU, HOME), (ASK, HOME), (BOOKED, CANCEL_ASKS),
+            (PAYMENT, CANCEL_ASKS)),
            was="В меню и на первом шаге открывал «Мои записи»; на шагах с кнопками — " + PICK
                + "; на шагах «возраст», «ФИО», «дата рождения» переспрашивал без единой кнопки"),
     # --- Подтвердить --------------------------------------------------------------------------
@@ -254,7 +265,7 @@ INTENTS: tuple[Intent, ...] = (
     Intent(G_TWO, "где вы находитесь? хочу записаться к Кузнецову", ((MENU, TWO_BOOK),),
            was="Начинал запись к Кузнецову, вопрос об адресе терялся",
            llm=(route("menu_action", action="book", question=True), ADDRESS), live="menu_action"),
-    Intent(G_TWO, "спасибо, а как отменить запись?", ((BOOKED, MY),)),
+    Intent(G_TWO, "спасибо, а как отменить запись?", ((BOOKED, CANCEL_ASKS),)),
     Intent(G_TWO, "что делать укусила собака меня", ((MENU, TWO_ADVICE),),
            was="Сразу спрашивал «Для кого запись?»; на «что делать» не отвечал",
            llm=(route("complaint", scenario="animal_bite", advice=True),)),

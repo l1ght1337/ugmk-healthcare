@@ -272,11 +272,15 @@ async def test_with_two_bookings_the_bot_asks_which_one(make_chat) -> None:
 
 async def test_cancel_without_a_new_day_shows_the_booking(make_chat) -> None:
     chat = await one_booking(make_chat)
-    for text in ("отмени запись", "отмени запись на сегодня", "не смогу прийти сегодня"):
+    for text in ("отмени запись", "отмени запись на сегодня"):  # one booking: the question
         await chat.say(text)
         (only,) = chat.replies
-        assert only.text.startswith(texts.MY_ONE) and "При переносе" not in only.text, text
-        assert chat.labels() == [texts.MOVE, texts.CANCEL]
+        assert only.text.startswith("Отменить запись на 12 ноября (четверг) в 1"), text
+        assert chat.labels() == [texts.CANCEL_YES, texts.CANCEL_KEEP]
+    await chat.say("не смогу прийти сегодня")  # not a request to cancel: both ways are offered
+    (only,) = chat.replies
+    assert only.text.startswith(texts.MY_ONE) and "При переносе" not in only.text
+    assert chat.labels() == [texts.MOVE, texts.CANCEL]
 
 
 async def test_explanation_comes_after_the_booking(make_chat, kb: KnowledgeBase) -> None:

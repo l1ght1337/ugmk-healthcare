@@ -234,7 +234,7 @@ def test_every_yes_or_no_button_has_its_words_for_the_summary(kb: KnowledgeBase)
 
 def test_long_labels_are_shorter(kb: KnowledgeBase) -> None:
     fracture = [c.label for c in kb.scenario("fracture").question("how").buttons()]
-    assert "Открытый или со смещением" in fracture
+    assert "Открытый перелом, смещение" in fracture
     sick = kb.scenario("sick_leave").fields()["help_provided"]
     assert [o.label for o in sick.options if o.value == "sick_leave_open_here"] == [
         "Больничный открыт у вас"

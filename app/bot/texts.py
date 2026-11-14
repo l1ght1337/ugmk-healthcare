@@ -170,6 +170,7 @@ SUMMARY_ANSWERS = {
     ("motor_function", "True"): "конечность двигается",
     ("motor_function", "False"): "конечность не двигается",
     ("suture_type", "surgical"): "нужен хирургический шов",
+    ("open_or_displaced", "True"): "открытый перелом или перелом со смещением",
     ("had_injury", "True"): "была травма",
     ("had_injury", "False"): "травмы не было",
     ("help_provided", "no"): "помощь ещё не оказана",
@@ -280,6 +281,8 @@ ASK_NAME = "Начнём с ФИО."
 ASK_NAME_AGAIN = (
     "Напишите, пожалуйста, фамилию, имя и отчество полностью, например: Иванов Иван Иванович."
 )
+# how the full name was read (any word order): shown above the request for the birth date
+PATIENT_IS = "Пациент: {name}. Если неверно, нажмите «Назад»."
 ASK_BIRTH = "Дата рождения пациента — например, 12.03.2015."
 ASK_BIRTH_AGAIN = (
     "Не получилось разобрать дату. Напишите, пожалуйста, в формате ДД.ММ.ГГГГ, "
@@ -309,6 +312,21 @@ CANCEL_ASK = "Отменить запись на {date} в {time}?"
 CANCEL_YES = "Да, отменить"
 CANCEL_KEEP = "Нет, оставить"
 CANCELLED = "Запись отменена, время освобождено."
+# «отмени запись», «отмени запись на воскресенье», «отмени все»: never without a «да»
+MY_LINE = "• {date} в {time} — {patient}. Врач: {doctor}."
+CANCEL_WHICH = "Какую запись отменить?"
+CANCEL_NOT_FOUND = "Такой записи не нашлось. Вот все Ваши записи — какую отменить?"
+CANCEL_PICK = "Отменить: {day}, {time}"  # «Отменить: вс, 15.11, 21:00»
+CANCEL_ALL = "Отменить все записи"
+CANCEL_ALL_ASK = "Отменить все записи?"
+CANCEL_ALL_YES = "Да, отменить все"
+CANCELLED_ALL = "Все записи отменены, время освобождено."
+# a first visit is being booked while the same patient has one ahead (not a control visit)
+ALREADY_BOOKED = (
+    "У Вас уже есть запись: {date} в {time}, {patient}. Перенести её или записать ещё раз?"
+)
+ALREADY_MOVE = "Перенести ту запись"
+ALREADY_AGAIN = "Записать ещё раз"
 KEPT = "Хорошо, запись остаётся."
 # «Переношу запись с субботы, 14 ноября, 11:30.» — above the day and the time of the move
 MOVING = "Переношу запись {weekday}, {date}, {time}."

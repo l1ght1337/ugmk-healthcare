@@ -417,3 +417,53 @@ async def test_route_leads_to_the_menu_or_back_from_steps_with_buttons(
         assert chat.labels()[0] == texts.RESUME  # the booking is kept
     else:
         assert (chat.replies[-1].text, chat.replies[-1].buttons) != (shown.text, shown.buttons)
+
+
+# --- a request to cancel never gets the plain list of bookings again (16.11, item 1) ---------
+
+CANCEL_PHRASES = (
+    "отмени запись",
+    "отмените мою запись",
+    "хочу отменить приём",
+    "отмена",
+    "отмени все",
+    "отмени всё",
+    "отмените все записи",
+    "отмени запись на сегодня",
+    "отмени запись на воскресенье",
+    "отмени запись к Кузнецову",
+    "отмени запись на 15 ноября в 21:00",
+)
+CANCEL_ANSWERS = (
+    "Отменить запись на ",
+    texts.CANCEL_WHICH,
+    texts.CANCEL_ALL_ASK,
+    texts.CANCEL_NOT_FOUND,  # no such booking: said so, with a button for each one
+)
+
+
+@pytest.mark.parametrize("days", [(), ("Завтра",), ("Завтра", "Вс")], ids=["1", "2", "3"])
+async def test_a_request_to_cancel_never_repeats_the_list(make_chat, days: tuple[str, ...]) -> None:
+    from sqlalchemy import func
+
+    from app.db.models import Booking
+    from tests.test_manual_findings_3 import booked
+
+    chat = await booked(make_chat, *days)
+    for phrase in CANCEL_PHRASES:
+        await chat.say("мои записи")
+        listed = [(r.text, r.buttons) for r in chat.replies]
+        assert texts.MOVE in chat.labels()
+        for attempt in (1, 2):  # the same request twice: a question each time, never the list
+            await chat.say(phrase)
+            where = f"«{phrase}», записей {len(days) + 1}, раз {attempt}:\n{chat.text}"
+            got = [(r.text, r.buttons) for r in chat.replies]
+            assert not any(item in listed for item in got), where
+            assert texts.MOVE not in chat.labels(), where
+            assert any(a in chat.text for a in CANCEL_ANSWERS), where
+            assert chat.buttons(), where
+        async with chat.conversation.db() as s:  # nothing is cancelled without a «да»
+            count = await s.scalar(
+                select(func.count()).select_from(Booking).where(Booking.status == "active")
+            )
+        assert count == len(days) + 1, phrase

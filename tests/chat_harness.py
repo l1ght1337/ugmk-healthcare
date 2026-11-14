@@ -141,7 +141,13 @@ class Chat:
         return await self.data(times[0].data)
 
     async def pick_slot(self, day: str | None = None, not_before: str = "00:00") -> Turn:
-        """First a day (if the day picker is shown), then the first time."""
+        """First a day (if the day picker is shown), then the first time.
+
+        «У Вас уже есть запись…» before the time is answered with «Записать ещё раз»: most
+        tests book several visits for one patient and are not about that question.
+        """
+        if any(b.data == "sec:again" for b in self.buttons()):
+            await self.data("sec:again")
         if self.days():
             await self.pick_day(day)
         return await self.pick_time(not_before)

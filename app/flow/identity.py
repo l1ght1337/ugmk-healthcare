@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from datetime import date
 
+from app.flow.names import FIRST_NAMES
+
 _WORD = re.compile(r"[А-ЯЁа-яёA-Za-z]+(?:-[А-ЯЁа-яёA-Za-z]+)?")
 _MONTHS = (
     ("январ", 1), ("феврал", 2), ("март", 3), ("апрел", 4), ("ма", 5), ("июн", 6),
@@ -20,13 +22,55 @@ def _cap(word: str) -> str:
     return "-".join(part[:1].upper() + part[1:].lower() for part in word.split("-"))
 
 
+def _key(word: str) -> str:
+    return word.lower().replace("ё", "е")
+
+
+_FIRST_NAMES = frozenset(_key(name) for name in FIRST_NAMES)
+_PATRONYMIC_ENDS = ("вич", "вна", "чна")
+_PATRONYMIC_WORDS = frozenset({"ильич", "кузьмич", "фомич", "лукич", "никитич", "саввич"})
+_PATRONYMIC_PARTICLES = frozenset({"оглы", "оглу", "кызы", "кизи", "гызы", "улы", "уулу"})
+
+
+def _is_patronymic(word: str) -> bool:
+    return _key(word).endswith(_PATRONYMIC_ENDS) or _key(word) in _PATRONYMIC_WORDS
+
+
 def parse_full_name(text: str) -> tuple[str, str, str | None] | None:
-    """«иванов иван иванович» → («Иванов», «Иван», «Иванович»); patronymic is optional."""
+    """(surname, first name, patronymic) from the words in any order; patronymic is optional.
+
+    «Петр Андреев Александрович» → («Андреев», «Петр», «Александрович»). The patronymic is
+    known by its ending (-вич, -вна, -чна, «оглы», «кызы»), the first name by the list in
+    app/flow/names.py, the rest is the surname. Where the words do not tell what is what,
+    the order stays as it is written: surname, first name, patronymic.
+    """
     words = _WORD.findall(text)
-    if not 2 <= len(words) <= 3 or any(len(w) < 2 for w in words):
+    if len(_WORD.sub("", text).strip(" ,.;")) > 0 or any(len(w) < 2 for w in words):
         return None
-    last, first, *rest = (_cap(w) for w in words)
-    return last, first, rest[0] if rest else None
+    patronymic: str | None = None
+    particles = [i for i, w in enumerate(words) if _key(w) in _PATRONYMIC_PARTICLES]
+    if particles:  # «Вели оглы»: the father's name and the particle after it
+        at = particles[0]
+        if len(particles) > 1 or at == 0 or len(words) != 4:
+            return None
+        patronymic = f"{_cap(words[at - 1])} {_key(words[at])}"
+        words = [w for i, w in enumerate(words) if i not in (at - 1, at)]
+    if not 2 <= len(words) + bool(patronymic) <= 3 or len(words) < 2:
+        return None
+    words = [_cap(w) for w in words]
+    names = [i for i, w in enumerate(words) if _key(w) in _FIRST_NAMES]
+    if patronymic is None and len(words) == 3:
+        found = [i for i, w in enumerate(words) if _is_patronymic(w)]
+        if len(found) > 1 and len(names) == 1 and names[0] + 1 in found:
+            found = [names[0] + 1]  # «Роман Аркадьевич Абрамович»: it follows the first name
+        if len(found) != 1:
+            return words[0], words[1], words[2]  # not clear: as it is written
+        patronymic = words.pop(found[0])
+        names = [i for i, w in enumerate(words) if _key(w) in _FIRST_NAMES]
+    if len(names) == 1:  # the first name is known: the other word is the surname
+        first = words[names[0]]
+        return words[1 - names[0]], first, patronymic
+    return words[0], words[1], patronymic  # not clear: as it is written
 
 
 def parse_birth_date(text: str, today: date) -> date | None:

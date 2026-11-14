@@ -199,6 +199,19 @@ def render_labels(kb: KnowledgeBase) -> str:
             [texts.BACK, texts.MENU],
         ),
         _row("Отмена записи", [texts.CANCEL_YES, texts.CANCEL_KEEP]),
+        _row(
+            "«Отмени запись», когда записей несколько: какую отменить",
+            [
+                texts.CANCEL_PICK.format(day="вс, 15.11", time="21:00"),
+                texts.CANCEL_ALL,
+                texts.MENU_HOME,
+            ],
+        ),
+        _row("«Отмени все»: «Отменить все записи?»", [texts.CANCEL_ALL_YES, texts.CANCEL_KEEP]),
+        _row(
+            "У пациента уже есть запись на первичный приём: вопрос перед выбором времени",
+            [texts.ALREADY_MOVE, texts.ALREADY_AGAIN],
+        ),
         _row("Напоминания за 24 и за 2 часа", [texts.CONFIRM, texts.MOVE, texts.CANCEL]),
         _row("«Как прошёл приём?»", [texts.AFTER_VISIT_OK, texts.AFTER_VISIT_QUESTION]),
         _row("Контрольный приём", [texts.CONTROL_YES, texts.CONTROL_NO]),

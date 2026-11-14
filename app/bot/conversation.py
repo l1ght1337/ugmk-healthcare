@@ -52,6 +52,8 @@ from app.flow.commands import (
     is_booking_order,
     is_question,
     is_unsure,
+    wants_all,
+    wants_cancel,
     wants_move,
     wants_nearest,
     wants_other_day,
@@ -191,6 +193,7 @@ StepName = Literal[
     "days",
     "periods",
     "times",
+    "second",
     "consent",
     "patient",
     "name",
@@ -216,6 +219,7 @@ STAGE_OF: dict[str, int] = {
     "days": 4,
     "periods": 4,
     "times": 4,
+    "second": 4,
     "consent": 5,
     "patient": 5,
     "name": 5,
@@ -241,7 +245,7 @@ MENU_ITEM = {"book": "book", "my_bookings": "my", "ask": "ask", "admin": "admin"
 COMMAND_ACTIONS = frozenset({*MENU_ITEM, "forget", "about_bot"})
 NAV_ACTIONS = frozenset({"home", "back"})  # route: «хочу на стартовый экран», «верни вопрос»
 # Steps answered by a button: a text there is read by route before the bot gives a hint.
-BUTTON_STEPS = frozenset({*TIME_STEPS, "consent", "patient", "child_confirm"})
+BUTTON_STEPS = frozenset({*TIME_STEPS, "second", "consent", "patient", "child_confirm"})
 
 
 class Session(BaseModel):
@@ -279,6 +283,9 @@ class Session(BaseModel):
     notices_said: bool = False  # the script notice was said with «что делать?»: not twice
     paused: dict[str, Any] | None = None  # the booking left for the menu («Продолжить запись»)
     paused_at: datetime | None = None
+    cancel_ids: list[int] = []  # the bookings «Отменить все записи?» was asked about
+    second_of: int | None = None  # the booking ahead the patient already has (a first visit)
+    second_ok: bool = False  # «Записать ещё раз»: the question is not asked again
     nudged: bool = False  # the reminder about this unfinished booking was sent
     history: list[dict[str, Any]] = []  # earlier wizard screens, for «Назад»
 
@@ -821,6 +828,8 @@ class Conversation:
             await self._show_periods(c)
         elif step == "times":
             await self._show_times(c)
+        elif step == "second":
+            await self._second_screen(c)
         elif step == "consent":
             self._consent_prompt(c, c.s.resume or "identify")
         elif step == "patient":
@@ -918,6 +927,13 @@ class Conversation:
             await self._small_talk(c, talk)
             return
         action = find_command(text)
+        if action == "my_bookings" and (wants_move(text) or wants_cancel(text)):
+            wish = self._read_wish(c, text).wish  # the day, the doctor or the time named
+            if wants_move(text):  # «перенеси на завтра», «отмени и запиши на воскресенье»
+                await self._move_by_text(c, wish)
+            else:  # «отмени запись на воскресенье», «отмени все»
+                await self._cancel_by_text(c, wish, everything=wants_all(text))
+            return
         if step in INPUT_STEPS:
             await self._on_input_text(c, step, text, action)
             return
@@ -925,9 +941,6 @@ class Conversation:
         under_way = step in WIZARD_STEPS and step not in START_STEPS
         if action == "confirm" and under_way:  # «буду» there is an answer, not a confirmation
             action = None
-        if action == "my_bookings" and wants_move(text):
-            await self._move_by_text(c, found.wish)  # «перенеси на завтра»: the day at once
-            return
         if action is not None and action != "book":
             # the same screen as the menu button; «отмени запись на завтра» names the day
             # of the booking, not a wish for a new one
@@ -1003,7 +1016,7 @@ class Conversation:
             self._reset(c)
             c.say(texts.FLOW_STOPPED, self._main_menu(c))
         elif c.s.step in ("idle", "payment") and await self._next_booking(c) is not None:
-            await self._my_bookings(c)  # «отмена» with a booking: here it is, with «Отменить»
+            await self._cancel_by_text(c, Wish())  # «отмена» with a booking: which one, or «да»
         else:
             await self._show_menu(c)
 
@@ -1164,7 +1177,7 @@ class Conversation:
         elif step in TIME_STEPS:  # neither the code nor route understood: what can be typed
             c.say(texts.HINT_TIME)
             await self._render_screen(c)
-        elif step in ("child_confirm", "consent", "patient"):
+        elif step in ("child_confirm", "consent", "patient", "second"):
             c.say(texts.HINT_BUTTONS)
             await self._repeat_buttons(c)
         elif step == "offer_admin":
@@ -1432,8 +1445,11 @@ class Conversation:
         self._ask_birth(c)
 
     def _ask_birth(self, c: Ctx) -> None:
+        """The birth date; above it — how the name was read: any word order is accepted."""
         c.s.step = "birth"
-        self._screen(c, texts.ASK_BIRTH)
+        name = " ".join(part for part in c.s.draft_name or [] if part)
+        said = [texts.PATIENT_IS.format(name=name)] if name else []
+        self._screen(c, "\n".join([*said, texts.ASK_BIRTH]))
 
     async def _on_birth(self, c: Ctx, text: str) -> None:
         birth = parse_birth_date(text, self._local(c.now).date())
@@ -1522,6 +1538,7 @@ class Conversation:
             "sum": self._on_summary,
             "fb": self._on_answer_rating,
             "nd": self._on_unfinished,
+            "sec": self._on_second,
         }.get(head)
         if handler is None:
             c.say(texts.STALE, [_home()])
@@ -1813,6 +1830,8 @@ class Conversation:
             if parts:  # the summary and the script phrases stay in the chat above the time
                 c.say("\n\n".join(parts), [*edit, *more], edit=c.first())
             c.s.day = c.s.day_from = None
+            if await self._second_visit(c, done):
+                return  # the patient has a first visit ahead: move it or book once more
             await self._offer_time(c)
         elif done.kind == "handoff":
             if text:
@@ -1868,7 +1887,8 @@ class Conversation:
     async def _on_summary(self, c: Ctx, value: str) -> None:
         """«Изменить ответы»: the scenario questions again; the topic and the patient stay."""
         d = c.s.dialog
-        if value != "edit" or not d.trail or c.s.step not in TIME_STEPS or c.s.reschedule_of:
+        on_time = c.s.step in TIME_STEPS or c.s.step == "second"
+        if value != "edit" or not d.trail or not on_time or c.s.reschedule_of:
             c.say(texts.STALE, [_home()])
             return
         first = d.trail[0]
@@ -2483,34 +2503,202 @@ class Conversation:
 
     async def _on_booking_action(self, c: Ctx, value: str) -> None:
         action, _, booking_ref = value.partition(":")
+        if action == "askall":  # «Отменить все записи» under «Какую запись отменить?»
+            await self._cancel_by_text(c, Wish(), everything=True)
+            return
+        if action == "dropall":
+            await self._drop_all(c)
+            return
         booking = await self._user_booking(c, booking_ref)
         if booking is None or booking.start_at <= c.now:
             c.say(texts.BOOKING_GONE, self._main_menu(c))
             return
-        start = self._local(booking.start_at)
-        when = {"date": render.format_date(start.date()), "time": f"{start:%H:%M}"}
         if action == "move":  # the card or the reminder stays; the day picker comes below
             await self._start_move(c, booking, self._wish(c))  # «…на завтра» named before
         elif action == "cancel":
-            c.say(
-                texts.CANCEL_ASK.format(**when),
-                [
-                    [Button(texts.CANCEL_YES, f"b:drop:{booking.id}", "danger")],
-                    [Button(texts.CANCEL_KEEP, f"b:keep:{booking.id}")],
-                ],
-            )
+            self._cancel_ask(c, booking)
         elif action == "drop":
-            await self.schedule.release(booking.slot_id)
-            booking.status = "cancelled"
-            await self._cancel_reminders(c, booking)
-            self._booking_note(c, booking, texts.ADMIN_CANCELLED)
-            self._unpin(c, booking)
+            await self._drop(c, booking)
             self._reset(c)
             c.say(texts.CANCELLED, self._main_menu(c))
         else:  # «Нет, оставить», «Оставить как есть»
+            c.s.cancel_ids = []  # «Отменить все записи?» is answered: its «да» is void
             if c.s.reschedule_of is not None:
                 self._reset(c)
             c.say(texts.KEPT, self._main_menu(c))
+
+    # --- cancelling in words: «отмени запись на воскресенье», «отмени все» -------------------
+
+    def _cancel_ask(self, c: Ctx, booking: Booking) -> None:
+        """«Отменить запись на … в …?» — nothing is cancelled without a «да»."""
+        start = self._local(booking.start_at)
+        text = texts.CANCEL_ASK.format(date=render.format_date(start.date()), time=f"{start:%H:%M}")
+        c.say(
+            text,
+            [
+                [Button(texts.CANCEL_YES, f"b:drop:{booking.id}", "danger")],
+                [Button(texts.CANCEL_KEEP, f"b:keep:{booking.id}")],
+            ],
+        )
+
+    async def _drop(self, c: Ctx, booking: Booking) -> None:
+        """A cancellation: the slot is free, the reminders are off, the cards are updated."""
+        await self.schedule.release(booking.slot_id)
+        booking.status = "cancelled"
+        await self._cancel_reminders(c, booking)
+        self._booking_note(c, booking, texts.ADMIN_CANCELLED)
+        self._unpin(c, booking)
+
+    async def _booking_lines(self, c: Ctx, bookings: Sequence[Booking]) -> list[str]:
+        lines = []
+        for b in bookings:
+            patient = await c.db.get(Patient, b.patient_id)
+            start = self._local(b.start_at)
+            lines.append(
+                texts.MY_LINE.format(
+                    date=render.format_date(start.date()),
+                    time=f"{start:%H:%M}",
+                    patient=patient.full_name if patient else "—",
+                    doctor=b.doctor,
+                )
+            )
+        return lines
+
+    def _bookings_like(self, c: Ctx, bookings: Sequence[Booking], wish: Wish) -> list[Booking]:
+        """The bookings a text names by the day, the doctor or the time."""
+
+        def fits(b: Booking, day: date | None) -> bool:
+            start = self._local(b.start_at)
+            moment = start.time()
+            if wish.doctor is not None and b.doctor != wish.doctor:
+                return False
+            if day is not None and start.date() != day:
+                return False
+            face = (moment.hour % 12, moment.minute)  # by the clock face: «в 9» is 9:00, 21:00
+            if wish.at is not None and face != (wish.at.hour % 12, wish.at.minute):
+                return False
+            if wish.period is not None and slots_view.period_of(moment).id != wish.period:
+                return False
+            if wish.start is not None and moment < wish.start:
+                return False
+            return wish.end is None or moment <= wish.end
+
+        found = [b for b in bookings if fits(b, wish.day)]
+        today = self._local(c.now).date()
+        if not found and wish.day == today + timedelta(days=7):
+            found = [b for b in bookings if fits(b, today)]  # «в четверг», said on a Thursday
+        return found
+
+    async def _cancel_by_text(self, c: Ctx, wish: Wish, *, everything: bool = False) -> None:
+        """A request to cancel: the booking it names, a choice, or all of them — with a «да».
+
+        One booking fits — «Отменить запись на … в …?» at once; several — only they are shown;
+        none — said so, and all are shown. The plain list of «Мои записи» is never the answer.
+        """
+        bookings = list(await self._upcoming(c))
+        self._reset(c)
+        if not bookings:
+            c.say(texts.MY_EMPTY, self._main_menu(c))
+            return
+        named = not wish.empty
+        found = self._bookings_like(c, bookings, wish) if named else bookings
+        if not found:
+            await self._cancel_choice(c, bookings, texts.CANCEL_NOT_FOUND, with_all=True)
+        elif len(found) == 1:
+            self._cancel_ask(c, found[0])
+        elif everything:
+            lines = await self._booking_lines(c, found)
+            c.s.cancel_ids = [b.id for b in found]
+            c.say(
+                "\n".join([texts.MY_TITLE, *lines, "", texts.CANCEL_ALL_ASK]),
+                [
+                    [Button(texts.CANCEL_ALL_YES, "b:dropall", "danger")],
+                    [Button(texts.CANCEL_KEEP, f"b:keep:{found[0].id}")],
+                ],
+            )
+        else:
+            await self._cancel_choice(c, found, texts.CANCEL_WHICH, with_all=not named)
+
+    async def _cancel_choice(
+        self, c: Ctx, bookings: Sequence[Booking], title: str, *, with_all: bool
+    ) -> None:
+        """«Какую запись отменить?»: one message, a button for each booking."""
+        rows = []
+        for b in bookings:
+            start = self._local(b.start_at)
+            day = f"{texts.WEEKDAYS_SHORT[start.weekday()].lower()}, {start:%d.%m}"
+            label = texts.CANCEL_PICK.format(day=day, time=f"{start:%H:%M}")
+            rows.append([Button(label, f"b:cancel:{b.id}")])
+        if with_all and len(bookings) > 1:
+            rows.append([Button(texts.CANCEL_ALL, "b:askall", "danger")])
+        lines = await self._booking_lines(c, bookings)
+        c.say("\n".join([title, *lines]), [*rows, _home()])
+
+    async def _drop_all(self, c: Ctx) -> None:
+        """«Да, отменить все»: the bookings the question was about, one confirmation."""
+        ids = set(c.s.cancel_ids)
+        bookings = [b for b in await self._upcoming(c) if b.id in ids]
+        if not bookings:  # the question is gone (the session moved on): nothing is cancelled
+            c.say(texts.STALE, [_home()])
+            return
+        for booking in bookings:
+            await self._drop(c, booking)
+        self._reset(c)
+        c.say(texts.CANCELLED_ALL, self._main_menu(c))
+
+    # --- a second first visit of the same patient -------------------------------------------
+
+    async def _second_visit(self, c: Ctx, done: Done) -> bool:
+        """The patient already has a first visit ahead: said before the time, with a choice.
+
+        Who the patient is becomes known only on step 5, so the patient is told by «для себя»
+        / «для ребёнка». A control visit after the survey and a move are not asked about.
+        """
+        spec = done.outcome.booking
+        if c.s.second_ok or c.s.control_of is not None or c.s.reschedule_of is not None:
+            return False
+        if spec is None or spec.visit != "primary":
+            return False
+        audience = c.s.dialog.audience or "adult"
+        for booking in await self._upcoming(c):
+            patient = await c.db.get(Patient, booking.patient_id)
+            if booking.visit == "primary" and patient and patient.audience == audience:
+                c.s.second_of = booking.id
+                await self._second_screen(c)
+                return True
+        return False
+
+    async def _second_screen(self, c: Ctx) -> None:
+        booking = await c.db.get(Booking, c.s.second_of) if c.s.second_of else None
+        if booking is None or booking.status != "active" or booking.start_at <= c.now:
+            c.s.second_of = None  # it is gone meanwhile: straight to the time
+            await self._offer_time(c)
+            return
+        c.s.step = "second"
+        patient = await c.db.get(Patient, booking.patient_id)
+        start = self._local(booking.start_at)
+        text = texts.ALREADY_BOOKED.format(
+            date=render.format_date(start.date()),
+            time=f"{start:%H:%M}",
+            patient=patient.full_name if patient else "—",
+        )
+        rows = [
+            [Button(texts.ALREADY_MOVE, "sec:move", "primary")],
+            [Button(texts.ALREADY_AGAIN, "sec:again")],
+        ]
+        self._screen(c, text, rows=rows)
+
+    async def _on_second(self, c: Ctx, value: str) -> None:
+        """«Перенести ту запись» or «Записать ещё раз»."""
+        booking = await c.db.get(Booking, c.s.second_of) if c.s.second_of else None
+        if c.s.step != "second" or booking is None:
+            c.say(texts.STALE, [_home()])
+            return
+        if value == "move":  # the day, the doctor and the time asked for go with it
+            await self._start_move(c, booking, self._wish(c))
+            return
+        c.s.second_ok = True
+        await self._offer_time(c)
 
     async def _reschedule(self, c: Ctx, slot: Slot) -> None:
         booking = await c.db.get(Booking, c.s.reschedule_of) if c.s.reschedule_of else None
@@ -2728,7 +2916,8 @@ class Conversation:
     def _read_wish(self, c: Ctx, text: str) -> Parsed:
         """The wish in a text, read by code before masking and before DeepSeek."""
         step = c.s.step
-        context = "time" if step in TIME_STEPS else "free" if step in FREE_STEPS else "strict"
+        about_time = step in TIME_STEPS or step == "second"  # the time is being chosen
+        context = "time" if about_time else "free" if step in FREE_STEPS else "strict"
         local = self._local(c.now)  # a bare «в 7» is the nearest seven by the clinic's clock
         found = parse_wish(
             text,
