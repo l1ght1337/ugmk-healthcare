@@ -9,6 +9,8 @@ data/schedule.csv
 data/*.db
 data/*.db-journal
 data/*.jsonl
+# Telegram file_ids of the media the bot has uploaded: they belong to one bot token
+data/media_ids.json
 
 # python
 .venv/
