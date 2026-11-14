@@ -1,4 +1,4 @@
-"""Guard words of a section 5 scenario (15.11.2026, the customer's decision).
+"""Guard words of a section 5 scenario (14.11.2026, the customer's decision).
 
 Run 2 of the simulation: «наступила на иглу от шприца, проколола стопу» — DeepSeek named
 «Порез, швы» and the patient was booked instead of the route to the AIDS centre. No route

@@ -318,7 +318,7 @@ def test_the_config_names_the_scripts_with_addresses(kb: KnowledgeBase, clinic) 
             assert scenario.outcomes[outcome].destinations
 
 
-# --- the words switch off only the state of their own kind (15.11.2026) ------------------------
+# --- the words switch off only the state of their own kind (14.11.2026) ------------------------
 # After a loss of consciousness or a stop of breathing nothing the patient writes switches the
 # state off: «Меню» or /start only. «Кровь остановилась» does not switch off «не дышит».
 

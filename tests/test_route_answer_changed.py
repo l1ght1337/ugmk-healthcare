@@ -1,4 +1,4 @@
-"""A booking after a route of a booking scenario with another answer (15.11.2026).
+"""A booking after a route of a booking scenario with another answer (14.11.2026).
 
 Routes of 04-xx depend on the answers (a burn of the face, a cosmetic suture) and do not
 lock the booking: the patient may come back and answer differently. The administrators see
