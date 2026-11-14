@@ -65,17 +65,19 @@ async def test_adult_chosen_but_the_patient_is_sixteen(make_chat) -> None:
     chat = make_chat()
     await to_birth(chat, texts.AUDIENCE_SELF)
     await chat.say("09.09.2010")
-    line, screen = chat.replies
-    assert line.text == texts.AGE_IS_CHILD.format(age="16 лет") and not line.buttons
-    assert GUARDIAN in screen.text  # the same booking, now as a child's: the guardian agrees
+    # 15–17 for himself: an administrator decides (tests/test_teens.py), a parent may take over
+    assert chat.replies[-1].ask_contact and GUARDIAN not in chat.text
+    await chat.contact()
+    assert chat.labels() == [texts.TEEN_PARENT, texts.MENU]
     assert await bookings(chat.conversation.db) == []  # nothing is booked on the adult branch
+    (patient,) = await patients(chat)
+    assert (patient.audience, patient.last_name) == ("child", "Белов")
+    await chat.press(texts.TEEN_PARENT)
+    assert GUARDIAN in chat.text  # the same booking, now as a child's: the guardian agrees
     state = await session(chat)
     assert state["dialog"]["facts"]["audience"] == "child"
     assert state["dialog"]["age_months"] == 194 and state["dialog"]["outcome_id"] == "book_primary"
-    (patient,) = await patients(chat)
-    assert (patient.audience, patient.last_name) == ("child", "Белов")
     await chat.press(texts.CONSENT_YES)
-    await chat.contact()
     (booking,) = await bookings(chat.conversation.db)
     assert booking.patient_id == patient.id and "Артём Игоревич записан" in chat.text
 

@@ -57,6 +57,7 @@ from app.flow.commands import (
     is_unsure,
     names_several,
     refuses_new_booking,
+    says_self,
     wants_all,
     wants_cancel,
     wants_handoff,
@@ -126,6 +127,22 @@ LABEL_MAX = 40  # a button's label, so that it is not cut on a phone
 TOPIC_DEPTH = 3  # how many topic menus one typed word may go through
 SAME_COMPLAINT = timedelta(minutes=30)  # the same complaint this soon is not a new one
 FEW_WORDS = 3  # «да, передайте», «для сына»: a longer message says something more
+TEEN_FROM_MONTHS = 15 * 12  # 15–17 booking for themselves: an administrator, not the bot
+STUCK_AFTER = 3  # «не понял» this many times in a row is said plainly, with an administrator
+# What the bot says when it did not understand a text; «Не получилось разобрать ответ…» of a
+# scenario question starts with texts.PICK_BUTTON.
+NOT_UNDERSTOOD = (
+    texts.HINT_TIME,
+    texts.HINT_BUTTONS,
+    texts.PICK_BUTTON_SHORT,
+    texts.SAME_STEP,
+    texts.CONSENT_HINT,
+    texts.ASK_CHILD_AGE_AGAIN,
+    texts.ASK_NAME_AGAIN,
+    texts.NAME_HELP,
+    texts.ASK_BIRTH_AGAIN,
+    texts.ASK_CONTACT_AGAIN,
+)
 
 DraftSink = Callable[[str], Awaitable[None]]
 
@@ -208,6 +225,7 @@ StepName = Literal[
     "child_confirm",
     "audience",
     "whom",
+    "teen",
     "age",
     "question",
     "days",
@@ -246,6 +264,7 @@ STAGE_OF: dict[str, int] = {
     "name": 5,
     "birth": 5,
     "contact": 5,
+    "teen": 5,  # 15–17 and «для себя»: an administrator, or a parent takes over
 }
 WIZARD_STEPS = frozenset(STAGE_OF)
 TIME_STEPS = frozenset({"days", "periods", "times"})
@@ -313,6 +332,9 @@ class Session(BaseModel):
     second_ok: bool = False  # «Записать ещё раз»: the question is not asked again
     nudged: bool = False  # the reminder about this unfinished booking was sent
     more: bool = False  # two patients were named: the second is offered after the card
+    teen_months: int | None = None  # 15–17 booking for himself: his age, in months
+    teen_passed: bool = True  # … and the request has gone to an administrator
+    unclear: int = 0  # «не понял» in a row (NOT_UNDERSTOOD)
     ended_at: datetime | None = None  # a route or a handoff was shown (not a booking)
     history: list[dict[str, Any]] = []  # earlier wizard screens, for «Назад»
 
@@ -662,6 +684,8 @@ class Conversation:
             if ctx.more and not before["more"] and ctx.s.wizard and ctx.s.step in WIZARD_STEPS:
                 ctx.s.more = True  # never chosen silently: one now, the other after the card
                 ctx.turn.replies.insert(0, Reply(texts.ONE_BY_ONE))
+            if not ctx.deleted:
+                self._not_stuck(ctx, before.get("unclear", 0))
             if ctx.limited and ctx.turn.replies:  # said once, above the buttons that work
                 ctx.turn.replies.insert(0, Reply(texts.TOO_MANY_MESSAGES))
             if said is not None:  # a text or a photo answered with a fallback phrase
@@ -674,6 +698,28 @@ class Conversation:
                 row.session = ctx.s.model_dump(mode="json")
             await db.commit()
             return ctx.turn
+
+    def _not_stuck(self, c: Ctx, earlier: int) -> None:
+        """Never three «не понял» in a row: the third time the bot says so plainly and offers
+        an administrator; then the count starts anew."""
+        missed = next(
+            (
+                r
+                for r in c.turn.replies
+                if r.text in NOT_UNDERSTOOD or r.text.startswith(texts.PICK_BUTTON)
+            ),
+            None,
+        )
+        c.s.unclear = earlier + 1 if missed is not None else 0
+        if missed is None or c.s.unclear < STUCK_AFTER:
+            return
+        c.s.unclear = 0
+        buttons = [b for r in c.turn.replies for row in r.buttons for b in row]
+        rows = missed.buttons
+        if not any(b.data == "m:admin" for b in buttons):
+            rows = (*rows, (Button(texts.MENU_ADMIN, "m:admin"),))
+        at = c.turn.replies.index(missed)
+        c.turn.replies[at] = replace(missed, text=texts.STUCK, buttons=rows)
 
     def _remember_screen(self, c: Ctx, before: dict[str, Any], before_key: tuple) -> None:
         """Keep the previous wizard screen for «Назад» when the screen changed."""
@@ -821,7 +867,7 @@ class Conversation:
     def _header(self, c: Ctx) -> str | None:
         """«Шаг 2 из 5 · Для кого запись» and the patient's wish, while booking."""
         stage = STAGE_OF.get(c.s.step)
-        if stage is None or c.s.resume == "handoff" or c.s.step == "whom":
+        if stage is None or c.s.resume == "handoff" or c.s.step in ("whom", "teen"):
             return None
         lines = []
         if c.s.wizard:
@@ -924,6 +970,8 @@ class Conversation:
             self._ask_birth(c)
         elif step == "contact":
             self._ask_contact(c)
+        elif step == "teen":
+            self._teen_screen(c, c.s.teen_passed)
         else:
             await self._show_menu(c)
 
@@ -1016,6 +1064,9 @@ class Conversation:
             return  # «когда позвонит администратор?»: the hours, nothing is added to the request
         if step == "offer_admin" and await self._on_offer_words(c, text):
             return  # «да, передайте…», «не надо» on «Передать администратору?»
+        if step == "consent" and c.s.consent_child and says_self(text):
+            await self._consent_self(c)  # «мне 16, я сам записываюсь»: not a representative
+            return
         if step == "consent" and gives_consent(text):  # «согласна, записывайте»
             await self._on_button(c, "c:yes")
             await self._carry_on(c, text)  # the name and the rest may be in the same message
@@ -1488,7 +1539,13 @@ class Conversation:
         elif step in TIME_STEPS:  # neither the code nor route understood: what can be typed
             c.say(texts.HINT_TIME)
             await self._render_screen(c)
-        elif step in ("child_confirm", "consent", "patient", "second"):
+        elif step == "consent":  # a question, or anything else: an answer, not «не понял»
+            c.say(texts.CONSENT_WHY if is_question(text) else texts.CONSENT_HINT)
+            await self._repeat_buttons(c)
+        elif step == "teen":
+            c.say(texts.TEEN_AGAIN)
+            await self._repeat_buttons(c)
+        elif step in ("child_confirm", "patient", "second"):
             c.say(texts.HINT_BUTTONS)
             await self._repeat_buttons(c)
         elif step == "offer_admin":
@@ -1797,11 +1854,63 @@ class Conversation:
         c.db.add(patient)
         await c.db.flush()
         c.s.patient_id, c.s.draft_name = patient.id, None
+        chosen = c.s.dialog.audience or "adult"
+        if chosen == "adult" and TEEN_FROM_MONTHS <= months < ADULT_FROM_MONTHS:
+            await self._teen(c, months)  # 15–17 for himself: an administrator, not the bot
+            return
         if line is None:
             await self._identify(c)
             return
         c.say(line)  # the birth date says otherwise: the scenario again, with the right age
         await self._with_right_age(c, audience, age)
+
+    async def _teen(self, c: Ctx, months: int) -> None:
+        """15–17 and «для себя»: the request goes to an administrator, the bot does not book.
+
+        The clinic's rule for a visit without a parent from 15 to 18 is not known
+        (docs/clinic_requests.md, item 10), so the bot neither asks for «я законный
+        представитель ребёнка» nor books by itself. The administrator gets the scenario, the
+        answers and the chosen time; a parent may take the booking over («Запись оформляет
+        родитель»).
+        """
+        c.s.teen_months = months
+        when = texts.TEEN_NO_TIME
+        slot = await self.schedule.get(c.s.slot_id) if c.s.slot_id else None
+        if slot is not None:
+            start = self._local(slot.start)
+            day = render.format_date(start.date())
+            when = f"{day}, {start:%H:%M}, врач {short_name(slot.doctor)}"
+        reason = texts.TEEN_REASON.format(age=years_word(months // 12), when=when)
+        await self._handoff(c, reason)
+
+    def _teen_screen(self, c: Ctx, passed: bool) -> None:
+        c.s.step, c.s.teen_passed = "teen", passed
+        age = years_word((c.s.teen_months or 0) // 12)
+        text = texts.TEEN.format(age=age, passed=texts.TEEN_PASSED if passed else "")
+        self._screen(c, text, [Button(texts.TEEN_PARENT, "tn:parent", "primary")], back=False)
+
+    async def _on_teen(self, c: Ctx, value: str) -> None:
+        """«Запись оформляет родитель»: the consent with the representative's line; the
+        answers and the chosen time stay."""
+        months = c.s.teen_months
+        if c.s.step != "teen" or months is None or value != "parent":
+            c.say(texts.STALE, [_home()])
+            return
+        c.s.teen_months = None
+        await self._with_right_age(c, "child", months)
+
+    async def _consent_self(self, c: Ctx) -> None:
+        """«Я сам пациент» on the consent of a child's representative."""
+        today = self._local(c.now).date()
+        patient = await c.db.get(Patient, c.s.patient_id) if c.s.patient_id else None
+        months = c.s.dialog.age_months
+        if patient is not None:
+            months = age_in_months(patient.birth_date, today)
+        if months is not None and TEEN_FROM_MONTHS <= months < ADULT_FROM_MONTHS:
+            await self._teen(c, months)
+            return
+        c.say(texts.CONSENT_BY_PARENT, [[Button(texts.MENU_ADMIN, "m:admin")]])
+        await self._repeat_buttons(c)
 
     def _age_by_birth(self, c: Ctx, months: int) -> tuple[str | None, str, int | None]:
         """The birth date against «для себя / для ребёнка» and the age said on step 2.
@@ -1922,6 +2031,7 @@ class Conversation:
             "nd": self._on_unfinished,
             "sec": self._on_second,
             "mo": self._on_whom,
+            "tn": self._on_teen,
         }.get(head)
         if handler is None:
             c.say(texts.STALE, [_home()])
@@ -2640,12 +2750,12 @@ class Conversation:
 
     def _needs_consent(self, c: Ctx) -> bool:
         """Consent once per user; for a child also «я законный представитель ребёнка»."""
-        child = c.s.dialog.audience == "child"
+        child = c.s.dialog.audience == "child" and c.s.teen_months is None
         return c.user.consent_at is None or (child and c.user.guardian_at is None)
 
     def _consent_prompt(self, c: Ctx, purpose: str) -> None:
         c.s.step = "consent"
-        c.s.consent_child = c.s.dialog.audience == "child"
+        c.s.consent_child = c.s.dialog.audience == "child" and c.s.teen_months is None
         items = [texts.CONSENT_ITEM_PD]
         if c.s.consent_child:
             items.append(texts.CONSENT_ITEM_GUARDIAN)
@@ -3721,7 +3831,7 @@ class Conversation:
                     phone=self.clinic.contacts.call_center_phone
                 )
             self._handoff_done(c)
-            c.say(f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
+            self._handoff_said(c, text, passed=False)
             return
         if self._needs_consent(c):
             c.s.resume = "handoff"
@@ -3781,7 +3891,14 @@ class Conversation:
             template = texts.HANDOFF_ADDED
         text = render.handoff_message(self.clinic, now, handoff.id, why, template)
         self._handoff_done(c)
-        c.say(f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
+        self._handoff_said(c, text)
+
+    def _handoff_said(self, c: Ctx, text: str, *, passed: bool = True) -> None:
+        """What the patient reads once the request is dealt with."""
+        if c.s.teen_months is not None:  # 15–17 for himself: his own answer and «родитель»
+            self._teen_screen(c, passed)
+        else:
+            c.say(f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
 
     def _handoff_done(self, c: Ctx) -> None:
         c.s.step = "idle"
@@ -3808,9 +3925,7 @@ class Conversation:
         why = c.s.handoff_why
         text = render.handoff_message(self.clinic, self._local(c.now), handoff.id, why)
         self._handoff_done(c)
-        c.say(
-            f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c), remove_keyboard=False
-        )
+        self._handoff_said(c, text)
 
     async def _admin_text(self, c: Ctx, handoff: Handoff, *, addendum: bool = False) -> str:
         reason = c.s.handoff_reason or handoff.reason

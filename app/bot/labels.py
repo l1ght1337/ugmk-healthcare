@@ -215,6 +215,15 @@ def render_labels(kb: KnowledgeBase) -> str:
             [texts.BACK, texts.MENU],
         ),
         _row(
+            "Пациент 15–17 лет записывается сам: «Правила… уточнит администратор»",
+            [texts.TEEN_PARENT, texts.MENU],
+        ),
+        _row("«Мне 13, я сам» на согласии представителя", [texts.MENU_ADMIN]),
+        _row(
+            "Третье «не понял» подряд на любом экране: «Похоже, я Вас не понимаю…»",
+            [texts.MENU_ADMIN],
+        ),
+        _row(
             "ФИО не разобрано второй раз подряд: «Не получается разобрать ФИО…»",
             [texts.MENU_ADMIN, texts.BACK, texts.MENU],
         ),

@@ -297,7 +297,7 @@ async def test_route_understands_home_and_back(make_chat, kb, action: str, phras
 BUTTON_STEPS = {
     "день": ((), texts.HINT_TIME),
     "время суток": (("day",), texts.HINT_TIME),
-    "согласие": (("day", "time"), texts.HINT_BUTTONS),
+    "согласие": (("day", "time"), texts.CONSENT_HINT),  # an answer about the consent itself
 }
 
 

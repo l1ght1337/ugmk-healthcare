@@ -569,6 +569,19 @@ def wants_all(text: str) -> bool:
     )
 
 
+_SELF_PATIENT = re.compile(
+    r"\bя\s+сам\w*\b|\bсам\w*\s+запис\w+|\bя\s+(?:и\s+есть\s+)?пациент\w*"
+    r"|\bне\s+(?:законн\w+\s+)?представител\w+|\bмне\s+\d{1,2}\b|\bя\s+не\s+ребенок\b"
+    r"|\bродител\w+\s+(?:\w+\s+)?нет\b|\bбез\s+родител\w+"
+)
+
+
+def says_self(text: str) -> bool:
+    """«Мне 16, я сам записываюсь», «я не законный представитель, я сам пациент» — said on the
+    consent of a child's representative by the patient himself."""
+    return _SELF_PATIENT.search(normalize(text)) is not None
+
+
 def refuses_new_booking(text: str) -> bool:
     """«Я уже записан», «не надо меня заново записывать», «новая запись не нужна»: said in
     the middle of a booking by a patient who has one, it stops the new one."""

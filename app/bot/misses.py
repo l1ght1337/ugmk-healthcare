@@ -56,6 +56,8 @@ PHRASES: tuple[tuple[str, str], ...] = (
     (texts.PICK_BUTTON_SHORT, PICK),
     (texts.PICK_BUTTON, PICK),
     (texts.SAME_STEP, PICK),
+    (texts.STUCK, PICK),
+    (texts.CONSENT_HINT, PICK),
 )
 LAST = 20  # /misses lists this many lines
 TEXT_SHOWN = 100  # characters of the patient's text in /misses

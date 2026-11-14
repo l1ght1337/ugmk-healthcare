@@ -150,7 +150,8 @@ async def test_misses_command_shows_the_last_twenty_and_a_day_of_counters(
     head, _, tail = report.partition("\n\n")
     assert head.splitlines() == [
         texts.MISSES_DAY.format(count=23),
-        f"• {misses.HINT} — 22",
+        f"• {misses.HINT} — 15",
+        f"• {misses.PICK} — 7",  # every third «не понял» in a row is «Похоже, я Вас не понимаю…»
         f"• {misses.NOT_TEXT} — 1",
     ]
     rows = tail.splitlines()
