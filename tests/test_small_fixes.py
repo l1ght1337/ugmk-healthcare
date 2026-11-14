@@ -275,7 +275,7 @@ async def test_asking_for_a_call_on_the_consent_to_it_is_not_the_same_step(make_
         "А телефон я вам сейчас скажу или как?"
     )
     hint, screen = chat.replies  # a question in the message: the consent is not taken silently
-    assert hint.text == texts.CONSENT_HINT and texts.SAME_STEP not in chat.text
+    assert hint.text == texts.CONSENT_PHONE_NEXT and texts.SAME_STEP not in chat.text
     assert texts.CONSENT_YES in chat.labels() and screen.text
     await chat.press(texts.CONSENT_YES)
     assert chat.replies[-1].ask_contact
@@ -289,3 +289,39 @@ async def test_the_hours_are_not_said_twice_in_a_row(make_chat) -> None:
     await chat.say("Сейчас 8 утра? Я не понял, когда ждать звонка. Мне сегодня надо.")
     assert not chat.text.startswith("Администраторы отвечают") and "№ 1" in chat.text
     assert len(chat.admin) == 1  # nothing was added to the request
+
+
+# --- a consent with a question about the phone (the customer's wording, 14.11.2026) -------------
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["согласна. А телефон сейчас сказать?", "Согласен, а номер куда писать?",
+     "а телефон когда говорить?"],
+)  # fmt: skip
+async def test_the_phone_is_the_next_step_and_the_consent_is_by_the_button(
+    make_chat, kb: KnowledgeBase, said: str
+) -> None:
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await through_dislocation(chat)
+    await chat.pick_slot("Завтра")
+    await chat.say(said)
+    answer, screen = chat.replies
+    assert answer.text == "Телефон — следующим шагом. Чтобы продолжить, нажмите «Согласен»."
+    assert texts.CONSENT_YES in chat.labels() and screen.text
+    assert (await session(chat))["step"] == "consent" and fake.requests == []
+    await chat.press(texts.CONSENT_YES)  # the consent itself: only the button
+    assert texts.ASK_NAME in chat.text
+
+
+async def test_why_the_phone_is_another_question(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await through_dislocation(chat)
+    await chat.pick_slot("Завтра")
+    await chat.say("а зачем вам мой телефон?")
+    assert texts.CONSENT_PHONE_NEXT not in chat.text and texts.CONSENT_YES in chat.labels()

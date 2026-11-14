@@ -685,6 +685,15 @@ def same_or_other(text: str) -> str | None:
     return "same" if same else "other"
 
 
+def asks_when_phone(text: str) -> bool:
+    """«А телефон сейчас сказать?», «номер куда писать?» on the consent — when and how the
+    phone is given. «А зачем вам мой телефон?» asks why: another answer."""
+    t = normalize(text)
+    if "?" not in text or re.search(r"\b(?:зачем|почему|для\s+чего|откуда)\b", t):
+        return False
+    return re.search(r"\b(?:телефон\w*|номер\w*)\b", t) is not None
+
+
 def asks_about_visit(text: str) -> bool:
     """«То есть мне завтра к 13:30 приходить?», «точно записали?», «это сегодня или
     завтра?» — a question about the visit the patient has. «Можно на воскресенье?» asks for

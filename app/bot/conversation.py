@@ -53,6 +53,7 @@ from app.flow.commands import (
     asks_advice,
     asks_to_be_taken,
     asks_when_admin,
+    asks_when_phone,
     asks_where_to_go,
     danger_question,
     find_audience,
@@ -1291,6 +1292,11 @@ class Conversation:
         if step == "consent" and gives_consent(text):  # «согласна, записывайте»
             await self._on_button(c, "c:yes")
             await self._carry_on(c, text)  # the name and the rest may be in the same message
+            return
+        if step == "consent" and asks_when_phone(text):
+            # «согласна. А телефон сейчас сказать?»: answered; the consent is the button only
+            c.say(texts.CONSENT_PHONE_NEXT)
+            await self._repeat_buttons(c)
             return
         if await self._no_new_booking(c, step, text):
             return  # «я уже записан, новую запись не надо» in the middle of a new booking
