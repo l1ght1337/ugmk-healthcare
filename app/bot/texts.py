@@ -534,6 +534,9 @@ NO_NEW_BOOKING = "Хорошо, новую запись не оформляю."
 # The first line of every screen of a move: whose booking it is — «Перенос записи:
 # Серябкина Л. В., вс 15.11, 19:30»
 MOVE_HEADER = "Перенос записи: {patient}, {day}, {time}"
+# A complaint, or somebody who is not the patient of the booking, on a screen of its move:
+# the move is closed — «Запись Лены Владимировны оставил как есть: вс 15.11, 19:30.»
+MOVE_LEFT = "Запись {whose} оставил как есть: {day}, {time}."
 KEEP_AS_IS = "Оставить как есть"
 MOVE_WHICH = "Какую запись переносим?"
 MOVE_ITEM = "{day}, {time} — {patient}"  # «Чт, 12.11, 13:00 — Петров И.»

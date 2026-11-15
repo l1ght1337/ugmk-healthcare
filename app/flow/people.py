@@ -23,6 +23,7 @@ from app.flow import topics
 from app.flow.age import parse_age_months
 from app.flow.commands import YES, find_command, find_small_talk, names_several
 from app.flow.names import FIRST_NAMES, stem_pattern
+from app.flow.wishes import Wish
 
 ADULT_FROM_MONTHS = 18 * 12
 # A word for a relative → how the bot calls the person (nominative) and who it is.
@@ -47,6 +48,14 @@ ACCUSATIVE = {
     "внук": "внука", "муж": "мужа", "жена": "жену", "мама": "маму", "папа": "папу",
     "бабушка": "бабушку", "дедушка": "дедушку", "Лев": "Льва", "Павел": "Павла", "Пётр": "Петра",
     "Любовь": "Любовь",
+}  # fmt: skip
+# The word as the one who does something: «муж отвезёт», «жена заберёт». Any other form
+# says the thing is for the person or theirs: «мужу лучше вечером», «запись жены».
+NOMINATIVE = {
+    "сын": ("сын", "сынок", "сыночек"), "дочка": ("дочка", "дочурка"), "дочь": ("дочь",),
+    "ребёнок": ("ребенок", "ребеночек"), "внучка": ("внучка",), "внук": ("внук",),
+    "муж": ("муж", "супруг"), "жена": ("жена",), "мама": ("мама", "мать"),
+    "папа": ("папа", "отец"), "бабушка": ("бабушка",), "дедушка": ("дедушка",),
 }  # fmt: skip
 _BEFORE = r"(?:(?P<with>мы\s+с|с)\s+|у\s+|для\s+)?(?:мо\w+\s+|наш\w+\s+)?"
 _NAMES = tuple(
@@ -104,6 +113,8 @@ class Person(BaseModel):
     audience: Literal["child", "adult", "self"] | None = None  # None: the bot asks
     age_months: int | None = None
     complaint: str = ""  # the part of the message about this person: «ногу подвернул»
+    # «и сына запишите, ему лучше вечером»: his wish waits with him, for his booking
+    wish: Wish | None = None
 
     @property
     def whom(self) -> str:
@@ -326,6 +337,39 @@ _REFUSAL_WORD = re.compile(
     r"\b(?:не|надо|нужно|записыва\w+|запиш\w+|будем|буду|пока|потом|позже|еще|посмотрим|"
     r"пожалуйста|его|ее)\b"
 )
+
+
+def spoken_for(text: str) -> list[Person]:
+    """The people a message is about as patients, the writer aside: named with an injury or
+    an age of their own, in a request to book («и сына запишите»), or in a form that says
+    the thing is for them or theirs («мужу лучше вечером», «для дочки», «запись жены»).
+    «Жена отвезёт вечером», «приедем с мужем» only mention a person."""
+    low = _norm(text)
+    found = []
+    for person in find_people(text):
+        if not person.name:
+            continue
+        if person.complaint or person.age_months is not None or _for_them(low, person.name):
+            found.append(person)
+    return found
+
+
+def _for_them(low: str, name: str) -> bool:
+    """The relative stands in a form other than «муж отвезёт» — or next to a request to book
+    («дочь запишите»: the word is the same in both forms)."""
+    for pattern, relative, _ in _RELATIVES:
+        if relative != name:
+            continue
+        for found in pattern.finditer(low):
+            if found["with"]:
+                continue  # «с мужем приедем»
+            word = found[0].split()[-1]
+            sentence = (
+                _SENTENCE.split(low[: found.end()])[-1] + _SENTENCE.split(low[found.end() :])[0]
+            )
+            if word not in NOMINATIVE.get(name, ()) or _BOOKING_WORD.search(sentence):
+                return True
+    return False
 
 
 def refused(text: str) -> list[Person]:

@@ -119,6 +119,7 @@ from app.flow.people import (
     named_in,
     refused,
     shared,
+    spoken_for,
 )
 from app.flow.safety import find_phrase, sign_passed
 from app.flow.schema import Booking as BookingSpec
@@ -1375,6 +1376,10 @@ class Conversation:
         people = step not in PATIENT_DATA_STEPS  # on the steps of the data nobody is read
         if people and step not in MESSAGE_STEPS and await self._not_this_one(c, step, text):
             return  # «пока не записывай мужа, ещё посмотрим»: one line, he does not wait
+        if people and await self._leaves_move(c, step, text):
+            if c.s.wizard:
+                return  # the booking of the one the message is about has begun
+            step = c.s.step  # a complaint: the move is closed, the message is read as usual
         if people and await self._named_later(c, step, text):
             return  # «и сына тоже запишите» in the middle of a booking: his turn is next
         if people:
@@ -3348,6 +3353,47 @@ class Conversation:
             c.say(line, self._main_menu(c))
         return True
 
+    async def _leaves_move(self, c: Ctx, step: str, text: str) -> bool:
+        """A complaint, or somebody who is not the patient of the booking, on a screen of its
+        move: not a wish for the move — «Сын 8 лет упал с велосипеда, можно сегодня вечером?»
+        never moves the mother. The move is closed with a line that says whose booking stays
+        and when it is; then the one the message is about is booked, with the day and the
+        time it names. A complaint with nobody else in it is read as on the menu."""
+        if c.s.reschedule_of is None or step not in TIME_STEPS:
+            return False
+        if wants_move(text) or wants_cancel(text):
+            return False  # «перенесите на вечер, жена отвезёт»: about this very move
+        booking = await c.db.get(Booking, c.s.reschedule_of)
+        if booking is None:
+            return False
+        patient = await c.db.get(Patient, booking.patient_id)
+        others = [
+            p for p in spoken_for(text) if patient is None or not self._is_patient(p, patient)
+        ]
+        if not others and self._injury_in(text) is None:
+            return False
+        wish = self._read_wish(c, text).wish
+        start = self._local(booking.start_at)
+        left = texts.MOVE_LEFT.format(
+            whose=self._whose(patient), day=self._short_day(booking.start_at), time=f"{start:%H:%M}"
+        )
+        self._reset(c)
+        c.say(left)
+        if len(others) == 1 and not others[0].complaint:
+            # «и сына запишите, ему лучше вечером»: his booking, his wish
+            others[0].wish = None if wish.empty else wish
+            await self._take_person(c, others[0])
+        return True
+
+    def _booked_now(self, c: Ctx, person: Person) -> bool:
+        """The person a message names is the one this booking is for: «сыну лучше вечером»
+        in a booking for a child, a name that is on the header already."""
+        now = c.s.person
+        if now is not None and now.name:
+            return now.same(person)
+        audience = c.s.dialog.audience or c.s.for_whom
+        return audience in ("child", "adult") and audience == person.audience
+
     async def _named_later(self, c: Ctx, step: str, text: str) -> bool:
         """«И сына тоже запишите» while a booking is under way: one line — «Сына запишу
         следующим — после этой записи.» — then the same step once more, with its buttons;
@@ -3369,8 +3415,16 @@ class Conversation:
         asked = [
             p for p in asked_too(text) if (other if not p.name else now is None or not now.same(p))
         ]
+        if not asked and step in TIME_STEPS:
+            # the day and the time are being chosen, who the booking is for was settled long
+            # ago: «и сына запишите, ему лучше вечером» is one more patient, and «вечером»
+            # is his — the time of this booking stays as it is
+            asked = [p for p in spoken_for(text) if not self._booked_now(c, p)]
         if not asked:
             return False
+        wish = self._read_wish(c, text).wish
+        if len(asked) == 1 and not wish.empty:
+            asked[0].wish = wish  # waits with him, for his booking
         waiting = [p for p in c.s.people if not any(p.same(new) for new in asked)]
         merge(asked, c.s.people)  # named before with an age or an injury: kept
         if step == "first":  # nobody is chosen yet: one more button
@@ -3479,8 +3533,10 @@ class Conversation:
         named = person.name if person.name[:1].isupper() else None  # «Ваня», not «сын»
         self._said_who(c, person.audience, person.age_months, named)
         chosen = c.s.dialog.scenario_id is not None and c.s.dialog.outcome_id is None
+        wish = person.wish.model_copy(update={"noted": c.now}) if person.wish else None
         if chosen and c.s.step in ("first", "audience", "age"):
             c.s.person, c.s.people, c.s.for_whom = person, rest, person.audience
+            c.s.wish = wish or c.s.wish
             if person.audience is None:
                 await self._show(c, AskPatient("audience"))
                 return
@@ -3494,6 +3550,7 @@ class Conversation:
         self._reset(c, named=True)
         c.s.wizard, c.s.second_ok = True, True  # the booking made before is not asked about
         c.s.person, c.s.people, c.s.for_whom = person, rest, person.audience
+        c.s.wish = wish  # «ему лучше вечером», said when he was named
         if person.complaint:
             c.s.step, c.for_whom = "complaint", person.audience
             await self._on_free_text(c, person.complaint)
@@ -4601,7 +4658,7 @@ class Conversation:
         """The bookings a request to move or to cancel may be about: «запись сына» is not the
         mother's. Nobody is named — all of them; the one named has none — an empty list, and
         nothing is moved or cancelled."""
-        named = [p for p in find_people(c.text or "") if p.name]
+        named = spoken_for(c.text or "")  # «жена отвезёт» names nobody's booking
         if not named:
             return list(bookings)
         fitting = []
