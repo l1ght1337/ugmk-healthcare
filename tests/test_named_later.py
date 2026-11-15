@@ -74,7 +74,7 @@ def named(text: str) -> list[tuple[str, str | None, int | None, str]]:
         ("и Ваню тоже запишите", [("Ваня", None, None, "")]),
         ("Запишите ещё Ваню, ему 10 лет, ногу подвернул",
          [("Ваня", "child", 120, "ногу подвернул")]),
-        ("И сына тоже запишите, ему 12, колено ушиб", [("сын", "child", 144, "колено ушиб")]),
+        ("И сына тоже запишите, ему 12 лет, колено ушиб", [("сын", "child", 144, "колено ушиб")]),
         ("и меня тоже запишите", [("", "self", None, "")]),
         # no «тоже», no «ещё»: who the booking is for, not one more patient
         ("сына запишите", []),
@@ -108,7 +108,7 @@ async def test_the_son_is_named_in_the_middle_of_a_booking(make_chat, kb: Knowle
 async def test_what_is_said_with_him_is_kept(make_chat) -> None:
     chat = make_chat()
     await to_when(chat)
-    await chat.say("И сына тоже запишите, ему 12, колено ушиб")
+    await chat.say("И сына тоже запишите, ему 12 лет, колено ушиб")
     assert chat.text == "Сына запишу следующим — после этой записи."
     await to_the_card(chat, "Петров Иван Сергеевич, 12.03.1985")
     await chat.press("Записать сына")

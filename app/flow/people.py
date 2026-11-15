@@ -67,12 +67,12 @@ _BOOKING_WORD = re.compile(r"\bзапи[сш]\w*")  # «надо записат�
 _ALSO = re.compile(r"\b(?:тоже|еще|также|заодно|следом|потом)\b")
 _SENTENCE = re.compile(r"[.!?;\n]+")
 _CLAUSE = re.compile(r"[,:]|\s—\s|\s(?:а|и|но|потом|затем)\s")
-_AGE = re.compile(r"\b\d{1,2}(?:\s*(?:лет|года|год|годика|месяц\w*|мес))?\b")
-# a part of a sentence that is an age and nothing else: «7 лет», «ему 10», «ей 4 месяца»
-_AGE_ALONE = re.compile(
-    r"^(?:(?:ей|ему)\s+\d{1,2}(?:\s*(?:лет|года|год|годика|месяц\w*|мес))?"
-    r"|\d{1,2}\s*(?:лет|года|год|годика|месяц\w*|мес))$"
-)
+# An age is a number with its word: «7 лет», «3 года», «4 мес». A bare number is not one —
+# «мужа на 14:30», «сына в 9 утра», «через 2 часа» are times, and «Ване 10» is asked about
+_AGE = re.compile(r"\b\d{1,2}\s*(?:лет|года|год|годика|месяц\w*|мес)\b")
+# a part of a sentence that is an age and nothing else: «7 лет», «ему 10 лет», «ей 4 месяца»
+_AGE_ALONE = re.compile(r"^(?:(?:ей|ему)\s+)?\d{1,2}\s*(?:лет|года|год|годика|месяц\w*|мес)$")
+_NUMBER_ALONE = re.compile(r"\s*\d{1,2}\s*")  # «Ване 10», «Маша, 7,»: no word — not an age
 _HURT = re.compile(
     r"\b(?:упал\w*|ударил\w*|ушиб\w*|сломал\w*|порезал\w*|обжег\w*|обожгл\w*|подвернул\w*|"
     r"вывихнул\w*|поранил\w*|наступил\w*|прищемил\w*|повредил\w*|укусил\w*|потянул\w*|"
@@ -147,12 +147,11 @@ def _about_injury(text: str) -> bool:
 
 
 def _age_alone(clause: str) -> int | None:
-    """«7 лет», «ему 10» between two commas: the age in months — or None."""
+    """«7 лет», «ему 10 лет» between two commas: the age in months — or None."""
     low = _norm(clause).strip(" .—-")
     if not _AGE_ALONE.match(low):
         return None
-    months = parse_age_months(low)
-    return months if months is not None else int(re.search(r"\d{1,2}", low)[0]) * 12  # type: ignore[index]
+    return parse_age_months(low)
 
 
 def _by_age(months: int) -> Literal["child", "adult"]:
@@ -168,9 +167,10 @@ def find_people(text: str) -> list[Person]:
 
     A first name counts only with an age or an injury next to it («Маше 7 лет», «Ваня ногу
     подвернул», «Маша, 7 лет, руку ушибла»): «запишите к Андрею Александровичу» names a
-    doctor. A part of a sentence with no person in it goes on about the one before («у меня
-    запястье болит, похоже перелом»); an age alone is the age of the one named just before
-    it («сын, 12 лет, упал»).
+    doctor. An age is a number with its word («лет», «год», «мес…»): «мужа на 14:30» has
+    none, «а Ване 10» names Ваня with no age. A part of a sentence with no person in it goes
+    on about the one before («у меня запястье болит, похоже перелом»); an age alone is the
+    age of the one named just before it («сын, 12 лет, упал»).
     """
     found: list[Person] = []
 
@@ -193,6 +193,8 @@ def find_people(text: str) -> list[Person]:
         for clause in _clauses(sentence):
             marker = _marker(clause)
             if marker is None:
+                if _NUMBER_ALONE.fullmatch(clause):
+                    continue  # «Маша, 7, руку ушибла»: a number with no word says nothing
                 name, after, waits, ageless = waits, ageless, None, None
                 age = _age_alone(clause)
                 if age is not None and name is not None:  # «Маша, 7 лет»
@@ -210,16 +212,15 @@ def find_people(text: str) -> list[Person]:
             waits = ageless = None
             name, audience, span, together = marker
             low = _norm(clause)
-            has_age = re.search(r"\b\d{1,2}\s*(?:лет|года|год|годика|месяц\w*|мес)?\b", low)
-            age = parse_age_months(low) if has_age else None
-            if age is None and has_age and (bare := re.search(r"\b(\d{1,2})\b", low)):
-                age = int(bare[1]) * 12  # «Ване 10»
+            age = parse_age_months(low) if _AGE.search(low) else None
+            # «а Ване 10»: he is named; the number has no word, so his age is asked
+            numbered = _NUMBER_ALONE.fullmatch(low[span[1] :]) is not None
             said = _complaint(clause, span)
             complaint = said
             if not _about_injury(complaint) or (together and "мы" not in together.lower()):
                 complaint = ""  # «упали с сыном на катке»: who was hurt is not said here
             if audience is None:  # a first name: a patient only with an age or an injury
-                if age is None and not complaint:
+                if age is None and not complaint and not numbered:
                     current = None
                     if not said and not together:  # the name alone: «Маша, 7 лет, руку ушибла»
                         waits = name

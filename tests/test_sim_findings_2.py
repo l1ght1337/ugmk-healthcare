@@ -513,7 +513,7 @@ async def test_two_ages_are_not_taken_silently(make_chat) -> None:
     await to_step(chat, m.AGE)
     await chat.say("Маше 7 лет, а Ване 10. Мне обоих надо записать")
     assert chat.replies[0].text == f"{texts.ONE_BY_ONE} {texts.WHO_FIRST}"
-    assert chat.labels()[:2] == ["Машу, 7 лет", "Ваню, 10 лет"]
+    assert chat.labels()[:2] == ["Машу, 7 лет", "Ваню"]  # «10» has no word: his age is asked
     await chat.press("Машу, 7 лет")
     state = await session(chat)
     assert state["dialog"]["age_months"] == 84 and "Как получена травма" in chat.text
