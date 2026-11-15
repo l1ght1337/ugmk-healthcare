@@ -28,6 +28,7 @@ from app.flow.schema import Scenario
 from tests.fake_deepseek import FakeDeepSeek
 from tests.test_conversation import bookings
 from tests.test_sim_findings_2 import session
+from tests.test_two_kids_dialog import ByTask
 
 QUESTION = "Уточните, пожалуйста: это укол чужой иглой?"
 AIDS = "📍 Центр борьбы со СПИДом, ул. Ясная, 46"
@@ -159,7 +160,10 @@ async def test_a_booking_scenario_named_for_a_needle_is_asked_about(
 async def test_no_goes_on_with_the_booking_and_is_not_asked_again(
     make_chat, kb: KnowledgeBase
 ) -> None:
-    chat = make_chat(assistant=FakeDeepSeek(CUT, CUT).assistant(kb))
+    # route names the scenario both times; the complaint that is kept is read for the
+    # questions of the scenario too (an extract call for each), and says nothing about them
+    nothing = {"facts": {}, "unclear": True, "clarify": None, "crisis": False}
+    chat = make_chat(assistant=ByTask(route=CUT, extract=nothing).assistant(kb))
     await chat.start()
     await chat.say("я порезала палец швейной иглой, рана глубокая")
     assert chat.replies[-1].text.endswith(QUESTION)

@@ -106,7 +106,9 @@ async def test_a_word_of_one_button_presses_it(make_chat, kb, word: str, then: s
     await chat.say("болит рука")  # «Упал, ударился, подвернул», «Порез, рана», «Гипс, ортез…»
     assert LIMB in chat.text and "Упал, ударился, подвернул" in chat.labels()
     await chat.say(word)
-    assert len(fake.requests) == 1 and then in chat.text, chat.text  # no DeepSeek for the word
+    # no DeepSeek for the word: route was asked once, about «болит рука»
+    routed = [r for r in fake.requests if '"task": "route"' in r["messages"][1]["content"]]
+    assert len(routed) == 1 and then in chat.text, chat.text
 
 
 @pytest.mark.parametrize(

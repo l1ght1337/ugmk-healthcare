@@ -154,6 +154,7 @@ DOCTOR_DAYS_SHOWN = 6  # «когда работает Ярунин?» — the n
 LABEL_MAX = 40  # a button's label, so that it is not cut on a phone
 TOPIC_DEPTH = 3  # how many topic menus one typed word may go through
 SAME_COMPLAINT = timedelta(minutes=30)  # the same complaint this soon is not a new one
+TOLD_KEPT = 5  # messages of a complaint kept for the questions of its scenario
 TALK_IDLE = timedelta(hours=6)  # a silence this long starts a new conversation (Talk)
 WELCOME_EVERY = timedelta(days=1)  # the welcome animation: not more often for one user
 FEW_WORDS = 3  # «да, передайте», «для сына»: a longer message says something more
@@ -444,6 +445,10 @@ class Session(BaseModel):
     # обращались» — it answers the scenario questions of each
     shared: list[str] = []
     booked: list[int] = []  # the patients (Patient.id) booked for those named: not offered again
+    # the complaint as it was typed, kept until the questions of the scenario end: «вчера
+    # упал, болит нога» answers «Когда?» also when the topic is picked with a button
+    told: list[str] = []
+    taken: bool = False  # answers were taken from it: «Ваши ответы: …» is due over step 3
     teen_months: int | None = None  # 15–17 booking for himself: his age, in months
     teen_passed: bool = True  # … and the request has gone to an administrator
     teen_line: str | None = None  # the one-line answer of the last turn on that screen
@@ -956,6 +961,7 @@ class Conversation:
             c.s.people, c.s.shared, c.s.booked = s.people, s.shared, s.booked
         if booking:
             c.s.more, c.s.second_ok, c.s.person = s.more, s.second_ok, s.person
+            c.s.told = s.told
 
     def _paused_fresh(self, c: Ctx) -> bool:
         at = c.s.paused_at
@@ -2349,6 +2355,8 @@ class Conversation:
             else:  # no LLM: the word list narrows the topics
                 area = topics.guess_area(text) or c.s.area
                 words = topics.guess_candidates(text)
+                if area or words:
+                    self._keep_said(c, text)
                 advice = asks_advice(text) and bool(area or words)
                 if advice:
                     self._advice(c)
@@ -2361,6 +2369,8 @@ class Conversation:
         # «что делать, укусила собака?»: the complaint goes on, the advice is the doctor's
         advice = reading.kind == "complaint" and (reading.advice or asks_advice(text))
         injury = self._injury_in(text) if reading.kind == "medical_question" else None
+        if reading.kind == "complaint":
+            self._keep_said(c, text)  # until the questions of its scenario end
         if reading.kind == "crisis":
             await self._crisis(c, text)
         elif reading.kind == "complaint" and reading.scenario_id:
@@ -2376,10 +2386,9 @@ class Conversation:
                 None if topics.names_kind(reading.scenario_id, text) else "words"
             )
             age = find_child_age(text)
-            # «сегодня», «вчера» in the complaint: the code's reading, not DeepSeek's guess
-            when = self._time_words(c, self.kb.scenario(reading.scenario_id), text)
-            facts = _with_time(when, reading.facts)
-            await self._begin(c, reading.scenario_id, facts, age, picked=words)
+            # «сегодня», «вчера» in the complaint are read by the code when the scenario
+            # begins (_told_facts): its reading, not DeepSeek's guess
+            await self._begin(c, reading.scenario_id, reading.facts, age, picked=words, fresh=text)
             if words:
                 c.s.picked = words
         elif reading.kind == "complaint":
@@ -2435,6 +2444,11 @@ class Conversation:
         else:  # offtopic: the request is not carried out
             self._reset(c)
             c.say(texts.OFFTOPIC, self._main_menu(c))
+
+    def _keep_said(self, c: Ctx, text: str) -> None:
+        """The complaint stays in the session while its booking goes on (``Session.told``)."""
+        if text not in c.s.told:
+            c.s.told = [*c.s.told, text][-TOLD_KEPT:]
 
     def _injury_in(self, text: str) -> tuple[str | None, list[str]] | None:
         """The injury a text names, by the word lists: (body area, scenarios) — or None."""
@@ -3353,11 +3367,13 @@ class Conversation:
         child_age: int | None,
         *,
         picked: Literal["unsure", "words"] | None = None,
+        fresh: str | None = None,
     ) -> None:
         """Start a scenario of the wizard; the body area may already answer a question.
 
         ``picked`` — the scenario was not named by the patient («Не знаю», route's choice):
-        «Ваши ответы» says so when every question is answered at once.
+        «Ваши ответы» says so when every question is answered at once. ``fresh`` — the text
+        route has just read: its facts are in ``facts``, DeepSeek is not asked about it again.
         """
         if self._same_asked(c, scenario_id, facts, child_age):
             return  # after a route: «Это та же травма, о которой Вы писали, или другая?»
@@ -3388,13 +3404,22 @@ class Conversation:
             c.s.pending_scenario, c.s.pending_facts, c.s.child_age = scenario_id, facts, child_age
             self._child_confirm(c)
             return
-        facts = await self._told_facts(c, scenario_id, facts)
+        given = set(facts)
+        facts = await self._told_facts(c, scenario_id, facts, fresh)
+        # «Ваши ответы» over step 3: answers were taken from what was said before the topic
+        # was chosen — not from the message route has just read with it
+        kept = c.s.person is not None or any(said != fresh for said in c.s.told)
+        c.s.taken = kept and any(name not in given for name in facts)
         await self._show(c, self.engine.start(c.s.dialog, scenario_id, facts))
 
     async def _told_facts(
-        self, c: Ctx, scenario_id: str, facts: dict[str, FactValue]
+        self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], fresh: str | None = None
     ) -> dict[str, FactValue]:
-        """What was said about a patient named, and about all of them, answers the questions.
+        """What the complaint said answers the questions of its scenario.
+
+        One patient: the complaint as it was typed (``Session.told``) — «вчера упал, болит
+        нога» answers «Когда?» also when the topic is picked with a button. A patient named
+        among several: his own part and what was said about all of them.
 
         The patient's own part («мы с мужем сегодня в походе подвернули ноги» is the part of
         each of the two) and what was said about nobody in particular («Мы сегодня с горки
@@ -3407,40 +3432,41 @@ class Conversation:
         instead of the questions answered.
         """
         person = c.s.person
-        text = ". ".join(part for part in (person.complaint, *c.s.shared) if part) if person else ""
+        if person is not None:  # his own part and what was said about all of them
+            parts = [part for part in (person.complaint, *c.s.shared) if part]
+            unread = parts
+        else:  # one patient: the complaint as it was typed; route has read ``fresh`` already
+            parts = list(c.s.told)
+            unread = [part for part in parts if part != fresh]
+        text = ". ".join(part.rstrip(" .") for part in parts)
+        for_llm = ". ".join(part.rstrip(" .") for part in unread)
         if not text:
             return facts
         scenario = self.kb.scenario(scenario_id)
-        # the questions the complaint may answer beforehand and has not answered yet
+        when = self._time_words(c, scenario, text)  # «сегодня с горки упали»: by the code
+        # the questions the complaint may answer beforehand and has not answered yet; one
+        # the code has read in full is not sent to DeepSeek
         asked = [
             q
             for q in scenario.questions
             if any(f.upfront and f.name not in facts for f in q.fields)
+            and not {f.name for f in q.fields} <= when.keys()
         ]
-        if not asked:
-            return facts
-        when = self._time_words(c, scenario, text)  # «сегодня с горки упали»: by the code
-        # a question the code has read in full is not sent to DeepSeek
-        unread = [q for q in asked if not {f.name for f in q.fields} <= when.keys()]
+        asked = asked if for_llm else []
         llm, known = self._llm(c), await self._known(c)
         readings = await asyncio.gather(
-            *(read_answer(llm, scenario, question, text, known) for question in unread)
+            *(read_answer(llm, scenario, question, for_llm, known) for question in asked)
         )
-        told: dict[str, dict[str, FactValue]] = {q.id: {} for q in asked}
-        for question, reading in zip(unread, readings, strict=True):
-            own = {f.name for f in question.fields}  # each question answers its own fields
-            if not (reading.unavailable or reading.crisis):
-                told[question.id] = {k: v for k, v in reading.facts.items() if k in own}
-        for question in asked:
-            own = {f.name for f in question.fields}
-            mine = {name: value for name, value in when.items() if name in own}
-            told[question.id] = _with_time(mine, told[question.id])
         # every answer that was said goes to the scenario, as the facts of a complaint do: the
         # engine takes those of the questions it comes to — also after it has asked the age
         found = dict(facts)
-        for answer in told.values():
-            found = {**answer, **found}
-        return found
+        for question, reading in zip(asked, readings, strict=True):
+            own = {f.name for f in question.fields}  # each question answers its own fields
+            if not (reading.unavailable or reading.crisis):
+                found = {**{k: v for k, v in reading.facts.items() if k in own}, **found}
+        # the time of the injury: the code's reading; a word that does not answer or that
+        # disagrees with DeepSeek (route's facts among them) leaves the question to be asked
+        return _with_time(when, found)
 
     def _time_words(self, c: Ctx, scenario: Scenario, text: str) -> dict[str, str]:
         """What the words about the time of the injury answer in this scenario: the value
@@ -3485,8 +3511,14 @@ class Conversation:
             buttons = [Button(ch.label, f"a:{ch.facts['audience']}") for ch in prompt.choices]
             self._screen(c, prompt.text, buttons)
         elif isinstance(step, AskQuestion):
+            if c.s.taken:  # what the complaint has answered stands over step 3, once
+                c.s.taken = False
+                if (summary := self._summary(c)) is not None:
+                    edit = [[Button(texts.SUMMARY_EDIT, "sum:edit")]]
+                    c.say(summary, edit, edit=c.first())
             self._ask(c, render.ask_question(step, pick=step.stuck), stuck=step.stuck)
         else:
+            c.s.taken = False  # every question is answered: the summary of the outcome
             await self._done(c, step)
 
     def _ask(self, c: Ctx, prompt: render.Prompt, *, stuck: bool = False) -> None:
@@ -3644,7 +3676,8 @@ class Conversation:
     async def _on_summary(self, c: Ctx, value: str) -> None:
         """«Изменить ответы»: the scenario questions again; the topic and the patient stay."""
         d = c.s.dialog
-        on_time = c.s.step in TIME_STEPS or c.s.step == "second"
+        # over the time, or over step 3 — when the complaint has answered a part of it
+        on_time = c.s.step in TIME_STEPS or c.s.step in ("second", "question")
         if value != "edit" or not d.trail or not on_time or c.s.reschedule_of:
             c.say(texts.STALE, [_home()])
             return

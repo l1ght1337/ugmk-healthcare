@@ -62,7 +62,9 @@ async def test_the_words_press_the_button(make_chat, kb: KnowledgeBase, said: st
     chat, fake = await on_the_question(make_chat, kb)
     await chat.say(said)
     state = await session(chat)
-    assert fake.requests == []  # read by the code
+    # read by the code: DeepSeek is not asked what the words mean (only, as for any
+    # complaint that is kept, which questions of the scenario «подвернул ногу» answers)
+    assert [r for r in fake.requests if '"task": "route"' in r["messages"][1]["content"]] == []
     assert state["dialog"]["scenario_id"] == "dislocation" and state["picked"] == "unsure"
     assert "На что больше похоже?" not in chat.text
     await chat.press(texts.AUDIENCE_SELF)
