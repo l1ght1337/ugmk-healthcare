@@ -1636,6 +1636,8 @@ class Conversation:
         then it goes to the administrator with the request; a complaint or a request to book
         is carried out. Only words that say nothing get «выберите кнопкой».
         """
+        if await self._no_route(c, text):  # the tooth once more: no scenario by guess
+            return
         reading = await read_text(self._llm(c), text, await self._known(c))
         note = False
         if reading.unavailable:
@@ -2445,6 +2447,26 @@ class Conversation:
         else:  # idle / complaint / topic / describe
             await self._on_free_text(c, text)
 
+    async def _no_route(self, c: Ctx, text: str) -> bool:
+        """A knocked-out tooth: the scripts say nothing — said so, not a scenario by guess.
+        Asked again on that very screen, it is a question for the administrator: the same
+        line is not said twice in a row."""
+        words = self.clinic.clinic.no_route_words
+        if not find_phrase(text, words):
+            return False
+        offered = c.s.step == "offer_admin" and c.s.handoff_reason == texts.QUESTION_REASON
+        if offered and find_phrase(c.s.handoff_context or "", words):
+            c.s.handoff_context = f"{c.s.handoff_context}\n{text}"
+            c.say(texts.ADMIN_WILL_ANSWER)
+            await self._repeat_buttons(c)
+            return True
+        self._reset(c)
+        c.s.step = "offer_admin"
+        c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
+        said = f"{markup.bold(texts.NO_ROUTE_DATA)}\n\n{texts.QUESTIONS_TO_ADMIN}"
+        c.say(said, self._ask_admin_buttons())
+        return True
+
     async def _on_free_text(self, c: Ctx, text: str, reading: TextReading | None = None) -> None:
         """Any free text outside a scenario question: one route call decides what it is.
 
@@ -2452,13 +2474,7 @@ class Conversation:
         ``reading`` — what route has already said about the text.
         """
         asked = c.s.step == "info"
-        if not asked and find_phrase(text, self.clinic.clinic.no_route_words):
-            # a knocked-out tooth: the scripts say nothing — said so, not a scenario by guess
-            self._reset(c)
-            c.s.step = "offer_admin"
-            c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
-            said = f"{markup.bold(texts.NO_ROUTE_DATA)}\n\n{texts.QUESTIONS_TO_ADMIN}"
-            c.say(said, self._ask_admin_buttons())
+        if not asked and await self._no_route(c, text):
             return
         at_start = c.s.wizard and c.s.step in START_STEPS  # step 1 of a booking: it goes on
         if reading is None:

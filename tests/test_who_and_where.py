@@ -172,3 +172,35 @@ async def test_a_question_of_deepseek_is_said_once_for_a_complaint(
         await chat.say(more)
         assert ASKS_BACK["clarify"] not in chat.text  # not asked again and again
         assert texts.NONE_FITS in chat.text and "Другое" in chat.labels()
+
+
+async def test_a_patient_who_says_it_is_not_the_head_is_not_told_about_concussion(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    """Run 6, tooth: «Да нет у меня травмы головы. Зуб выбит. Записаться к вам можно?» after the
+    route of a head injury got «Это та же травма…?» and the hospitals of that route again."""
+    fake = FakeDeepSeek(HEAD, HEAD)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await chat.press("Голова, лицо, глаза, уши")
+    await chat.press("Ударился головой")
+    await chat.press(texts.AUDIENCE_SELF)
+    assert "сотрясение" in chat.text  # the route of the scripts, for a head injury
+    await chat.say("Да нет у меня травмы головы. Зуб выбит. Записаться к вам можно?")
+    said = "\n".join(reply.text for reply in chat.replies)
+    assert said.startswith("Куда с этим обращаться, в моих данных нет.")
+    assert "сотрясение" not in said and "больница" not in said.lower()
+    assert texts.SAME_OR_OTHER not in said
+    await chat.say("Почему не записываете? Зуб же выбит, это травма.")
+    said = "\n".join(reply.text for reply in chat.replies)
+    assert "сотрясение" not in said and "больница" not in said.lower()
+    # the same line is not said twice: the question goes to the administrator with the first
+    assert chat.replies[0].text == texts.ADMIN_WILL_ANSWER
+    assert texts.NO_ROUTE_DATA not in said
+    assert chat.labels()[0] == texts.HANDOFF_YES  # the buttons of «Передать…?» once more
+    assert (await session(chat))["handoff_context"] == (
+        "Да нет у меня травмы головы. Зуб выбит. Записаться к вам можно?\n"
+        "Почему не записываете? Зуб же выбит, это травма."
+    )
+    assert len(fake.requests) == 0  # DeepSeek is not asked about a tooth
