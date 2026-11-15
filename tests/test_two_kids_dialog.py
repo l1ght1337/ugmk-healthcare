@@ -422,6 +422,45 @@ async def test_what_is_said_about_us_answers_for_each(make_chat, kb: KnowledgeBa
     assert "Как получена травма" not in chat.text and "Когда была получена" not in chat.text
 
 
+async def test_the_answers_are_kept_while_the_age_is_asked(make_chat, kb: KnowledgeBase) -> None:
+    """The live run of self_and_son (15.11, the final code): «у сына ушиб колена» with no
+    age. The bot asked the age — and then «Как получена травма?» and «Когда?», though «мы с
+    сыном сегодня упали на катке» had answered them: the answers were looked up in the order
+    of the questions, and the first thing the scenario asked was the age."""
+
+    def how_only(asked: dict) -> dict:
+        facts = {"assault": False} if asked["fields"] == ["assault"] else {}
+        return {**ANSWERED, "facts": facts, "unclear": not facts}
+
+    fake = ByTask(route=UNCLEAR, extract=how_only)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say("Мы с сыном сегодня упали на катке. У меня болит запястье, у сына ушиб колена.")
+    await chat.press("Сына")
+    await chat.say("не знаю")  # «На что больше похоже?»
+    assert "Сколько лет ребёнку?" in chat.text  # not said: asked
+    await chat.say("12 лет")
+    assert "Обращались ли к врачу по данному случаю?" in chat.text  # the only question left
+    assert "Как получена травма" not in chat.text and "Когда была получена" not in chat.text
+
+
+async def test_a_later_answer_is_kept_when_an_earlier_one_is_not_said(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    """«Как получена травма?» is not said, «сегодня» is: only the first is asked."""
+    nothing = {**ANSWERED, "facts": {}, "unclear": True}
+    fake = ByTask(route=UNCLEAR, extract=nothing)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say(FIRST)
+    await chat.press("Машу, 7 лет")
+    await chat.press("Не знаю")
+    assert "Как получена травма" in chat.text
+    await chat.press("Бытовая травма")
+    assert "Обращались ли к врачу по данному случаю?" in chat.text  # «Когда?» — «сегодня»
+    assert "Когда была получена" not in chat.text
+
+
 async def test_the_order_said_on_who_is_first_is_a_choice(make_chat) -> None:
     chat = make_chat()
     await chat.start()

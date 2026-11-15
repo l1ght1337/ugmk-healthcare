@@ -3395,9 +3395,10 @@ class Conversation:
         each of the two) and what was said about nobody in particular («Мы сегодня с горки
         упали… К врачу ещё не обращались») are read together, when the scenario of this
         patient begins: as the answer to each question of the scenario that the complaint may
-        answer (at once, one DeepSeek call per question). The answers are taken in the order
-        the scenario asks; the first question the text does not answer is asked as usual,
-        and so are those after it. The patient sees «Ваши ответы: …» with «Изменить ответы»
+        answer (at once, one DeepSeek call per question; the time of the injury — by the
+        code). What is said is taken, what is not said is asked as usual: «сегодня» answers
+        «Когда?» even when «Как получена травма?» is still to be asked, and the answers wait
+        while the bot asks the age. The patient sees «Ваши ответы: …» with «Изменить ответы»
         instead of the questions answered.
         """
         person = c.s.person
@@ -3429,15 +3430,10 @@ class Conversation:
             own = {f.name for f in question.fields}
             mine = {name: value for name, value in when.items() if name in own}
             told[question.id] = _with_time(mine, told[question.id])
+        # every answer that was said goes to the scenario, as the facts of a complaint do: the
+        # engine takes those of the questions it comes to — also after it has asked the age
         found = dict(facts)
-        for _ in asked:  # in the order the scenario asks: what is not said stops it
-            probe = c.s.dialog.model_copy(deep=True)
-            step = self.engine.start(probe, scenario_id, dict(found))
-            if not isinstance(step, AskQuestion) or step.scenario.id != scenario_id:
-                break
-            answer = told.get(step.question.id)
-            if not answer or all(k in found for k in answer):
-                break
+        for answer in told.values():
             found = {**answer, **found}
         return found
 

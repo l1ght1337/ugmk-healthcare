@@ -31,13 +31,16 @@ KIDS = (
 )
 BOTH = "У меня запястье — похоже на перелом. У сына колено — ушиб."
 ANSWERS = ("Бытовая травма", "В течение 7 дней", "Нет, не обращались")
+# «дети сегодня с горки упали» is said about both: «Когда?» is read by the code, not asked
+ANSWERS_TODAY = ("Бытовая травма", "Нет, не обращались")
 MENU = [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN]
 
 
 async def through(chat: Chat, name: str, born: str, *, first: bool) -> None:
-    """From the topics of «рука или нога» to the booking card of this patient."""
+    """From the topics of «рука или нога» to the booking card of this patient; the message
+    has said «сегодня»."""
     await chat.press("Похоже на вывих")
-    for label in ANSWERS:
+    for label in ANSWERS_TODAY:
         await chat.press(label)
     await chat.pick_slot("Завтра")
     if first:
@@ -93,7 +96,7 @@ async def test_the_age_told_is_not_asked_and_the_other_child_is_offered_by_name(
     await chat.press("Похоже на вывих")
     assert "Как получена травма" in chat.text  # neither «для кого», nor «сколько лет»
     assert (await session(chat))["dialog"]["age_months"] == 84
-    for label in ANSWERS:
+    for label in ANSWERS_TODAY:  # «сегодня» was said about both: «Когда?» is not asked
         await chat.press(label)
     await chat.pick_slot("Завтра")
     await chat.press(texts.CONSENT_YES)
@@ -108,7 +111,7 @@ async def test_the_age_told_is_not_asked_and_the_other_child_is_offered_by_name(
     await chat.press("Похоже на вывих")
     assert "Как получена травма" in chat.text
     assert (await session(chat))["dialog"]["age_months"] == 120
-    for label in ANSWERS:
+    for label in ANSWERS_TODAY:
         await chat.press(label)
     await chat.pick_slot("Завтра")
     # «Кого записываем?» with Мария on it is not shown: «Записываю Ваню» and the name at once
