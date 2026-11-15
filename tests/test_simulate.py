@@ -439,3 +439,56 @@ def test_for_whom_asked_before_a_route_is_not_lost(env: sim.Env) -> None:
     booked_on = step(3, Action("press", "Для себя"), Shown("Шаг 3 из 5", ("Да",)),
                      step="question", wizard=True)  # fmt: skip
     assert sim.LOST in rules(made(BY_KEY["chest"], told, asked, booked_on), env)
+
+
+# --- a booking deleted in the dialog; a check that fails ----------------------------------------
+
+BOOKED = {"id": 1, "status": "active", "date": "13.11", "day": "2026-11-13", "time": "11:00",
+          "doctor": "Ярунин Андрей Александрович", "visit": "primary", "patient_id": 1,
+          "audience": "adult"}  # fmt: skip
+MENU_SHOWN = Shown("Ваши данные удалены.", ("Записаться в травмпункт",))
+
+
+def with_a_booking(key: str, *steps: Step) -> Dialog:
+    dialog = made(BY_KEY[key], *steps)
+    dialog.before = [dict(BOOKED)]
+    return dialog
+
+
+def test_a_booking_deleted_with_the_data_is_not_kept(env: sim.Env) -> None:
+    """Full run 6 (15.11): a patient who came to cancel had his data deleted with /forget, the
+    booking was no longer in the base, and the check of the goal fell with KeyError — with it
+    the whole run of 58 dialogs. A booking that is gone is cancelled, not kept."""
+    last = step(2, Action("press", "Да, удалить"), MENU_SHOWN)  # no bookings are left
+    assert sim._goal(with_a_booking("cancel_rude", last), env.clinic) is None
+    kept = with_a_booking("move_then_keep", last)
+    assert sim._goal(kept, env.clinic) == "запись не осталась как была"
+    assert sim._goal(with_a_booking("move_day", last), env.clinic) == "запись не перенесена"
+
+
+async def test_a_check_that_fails_does_not_lose_the_run(env: sim.Env, monkeypatch) -> None:
+    def failing(dialog: Dialog, *args: object) -> list:
+        if dialog.persona.key == "elder":
+            raise KeyError(1)
+        return []
+
+    monkeypatch.setattr(sim, "check", failing)
+    seen: list[str] = []
+    personas = [BY_KEY["elder"], BY_KEY["three_words"]]
+    results = await sim.run(
+        personas, ScriptedPatient, env, on_done=lambda d, v: seen.append(d.persona.key)
+    )
+    by_key = {dialog.persona.key: (dialog, violations) for dialog, violations in results}
+    assert set(by_key) == set(seen) == {"elder", "three_words"}  # both are in the results
+    broken, violations = by_key["elder"]
+    assert broken.ended == "patient" and "KeyError" in broken.note and violations == []
+    assert by_key["three_words"][0].ended != "patient"
+
+
+async def test_the_dialogs_are_saved_while_the_run_goes_on(env: sim.Env, tmp_path) -> None:
+    done = [(made(BY_KEY["elder"], step(1, Action("say", "Здравствуйте"), MENU_SHOWN)), [])]
+    path = tmp_path / sim.UNFINISHED
+    sim.save_raw(done, {"at": "15.11.2026 21:00 (Екатеринбург)", "unfinished": True}, path)
+    assert sim.run_file("unfinished", tmp_path) == path
+    results, meta = await sim.recheck(path, env)
+    assert [d.persona.key for d, _ in results] == ["elder"] and meta["unfinished"]

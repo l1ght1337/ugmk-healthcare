@@ -68,6 +68,9 @@ TURN_SECONDS = 40  # the clinic's clock moves on with every turn of the patient
 REPORT = PROJECT_ROOT / "docs" / "simulation_report.md"
 RUNS_DIR = PROJECT_ROOT / "data"  # simulation.runN.jsonl — every full run is kept (not in git)
 PARTIAL = "simulation.partial.jsonl"  # a run of some personas: overwritten, not numbered
+# the dialogs of a run that is going on, saved as each one ends: a run that falls keeps what
+# it has paid for (``--recheck --run unfinished``); removed when the run is written
+UNFINISHED = "simulation.unfinished.jsonl"
 _RUN_FILE = re.compile(r"^simulation\.run(\d+)\.jsonl$")
 BOOKED_DAYS = ("Завтра", "Вс")  # the days of the visits booked before the dialog
 
@@ -553,7 +556,14 @@ def _goal(dialog: Dialog, clinic: ClinicData) -> str | None:
     if persona.goal == "two":
         patients = {b["patient_id"] for b in new}
         return None if len(patients) >= 2 else f"записано пациентов: {len(patients)} из 2"
-    kept = [b for b in before.values() if after[b["id"]]["status"] == "active"]
+
+    def status(booking: dict[str, Any]) -> str:
+        """A booking the dialog began with may be gone from the base: the patient had his
+        data deleted (/forget). It is not kept and not moved; it is cancelled."""
+        now = after.get(booking["id"])
+        return now["status"] if now is not None else "deleted"
+
+    kept = [b for b in before.values() if status(b) == "active"]
     moved = [
         b for b in kept if (after[b["id"]]["day"], after[b["id"]]["time"]) != (b["day"], b["time"])
     ]
@@ -564,7 +574,7 @@ def _goal(dialog: Dialog, clinic: ClinicData) -> str | None:
             return None
         return "запись не осталась как была"
     if persona.goal == "cancel":
-        gone = [b for b in before.values() if after[b["id"]]["status"] != "active"]
+        gone = [b for b in before.values() if status(b) != "active"]
         if persona.day is None:
             return None if len(gone) == len(before) else f"отменено {len(gone)} из {len(before)}"
         wanted = (dialog.today + timedelta(days=persona.day)).isoformat()
@@ -947,7 +957,13 @@ async def run(
     async def one(persona: Persona) -> tuple[Dialog, list[Violation]]:
         async with gate:
             dialog = await play(persona, make_patient(), env, turns=turns)
-            violations = check(dialog, env.kb, env.clinic)
+            try:
+                violations = check(dialog, env.kb, env.clinic)
+            except Exception as exc:  # a rule that falls is the simulator's fault: this
+                # dialog is reported apart, the others of the run are kept
+                dialog.ended = "patient"
+                dialog.note = f"проверка правил упала: {type(exc).__name__}: {exc}"
+                violations = []
             if on_done is not None:
                 on_done(dialog, violations)
             return dialog, violations
@@ -974,9 +990,11 @@ def next_run(folder: Path = RUNS_DIR) -> Path:
 
 
 def run_file(which: str | None, folder: Path = RUNS_DIR) -> Path:
-    """``--run``: a number, «partial», or nothing for the last full run."""
+    """``--run``: a number, «partial», «unfinished», or nothing for the last full run."""
     if which == "partial":
         path: Path | None = folder / PARTIAL
+    elif which == "unfinished":
+        path = folder / UNFINISHED
     elif which is None:
         path = last_run(folder)
     else:
@@ -1065,7 +1083,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--recheck", action="store_true", help="apply the rules to a saved run again, no DeepSeek"
     )
-    parser.add_argument("--run", help="with --recheck: the run's number or «partial» (the last)")
+    parser.add_argument(
+        "--run", help="with --recheck: the run's number, «partial» or «unfinished» (a fallen run)"
+    )
     args = parser.parse_args(argv)
     if args.recheck:
         saved = run_file(args.run)
@@ -1097,6 +1117,9 @@ def main(argv: list[str] | None = None) -> None:
         first=settings.llm_first_attempt_seconds,
     )
 
+    started = datetime.now(TZ)
+    done: list[tuple[Dialog, list[Violation]]] = []
+
     def progress(dialog: Dialog, violations: list[Violation]) -> None:
         verdict = (
             "сбой симулятора"
@@ -1104,8 +1127,10 @@ def main(argv: list[str] | None = None) -> None:
             else ("нарушений: " + str(len(violations)) if violations else "прошёл")
         )
         print(f"{dialog.persona.key:16} ходов {len(dialog.steps):2}  {verdict}", flush=True)
+        done.append((dialog, violations))  # kept on the disk: a run that falls loses nothing
+        at = {"at": f"{started:%d.%m.%Y %H:%M} (Екатеринбург)", "unfinished": True}
+        save_raw(done, at, RUNS_DIR / UNFINISHED)
 
-    started = datetime.now(TZ)
     with tempfile.TemporaryDirectory() as tmp:
         env = Env(load_kb(), load_clinic_data(), bot_client, Path(tmp))
         results = asyncio.run(
@@ -1126,6 +1151,7 @@ def main(argv: list[str] | None = None) -> None:
         "seconds": int((datetime.now(TZ) - started).total_seconds()),
     }
     failed = sum(1 for d, v in results if v)
+    (RUNS_DIR / UNFINISHED).unlink(missing_ok=True)  # the run is whole: written below
     if args.only or args.limit:  # some personas: not a run to compare, the report stays
         save_raw(results, meta, RUNS_DIR / PARTIAL)
         if args.no_write:
