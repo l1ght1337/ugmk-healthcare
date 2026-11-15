@@ -3351,17 +3351,20 @@ class Conversation:
     async def _told_facts(
         self, c: Ctx, scenario_id: str, facts: dict[str, FactValue]
     ) -> dict[str, FactValue]:
-        """What was said about all the patients named answers the questions of each.
+        """What was said about a patient named, and about all of them, answers the questions.
 
-        «Мы сегодня с горки упали… К врачу ещё не обращались»: with this patient's own part
-        it is read as the answer to each question of the scenario that the complaint may
+        The patient's own part («мы с мужем сегодня в походе подвернули ноги» is the part of
+        each of the two) and what was said about nobody in particular («Мы сегодня с горки
+        упали… К врачу ещё не обращались») are read together, when the scenario of this
+        patient begins: as the answer to each question of the scenario that the complaint may
         answer (at once, one DeepSeek call per question). The answers are taken in the order
         the scenario asks; the first question the text does not answer is asked as usual,
         and so are those after it. The patient sees «Ваши ответы: …» with «Изменить ответы»
         instead of the questions answered.
         """
         person = c.s.person
-        if person is None or not c.s.shared:
+        text = ". ".join(part for part in (person.complaint, *c.s.shared) if part) if person else ""
+        if not text:
             return facts
         scenario = self.kb.scenario(scenario_id)
         # the questions the complaint may answer beforehand and has not answered yet
@@ -3372,7 +3375,6 @@ class Conversation:
         ]
         if not asked:
             return facts
-        text = ". ".join(part for part in (person.complaint, *c.s.shared) if part)
         when = self._time_words(c, scenario, text)  # «сегодня с горки упали»: by the code
         # a question the code has read in full is not sent to DeepSeek
         unread = [q for q in asked if not {f.name for f in q.fields} <= when.keys()]

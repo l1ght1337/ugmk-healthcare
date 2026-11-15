@@ -387,6 +387,41 @@ async def test_what_is_said_after_the_choice_is_not_about_all(make_chat, kb: Kno
     assert (await session(chat))["shared"] == TOLD
 
 
+async def test_what_is_said_about_us_answers_for_each(make_chat, kb: KnowledgeBase) -> None:
+    """«Мы с мужем сегодня в походе подвернули ноги»: it is the part of each of the two, and
+    it answers their questions — nothing else was said about both (the live run of couple:
+    «Как получена травма?», «Когда?» and «Обращались ли к врачу?» were asked twice)."""
+
+    def how_only(asked: dict) -> dict:
+        facts = {"assault": False} if asked["fields"] == ["assault"] else {}
+        return {**ANSWERED, "facts": facts, "unclear": not facts}
+
+    fake = ByTask(route=UNCLEAR, extract=how_only)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say("Добрый день. Мы с мужем сегодня в походе подвернули ноги, оба.")
+    assert (await session(chat))["shared"] == []
+    await chat.press("Меня")
+    await chat.press("Не знаю")
+    # her own part is read: «Как получена травма?» by DeepSeek, «Когда?» by the code
+    assert set(fake.texts_of("extract")) == {"сегодня в походе подвернули ноги"}
+    assert "Обращались ли к врачу по данному случаю?" in chat.text
+    assert "Как получена травма" not in chat.text and "Когда была получена" not in chat.text
+    await chat.press("Нет, не обращались")
+    assert chat.replies[0].text.startswith(
+        "Ваши ответы: не знаю, на что похоже; для себя; бытовая травма; в течение 7 дней"
+    )
+    await chat.press(chat.nearest().label)
+    await chat.press(texts.CONSENT_YES)
+    await chat.say("Захарова Любовь Тимофеевна, 18.11.1979")
+    await chat.contact()
+    await chat.press(texts.PAYMENT_SELF)
+    await chat.press("Записать мужа")
+    await chat.press("Не знаю")
+    assert "Обращались ли к врачу по данному случаю?" in chat.text  # the same for him
+    assert "Как получена травма" not in chat.text and "Когда была получена" not in chat.text
+
+
 async def test_the_order_said_on_who_is_first_is_a_choice(make_chat) -> None:
     chat = make_chat()
     await chat.start()
