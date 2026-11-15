@@ -27,6 +27,8 @@ PERSON_LINE = "Записываю {whom}"  # «Записываю Ваню: но
 PERSON_EDIT = "Изменить"
 BOOK_PERSON = "Записать {whom}"  # after the card, instead of «Записать ещё одного»
 BOOK_MORE = "Записать ещё одного"  # under «Спасибо!» after the booking card
+# «И сына тоже запишите» in the middle of a booking: one line, the step stays
+NAMED_LATER = "{whom} запишу следующим — после этой записи."
 NEXT_PATIENT = "Спасибо! Теперь запишем второго пациента?"
 NEXT_PATIENT_MORE = "Спасибо! Теперь запишем следующего пациента?"  # the third and those after
 WHOM_ADULT = "Для взрослого"  # «для кого» of one more booking: «Для себя» would not fit

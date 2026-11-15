@@ -107,7 +107,7 @@ from app.flow.identity import (
     parse_birth_date,
 )
 from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
-from app.flow.people import Person, find_people, merge, named_in, shared
+from app.flow.people import Person, asked_too, find_people, merge, named_in, shared
 from app.flow.safety import find_phrase, sign_passed
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import Choice, FactValue, Question, Scenario
@@ -1322,6 +1322,8 @@ class Conversation:
             found = topics.guard_scenarios(self.kb, text)
             if new := [g for g in found if g not in c.s.talk.guard_no]:
                 c.s.talk.guards = new
+        if self._named_later(c, step, text):
+            return  # «и сына тоже запишите» in the middle of a booking: his turn is next
         c.for_whom, c.more = find_audience(text), names_several(text)
         if (other := after_me(text)) is not None and await self._upcoming(c):
             # «мужа после меня»: the writer is booked already
@@ -3138,6 +3140,40 @@ class Conversation:
         if short or not person.complaint:
             return line
         return f"{line}: {markup.esc(person.complaint)}"
+
+    def _named_later(self, c: Ctx, step: str, text: str) -> bool:
+        """«И сына тоже запишите» while a booking is under way: one line — «Сына запишу
+        следующим — после этой записи.» — the step stays, and after the card the button
+        names him. On «Кого записать первым?» he joins the list on the screen.
+
+        The one being booked is not one more: «и меня тоже запишите» in a booking for the
+        writer, a name that is on the header already.
+        """
+        booking = c.s.wizard and step in WIZARD_STEPS and step != "whom"
+        if not booking or c.s.reschedule_of is not None or c.s.resume == "handoff":
+            return False
+        if names_several(text):
+            return False  # «сначала для себя, потом сына»: the order of the two, as before
+        now = c.s.person
+        # who the booking is for is known, and it is not the writer
+        other = (now is not None and bool(now.name)) or c.s.for_whom in ("child", "adult")
+        other = other or c.s.dialog.audience == "child"
+        asked = [
+            p for p in asked_too(text) if (other if not p.name else now is None or not now.same(p))
+        ]
+        if not asked:
+            return False
+        waiting = [p for p in c.s.people if not any(p.same(new) for new in asked)]
+        merge(asked, c.s.people)  # named before with an age or an injury: kept
+        if step == "first":  # nobody is chosen yet: one more button
+            c.s.people = [*waiting, *asked]
+            self._first_screen(c)
+            return True
+        c.s.people = [*asked, *waiting]  # the one just asked for is the next
+        for person in asked:
+            whom = person.whom if person.name else "Вас"
+            c.say(texts.NAMED_LATER.format(whom=whom[:1].upper() + whom[1:]))
+        return True
 
     async def _several(self, c: Ctx, step: str, text: str) -> bool:
         """A message that names two patients or more: one booking at a time.

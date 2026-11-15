@@ -63,6 +63,8 @@ _MINE = re.compile(
     r"\bу\s+меня\s+(?:двое|трое|оба|обе|дети|детей|ребята|ребят|близнец\w*|мальчик\w*|девочк\w*)\b"
 )
 _BOOKING_WORD = re.compile(r"\bзапи[сш]\w*")  # «надо записать», «запишите», «на запись»
+# «и сына тоже запишите», «ещё мужа запишите потом»: one more patient, not another one instead
+_ALSO = re.compile(r"\b(?:тоже|еще|также|заодно|следом|потом)\b")
 _SENTENCE = re.compile(r"[.!?;\n]+")
 _CLAUSE = re.compile(r"[,:]|\s—\s|\s(?:а|и|но|потом|затем)\s")
 _AGE = re.compile(r"\b\d{1,2}(?:\s*(?:лет|года|год|годика|месяц\w*|мес))?\b")
@@ -283,6 +285,32 @@ def shared(text: str) -> list[str]:
         if kept:
             parts.append(sentence.strip(" —-") if as_written else ", ".join(kept))
     return parts
+
+
+def asked_too(text: str) -> list[Person]:
+    """Who else is asked to be booked: «и сына тоже запишите», «ещё Ваню запишите, ему 10
+    лет, ногу подвернул», «и меня тоже». A sentence with a request to book, «тоже» or «ещё»
+    and a person in it; what follows about him — the age, the injury — is his. «Сына
+    запишите» without «тоже» says who the booking is for, not that he is one more."""
+    found: list[Person] = []
+    for sentence in _SENTENCE.split(text):
+        low = _norm(sentence)
+        if not (_BOOKING_WORD.search(low) and _ALSO.search(low)):
+            continue
+        clauses = _clauses(sentence)
+        # the part with the request, or the nearest part before it that names somebody
+        asks = [n for n, c in enumerate(clauses) if _BOOKING_WORD.search(_norm(c))]
+        at = next((n for n in range(asks[-1], -1, -1) if _marker(clauses[n])), None)
+        if at is None:
+            continue
+        name, audience, span, _ = _marker(clauses[at])  # type: ignore[misc]
+        # the word for the person alone, then what the sentence says after it
+        about = ", ".join([clauses[at][span[0] : span[1]], *clauses[at + 1 :]])
+        known = next((p for p in find_people(about) if p.name == name), None)
+        person = known or Person(name=name, audience=audience)  # type: ignore[arg-type]
+        if not any(p.same(person) for p in found):
+            found.append(person)
+    return found
 
 
 def named_in(text: str, people: list[Person]) -> int | None:
