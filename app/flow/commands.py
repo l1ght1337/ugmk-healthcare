@@ -732,13 +732,18 @@ def asks_urgency(text: str, words: Sequence[str], was: Sequence[str] = ()) -> bo
     questions about it."""
     t = f" {normalize(text)} "
     said = [normalize(word) for word in words if f" {normalize(word)} " in t]
-    if not said:
-        return False
     phrases = [word for word in said if " " in word]
-    if len(phrases) < len(said) and any(f" {normalize(word)} " in t for word in was):
-        return False  # «скорую вызвали», «скорая уже едет»: said with the ambulance only
-    if phrases:  # «это срочно?», «насколько опасно?» — or «опасно ли это»
-        return "?" in text or any("ли" in phrase.split() for phrase in phrases)
+    singles = [word for word in said if " " not in word]
+    if singles and any(f" {normalize(word)} " in t for word in was):
+        # «скорую вызвали», «скорая уже едет», «я в скорую позвоню»: nothing to weigh about
+        # the ambulance — the rest of the message may still ask («это опасно?»)
+        singles = []
+    if phrases and ("?" in text or any("ли" in phrase.split() for phrase in phrases)):
+        return True  # «это срочно?», «насколько опасно?» — or «опасно ли это»
+    if not singles:
+        return False
+    if "?" in text and any(word.isdigit() for word in singles):
+        return True  # «сразу 103, верно?», «звонить 112?»
     # the ambulance: whether to call it — «скорую вызывать», «ехать самой или скорую?»; «как
     # вызвать скорую?» and «у клиники есть своя скорая?» ask about the service, not the state
     if re.search(r"\bкак\s+(?:\w+\s+)?вызв\w+|\bвызв\w+\s+(?:\w+\s+)?как\b", t):

@@ -540,6 +540,7 @@ class Ctx:
     text: str | None = None  # the message of this turn, if it is a text
     # «а мою перенесите»: not the booking of those the message names for other things
     not_of: tuple[Person, ...] = ()
+    urgent: bool = False  # this turn began with the template about urgency: 103 is said
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         """``text`` may carry the marks of app/bot/markup.py; what did not come from the
@@ -2158,11 +2159,19 @@ class Conversation:
         and however many times — and the address of the route under it, if one was given.
         The step and its buttons stay."""
         emergency = self.clinic.clinic.emergency
-        asked = asks_urgency(text, emergency.asks, emergency.ambulance_was)
+        asked = asks_urgency(text, emergency.asks, emergency.not_weighed)
         if step in MESSAGE_STEPS or not asked:
             return False
         said = [texts.URGENCY]
         done = self._last_route(c)
+        complaint = self._injury_in(text) is not None or topics.guard_scenarios(self.kb, text)
+        if done is None and complaint and step in ("idle", *START_STEPS):
+            # «наступила на иглу от шприца… Это опасно? Мне нужно к вам приехать?»: the
+            # template does not stand in for the route. It is the first line, and the
+            # complaint goes its usual way — to its route or to the step of its scenario
+            c.say(texts.URGENCY)
+            c.urgent = True
+            return False
         if done is not None:
             places = "\n".join(render.place_line(p, self._city()) for p in done.places)
             said += ["", texts.ROUTE_GO, places, texts.ROUTE_THERE]
@@ -2889,7 +2898,10 @@ class Conversation:
         c.notices_said = bool(said)  # the notice is not repeated before the time is chosen
         if not said and scenario_id in self.care:
             said = [self.care[scenario_id]]
-        c.say("\n\n".join([*said, texts.MEDICAL_ASIDE]))
+        if not c.urgent:  # «Оценить состояние я не могу… 103 или 112» is said already
+            said.append(texts.MEDICAL_ASIDE)
+        if said:
+            c.say("\n\n".join(said))
 
     async def _by_words(
         self, c: Ctx, area: str | None, words: list[str], *, advice: bool = False

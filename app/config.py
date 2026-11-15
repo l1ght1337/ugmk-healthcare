@@ -196,9 +196,17 @@ class Emergency(_Data):
     # the ambulance has been called or has been there: «вызвали», «едет», «увезла» — the
     # template about urgency is not said
     ambulance_was: tuple[str, ...] = ()
+    # what the patient is going to do — «вызову скорую», «в скорую позвоню» — is not asked
+    ambulance_will: tuple[str, ...] = ()
     # after any other phrase of the list no words switch the state off: «Меню» or /start
     over: tuple[EmergencyOver, ...] = ()
     routes: tuple[EmergencyRoute, ...] = ()
+
+    @property
+    def not_weighed(self) -> tuple[str, ...]:
+        """Next to these a word about the ambulance asks nothing: it has been called, or the
+        patient says he will call it."""
+        return (*self.ambulance_was, *self.ambulance_will)
 
     @model_validator(mode="after")
     def _known_phrases(self) -> Emergency:

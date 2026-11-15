@@ -52,6 +52,10 @@ ASKS = [  # the patients of run 6, word for word
     "скорую вызывать или сами доедем",
     "нужна скорая или нет",
     "муж уже едет к вам, это опасно?",  # «едет» is not about an ambulance here
+    # run 7, ent: «103» and «112» in a question ask about urgency too
+    "Тогда последнее: если бусина сама не выйдет и дышать станет тяжелее — сразу 103, верно?",
+    "звонить 112?",
+    "это опасно? я тогда скорую вызову",  # the question stays a question
 ]
 NOT_ASKED = [
     "поняла, спасибо. вызову скорую тогда, раз вялый",  # she has decided: not a question
@@ -64,25 +68,33 @@ NOT_ASKED = [
     "скорая приезжала, сказали идти в травмпункт, надо записаться",
     "скорая увезла мужа, нужно ли отменить запись?",
     "это серьёзно меняет дело",  # no question in it
+    # run 7, tick: what the patient is going to do is not a question about urgency
+    "Я спрашиваю простое: можно приехать в травмпункт без записи или нет? Если не знаете — "
+    "так и скажите, я в скорую позвоню",
+    "Всё, хватит. Я поняла, что от вас толку нет, позвоню в скорую сама.",
+    "ладно, вызову скорую",
+    "позвоню 103, если хуже станет",
 ]
 
 
 @pytest.mark.parametrize("said", ASKS)
 def test_a_question_about_urgency(clinic: ClinicData, said: str) -> None:
     emergency = clinic.clinic.emergency
-    assert asks_urgency(said, emergency.asks, emergency.ambulance_was)
+    assert asks_urgency(said, emergency.asks, emergency.not_weighed)
 
 
 @pytest.mark.parametrize("said", NOT_ASKED)
 def test_what_is_not_a_question_about_urgency(clinic: ClinicData, said: str) -> None:
     emergency = clinic.clinic.emergency
-    assert not asks_urgency(said, emergency.asks, emergency.ambulance_was)
+    assert not asks_urgency(said, emergency.asks, emergency.not_weighed)
 
 
 def test_the_words_of_the_customer_are_in_the_data(clinic: ClinicData) -> None:
     emergency = clinic.clinic.emergency
     assert {"это серьезно", "серьезно ли", "опасно ли", "срочно ли"} <= set(emergency.asks)
     assert {"вызвали", "едет", "приезжала", "увезла"} <= set(emergency.ambulance_was)
+    assert {"103", "112"} <= set(emergency.asks)
+    assert {"позвоню", "вызову"} <= set(emergency.ambulance_will)
 
 
 async def routed_infant(make_chat, kb: KnowledgeBase, *replies):
@@ -245,3 +257,52 @@ async def test_after_the_route_of_a_burn_the_call_is_not_waited_for_either(
     await chat.say("а долго ждать звонка?")
     assert "Администраторы отвечают с 08:00 до 20:00" in chat.text
     assert NO_WAIT in chat.text.split("\n")
+
+
+# --- the template does not stand in for the route (run 7, needle) ---------------------------------
+
+NEEDLE = (
+    "Здравствуйте! Я сегодня во дворе наступила на иглу от шприца, проколола стопу. Это опасно? "
+    "Мне нужно к вам приехать?"
+)
+AIDS = "📍 Центр борьбы со СПИДом, ул. Ясная, 46"
+
+
+async def test_a_complaint_with_a_question_about_urgency_gets_its_route_at_once(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    """Run 7: the message got «Оценить состояние я не могу» and the menu; the route came on
+    the third turn. With a complaint in the message the template is the first line, then the
+    message goes its usual way."""
+    needle = {"type": "complaint", "area": "limb", "scenario": "needle_injury",
+              "candidates": ["needle_injury"], "facts": {}, "advice": True}  # fmt: skip
+    chat = make_chat(assistant=FakeDeepSeek(needle).assistant(kb))
+    await chat.start()
+    await chat.say(NEEDLE)
+    assert chat.replies[0].text == f"{CANNOT}\n{CALL}"
+    assert AIDS in chat.replies[-1].text  # the route, in the same turn
+    said = "\n".join(reply.text for reply in chat.replies)
+    assert said.count("103 или 112") == 1  # said once: not «не могу давать рекомендации» too
+
+
+async def test_a_complaint_that_is_booked_goes_on_to_its_step(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say("Подвернул ногу, это опасно? Можно к вам сегодня?")
+    assert chat.replies[0].text == f"{CANNOT}\n{CALL}"
+    state = await session(chat)
+    assert state["wizard"] and "Шаг 1 из 5" in chat.replies[-1].text
+
+
+async def test_what_the_patient_is_going_to_do_is_not_answered_with_the_template(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    """Run 7, tick: «можно приехать без записи или нет? …я в скорую позвоню» got the template
+    instead of the answer."""
+    answer = {"found": True, "answer": "Приём по предварительной записи."}
+    fake = FakeDeepSeek({"type": "clinic_question"}, answer)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say(NOT_ASKED[-4])
+    assert chat.replies[0].text == "Приём по предварительной записи."
+    assert CANNOT not in chat.text

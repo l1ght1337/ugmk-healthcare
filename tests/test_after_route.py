@@ -337,7 +337,11 @@ async def test_go_or_wait_after_the_route_is_a_template(make_chat, kb: Knowledge
         said.append(only.text)
         assert "Шаг" not in only.text
     assert said[0] == NO_WAIT  # the call is with the administrators: not to be waited for
-    assert all(a != b for a, b in pairwise(said))  # never the same line twice in a row
+    # never the same line twice in a row — but for the template about urgency: «скорую
+    # вызывать?» and «103 звонить или нет?» get it however many times they are asked
+    urgent = texts.URGENCY.split(".")[0]
+    assert all(a != b or urgent in a for a, b in pairwise(said))
+    assert sum(urgent in line for line in said) == 2
     assert all(AIDS in line for line in said)
     assert fake.requests == []  # the words decide, DeepSeek is not asked
     assert len(chat.admin) == 1  # nothing was added to the request
