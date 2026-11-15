@@ -31,6 +31,14 @@ LIVE = [  # the last messages of the patients in the three runs, word for word
     ("Спасибо большое, обоих записали. Больше ничего не нужно", "thanks"),
     ("Спасибо большое, теперь оба записаны.", "thanks"),
 ]
+NEGATED = [  # a command with «не» before or after it is not a command (the final run of couple)
+    ("Нет, больше никого записывать не надо. Спасибо большое, оба записаны, до свидания.", "bye"),
+    ("Больше никого записывать не надо. Спасибо, до свидания", "bye"),
+    ("Нет, не надо ничего передавать, всё хорошо. До свидания!", "bye"),
+    ("Спасибо, отменять ничего не нужно", "thanks"),
+    ("Спасибо, администратора звать не надо", "thanks"),
+    ("Спасибо, переносить не буду, до свидания", "bye"),
+]
 LONG = (
     "Ну всё, спасибо Вам огромное, очень выручили, а то мы с утра не знали, куда бежать и что "
     "вообще делать в такой ситуации, теперь хоть понятно, во сколько и куда приходить и что с "
@@ -47,6 +55,8 @@ NOT_A_GOODBYE = [
     "Спасибо, сын ещё упал вчера, рука опухла",
     "Да не надо мне новую запись оформлять, я уже записан! Всё, спасибо, до свидания.",
     "спасибо доктору Кузнецову, всё прошло отлично",  # a word about the visit: to the admins
+    "Спасибо, отменять не надо, лучше перенесите на завтра",  # one is refused, one is asked
+    "Спасибо, не надо отменять. Запишите ещё сына",
 ]
 
 
@@ -55,7 +65,7 @@ def read(said: str) -> str | None:
     return find_small_talk(said) or says_goodbye(said)
 
 
-@pytest.mark.parametrize(("said", "kind"), [*LIVE, (LONG, "bye")])
+@pytest.mark.parametrize(("said", "kind"), [*LIVE, *NEGATED, (LONG, "bye")])
 def test_thanks_and_a_goodbye_with_nothing_asked(said: str, kind: str) -> None:
     assert read(said) == kind
 
@@ -79,7 +89,7 @@ async def test_thanks_on_a_question_of_the_scenario_is_its_answer(make_chat) -> 
     assert "Обращались ли к врачу" in chat.text
 
 
-@pytest.mark.parametrize(("said", "kind"), LIVE)
+@pytest.mark.parametrize(("said", "kind"), [*LIVE, *NEGATED[:3]])
 async def test_after_the_booking_the_bot_says_goodbye(
     make_chat, kb: KnowledgeBase, said: str, kind: str
 ) -> None:

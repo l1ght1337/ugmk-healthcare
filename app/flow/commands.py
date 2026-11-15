@@ -513,6 +513,17 @@ _BOOKED_SAID = re.compile(
     r"\bзаписа(?:н|на|но|ны|л|ла|ли|лся|лась|лись)\b"
     r"|\bзапис[ьи]\s+есть\b|\bесть\s+запис[ьи]\b"
 )
+# A command with «не» is not a command: «больше никого записывать не надо», «не надо ничего
+# передавать», «отменять ничего не нужно», «переносить не буду»
+_COMMAND_VERB = (
+    r"(?:запис\w+|запиш\w+|передава\w+|передать|передай\w*|звать|позвать|позови\w*|"
+    r"отмен\w+|перенос\w+|перенес\w+|перезапис\w+)"
+)
+_NOT_WANTED = r"не\s+(?:надо|нужно|нужна|нужен|стоит|требуется|хочу|буду|будем)"
+_NEGATED = re.compile(
+    rf"\b{_NOT_WANTED}\s+(?:\w+\s+){{0,2}}?{_COMMAND_VERB}\b"
+    rf"|\b{_COMMAND_VERB}\s+(?:\w+\s+){{0,2}}?{_NOT_WANTED}\b"
+)
 # «хотела узнать про парковку», «подскажите…»: a question with no mark at its end
 _WANTS_TO_KNOW = re.compile(r"\b(?:узнать|подскаж\w+|скажите|уточн\w+|интересу\w+)\b")
 # «спасибо доктору Кузнецову, всё прошло отлично»: a word about the visit — to the administrators
@@ -552,8 +563,17 @@ def normalize(text: str) -> str:
     return " ".join(re.sub(r"[^\w]+", " ", text.lower().replace("ё", "е")).split())
 
 
+def _asked_for(t: str) -> bool:
+    """Something is asked for in a normalized text: a booking, a move, a word to the
+    administrators — or it is a complaint. What is said to be done («оба записаны») and
+    what is refused («записывать не надо») is not asked for."""
+    if _NO_NEW_BOOKING.search(t):
+        return True  # «не надо мне новую запись, я уже записан»: its own reader shows the old one
+    return _ASKS_FOR.search(_NEGATED.sub(" ", _BOOKED_SAID.sub(" ", t))) is not None
+
+
 def find_command(text: str) -> MenuAction | None:
-    t = normalize(text)
+    t = _NEGATED.sub(" ", normalize(text))  # «отменять не надо» is not «отмените»
     another = _BOOKS_ANOTHER.search(t) is not None and _MOVE_INTENT.search(t) is None
     another = another and re.search(rf"\b{_CANCEL}\b", t) is None
     for action, pattern in COMMANDS:
@@ -601,7 +621,7 @@ def find_small_talk(text: str) -> SmallTalk | None:
     words = len(t.split())
     if "?" in text or words > LONG_BYE_WORDS:
         return None
-    if _ASKS_FOR.search(_BOOKED_SAID.sub(" ", t)) or _QUESTION_START.search(t):
+    if _asked_for(t) or _QUESTION_START.search(t):
         return None  # something is asked for: the message is not only a goodbye
     waiting = _WAITING.search(t) is not None
     if words > SMALL_TALK_WORDS:  # a long one: «спасибо» with «до свидания» as its last
@@ -629,7 +649,7 @@ def says_goodbye(text: str) -> SmallTalk | None:
         return None
     if any(_QUESTION_START.search(normalize(part)) for part in _SENTENCE_END.split(text)):
         return None  # «Спасибо, оба записаны. А парковка у вас есть»
-    if _ASKS_FOR.search(_BOOKED_SAID.sub(" ", t)) or _THANKS_TO.search(t):
+    if _asked_for(t) or _THANKS_TO.search(t):
         return None  # a complaint, a request, a word about the visit for the administrators
     if find_command(text) is not None:
         return None  # «спасибо, покажите мои записи»
