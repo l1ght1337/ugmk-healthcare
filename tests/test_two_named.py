@@ -307,3 +307,20 @@ async def test_both_with_nobody_named_still_starts_one(make_chat) -> None:
     await chat.press(texts.MENU_BOOK)
     await chat.say("нас двое, обоих надо записать, упали вчера")
     assert texts.ONE_BY_ONE in chat.text and (await session(chat))["more"]
+
+
+async def test_i_hurt_my_wrist_and_my_son_his_knee(make_chat) -> None:
+    """The final live run of self_and_son: «я повредил запястье… И сын, 12 лет, ушиб колено» —
+    the writer was not found, the booking went on for nobody in particular, and the son was
+    booked from the first question again: 14 turns."""
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await chat.say(
+        "Здравствуйте. Сегодня упали на катке: я повредил запястье, похоже на перелом. И сын, "
+        "12 лет, ушиб колено. Нужно записать обоих."
+    )
+    assert chat.replies[-1].text == f"{texts.ONE_BY_ONE} {texts.WHO_FIRST}"
+    assert chat.labels()[:2] == ["Меня", "Сына, 12 лет"]
+    state = await session(chat)
+    assert state["shared"] == ["Сегодня упали на катке"]

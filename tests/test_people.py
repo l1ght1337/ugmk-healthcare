@@ -92,3 +92,30 @@ def test_a_later_message_adds_the_age_and_what_happened() -> None:
     assert (waiting[0].age_months, waiting[0].complaint) == (144, "")
     merge(waiting, find_people("у сына колено ушиб, а Пете 5 лет"))  # a new name is not added
     assert [(p.name, p.complaint) for p in waiting] == [("сын", "колено ушиб")]
+
+
+# --- «я», «мне» with an injury: the writer is a patient too -------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("said", "people"),
+    [
+        # the final live run of self_and_son: only the son was found, the writer was not
+        ("Здравствуйте. Сегодня упали на катке: я повредил запястье, похоже на перелом. И сын, "
+         "12 лет, ушиб колено. Нужно записать обоих.",
+         [("", "self", None, "повредил запястье, похоже на перелом"),
+          ("сын", "child", 144, "ушиб колено")]),
+        ("Я упал с лестницы, а сын ногу подвернул",
+         [("", "self", None, "упал с лестницы"), ("сын", "child", None, "ногу подвернул")]),
+        ("Мне прищемило палец дверью, и дочке тоже",
+         [("", "self", None, "прищемило палец дверью"), ("дочка", "child", None, "")]),
+        ("Я руку сломала, Ваня ногу подвернул",
+         [("", "self", None, "руку сломала"), ("Ваня", None, None, "ногу подвернул")]),
+        # «я» with no injury next to it is not a patient
+        ("Я сейчас на работе, сын упал с качели", [("сын", "child", None, "упал с качели")]),
+        ("Я на 13:30, муж на 14:30", [("муж", "adult", None, "")]),
+        ("Мне кажется, сын сломал руку", [("сын", "child", None, "сломал руку")]),
+    ],
+)  # fmt: skip
+def test_the_writer_with_an_injury_is_a_patient(said: str, people: list) -> None:
+    assert told(said) == people

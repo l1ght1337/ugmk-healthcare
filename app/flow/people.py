@@ -57,6 +57,8 @@ _RELATIVES = tuple(
 )
 # The writer as a patient: «у меня…», «для себя», «сначала меня», «мне 44».
 _SELF = re.compile(r"\bу\s+меня\b|\bдля\s+себя\b|\bсебя\b|(?<!у\s)\bменя\b|\bмне\s+\d{1,2}\b")
+# «я повредил запястье», «я упал», «мне прищемило палец»: the writer, by any word of an injury
+_ME = re.compile(r"\b(?:я|мне)\b")
 _ME_TOO = re.compile(r"(?<!у\s)\bменя\b|\bсебя\b")  # next to a relative, in the same words
 # «у меня двое детей упали», «у меня дети с горки упали»: whose they are, not who is hurt
 _MINE = re.compile(
@@ -133,6 +135,8 @@ def _marker(clause: str) -> tuple[str, str | None, tuple[int, int], str | None] 
             return name, None, found.span(), found["with"]
     if (found := _SELF.search(low)) and not _MINE.search(low):
         return "", "self", found.span(), None
+    if (found := _ME.search(low)) and _about_injury(low[: found.start()] + low[found.end() :]):
+        return "", "self", found.span(), None  # «я повредил запястье»: hurt, so a patient
     return None
 
 
