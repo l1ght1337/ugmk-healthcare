@@ -2172,10 +2172,15 @@ class Conversation:
     async def _on_short_text(self, c: Ctx, step: str, text: str) -> bool:
         """«Не знаю», «ближайшее», «другое время», a bare «да» with nothing asked."""
         # «не знаю, я же не врач», «просто ушиб» on «На что больше похоже?»: the button «Не
-        # знаю», by the words that stand with it; DeepSeek is not asked
-        typed_answer = step == "topic" and c.s.wizard
-        item = topics.said_item(self.kb, c.s.menu, text) if typed_answer else None
+        # знаю», by the words that stand with it — and any text that names none of the
+        # answers and asks nothing («нога опухла, хромает»); DeepSeek is not asked
+        typed_answer = step == "topic" and c.s.wizard and yes_no(text) is None
+        item = None
+        if typed_answer:
+            item = topics.said_item(self.kb, c.s.menu, text)
+            item = item or topics.unsure_item(self.kb, c.s.menu, text, c.s.area)
         if item is not None and not (is_question(text) or asks_advice(text)):
+            self._keep_said(c, text)  # «сегодня упал, нога опухла»: read for the questions
             await self._on_topic(c, item.id)
             return True
         if step in START_STEPS and is_unsure(text):  # the topics as buttons

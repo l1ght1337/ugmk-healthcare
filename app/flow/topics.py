@@ -212,7 +212,7 @@ def stays(
 KIND_WORDS: dict[str, tuple[str, ...]] = {
     "dislocation": ("вывих",),
     "fracture": ("перелом", "слома"),
-    "ligament_rupture": ("растяж", "разрыв", "связк", "порва"),
+    "ligament_rupture": ("растяж", "растян", "разрыв", "связк", "порва"),
 }
 
 
@@ -236,6 +236,29 @@ def said_item(kb: KnowledgeBase, menu_id: str | None, text: str) -> MenuItem | N
         return None
     others = {i.scenario for i in menu.items if i is not found and i.scenario in KIND_WORDS}
     return None if any(names_kind(sid, text) for sid in others if sid) else found
+
+
+def unsure_item(
+    kb: KnowledgeBase, menu_id: str | None, text: str, area: str | None = None
+) -> MenuItem | None:
+    """«На что больше похоже?»: a text that names none of the answers is the button «Не знаю».
+
+    «Нога опухла, хромает сильно» is not a choice between a dislocation, a fracture and the
+    ligaments, and the bot does not read symptoms into one. An answer that is named («наверное
+    перелом», «ничего не сломано»), another injury («это ожог») and another part of the
+    body are not «не знаю»: they go on as before.
+    """
+    menu = kb.topics.menus.get(menu_id or "")
+    unsure = next((i for i in menu.items if i.unsure), None) if menu else None
+    if menu is None or unsure is None:
+        return None
+    inside = {i.scenario for i in menu.items if i.scenario}
+    if any(names_kind(sid, text) for sid in inside if sid in KIND_WORDS):
+        return None
+    if any(sid not in inside for sid in guess_candidates(text)):
+        return None
+    named = guess_area(text)
+    return None if named is not None and area is not None and named != area else unsure
 
 
 def area_facts(kb: KnowledgeBase, scenario_id: str, area: str | None) -> dict[str, FactValue]:

@@ -8,6 +8,11 @@ item in kb/scenarios/_menu.json), whole words, every form written out; the code 
 DeepSeek is not asked. A text that names a dislocation, a fracture or the ligaments is not
 «не знаю»: it goes on as before.
 
+Since the last round (15.11) the rule is wider: on «На что больше похоже?» any text that
+names none of the answers (вывих, перелом, связки, растяжение and their forms: сломал,
+вывихнул, порвал, растянул) and asks nothing is the button «Не знаю». «Нога опухла, хромает
+сильно» is not a choice between them, and the bot does not read symptoms into one.
+
 The clinic clock is Thursday, 12 November 2026, 12:00.
 """
 
@@ -36,13 +41,24 @@ SAID = [  # the patients of the live runs, word for word
     "просто ушиб",
     "Ушиб",
     "Колено ушиб на катке, упал",
+    # none of the words: the symptoms are not read into an answer (the final live runs)
+    "Ногу подвернул, наступить больно, хромает",
+    "Нога опухла и он на неё не встаёт почти, хромает сильно",
+    "Сегодня днём с горки упал, подвернул ногу. Нога опухла, хромает сильно",
+    "Тоже предполагаю, врач его не смотрел",
 ]
 NOT_SAID = [
     "Просто ушиб, колено болит. Ни вывиха, ни перелома вроде нет.",  # names two of them
     "Не знаю, наверное растяжение",
     "не знаю, может перелом?",
     "ушиб, а что делать до приёма?",  # asks for advice: answered as before
-    "Ногу подвернул, наступить больно, хромает",  # none of the words
+    "Нога опухла немного. Думаю, просто подвернул, ничего не сломано.",  # «сломано» is named
+    "Наверное, связки потянул",
+    "скорее всего растянул",
+    "а это надолго?",  # a question
+    "на самом деле это ожог",  # another injury: not one of these four
+    "порезал ещё руку стеклом",
+    "а ещё голова болит",  # another part of the body
 ]
 
 
@@ -69,7 +85,8 @@ async def test_the_words_press_the_button(make_chat, kb: KnowledgeBase, said: st
     assert "На что больше похоже?" not in chat.text
     await chat.press(texts.AUDIENCE_SELF)
     for label in ("Бытовая травма", "В течение 7 дней", "Нет, не обращались"):
-        await chat.press(label)
+        if label in chat.labels():  # «сегодня» in the text that pressed the button is read
+            await chat.press(label)
     assert chat.replies[0].text.startswith(f"Ваши ответы: {texts.SUMMARY_UNSURE}; для себя")
 
 

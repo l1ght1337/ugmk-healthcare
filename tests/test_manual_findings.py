@@ -63,12 +63,13 @@ async def test_the_dialog_of_item_2(make_chat, kb: KnowledgeBase) -> None:
     assert FALL in chat.text and WISH in chat.text  # the area is known: straight to the kinds
     assert "своими словами" not in chat.text
     assert chat.labels()[:2] == ["Похоже на вывих", "Похоже на перелом"]
-    await chat.say("болит рука")  # nothing narrower: the same choice, and a line why
-    why, screen = chat.replies
-    assert why.text == "Подскажите, пожалуйста, что случилось с рукой?" and not why.buttons
-    assert FALL in screen.text and WISH in screen.text  # not back to «Что случилось с рукой…»
-    assert chat.labels()[:2] == ["Похоже на вывих", "Похоже на перелом"]
-    assert (await session(chat))["wish"]["doctor"]
+    # none of the answers is named: it is the button «Не знаю», the questions begin (the
+    # last round of 15.11; before, the same choice was shown again with a line why)
+    await chat.say("болит рука")
+    state = await session(chat)
+    assert state["picked"] == "unsure" and state["dialog"]["scenario_id"] == "dislocation"
+    assert FALL not in chat.text and WISH in chat.text
+    assert state["wish"]["doctor"]
 
 
 @pytest.mark.parametrize(

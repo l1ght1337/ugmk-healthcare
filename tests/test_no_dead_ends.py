@@ -259,6 +259,7 @@ OTHER_TOPICS = "меню «Другое»"
 DESCRIBE = "«Опишите своими словами»"
 START_SCREENS = (m.COMPLAINT, LIMB_TOPICS, FALL_TOPICS, OTHER_TOPICS, DESCRIBE)
 SCREENS = (*m.WIZARD, *START_SCREENS[1:])
+START = ("complaint", "topic", "describe")
 DESCRIPTIONS = (
     "ударился болит сильно",
     "болит рука",
@@ -350,7 +351,11 @@ async def test_description_on_step_1_is_not_answered_with_describe_it(
         await chat.say(phrase)
         where = f"«{phrase}» на шаге {screen}, {reading}:\n{chat.text}"
         now = await session(chat)
-        assert now["wizard"] and now["step"] in ("complaint", "topic", "describe"), where
+        # on «На что больше похоже?» a description names none of the answers: it is the button
+        # «Не знаю», the scenario begins (the last round of 15.11); elsewhere step 1 goes on
+        steps = ("audience", "question") if screen == FALL_TOPICS else START
+        assert now["wizard"] and now["step"] in steps, where
+        assert screen != FALL_TOPICS or now["picked"] == "unsure", where
         assert now["wish"] and now["wish"]["doctor"] == saved_wish["doctor"], where
         assert "Пожелание: к Ярунину А. А., завтра" in chat.text and chat.buttons(), where
         if reading in COMPLAINT_READINGS:  # read as a complaint: never «опишите своими словами»
