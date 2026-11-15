@@ -199,7 +199,7 @@ async def test_my_bookings_by_the_button_is_as_it_was(make_chat) -> None:
     date, time = when(booking)
     for _ in range(2):  # a button may be pressed twice: the same list
         await chat.data("m:my")
-        assert chat.text.startswith(f"{texts.MY_ONE}\n{date} в {time} — ")
+        assert chat.text.startswith(f"{texts.MY_ONE}\nсегодня, {date} в {time} — ")
 
 
 def test_why_move_anything_keeps_the_booking() -> None:

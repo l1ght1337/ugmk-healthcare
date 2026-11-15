@@ -292,6 +292,13 @@ class AfterRoute(_Data):
     address: tuple[str, ...] = ()  # «куда конкретно?» of a route that has no address
 
 
+class MoveRelative(_Data):
+    """«Пораньше», «попозже» at a move: a wish relative to the time of the visit."""
+
+    earlier: tuple[str, ...] = ()
+    later: tuple[str, ...] = ()
+
+
 class ClinicFlags(_Data):
     rabies_vaccine_available: bool
     control_visit_after_days: int = Field(gt=0, le=60)
@@ -304,6 +311,8 @@ class ClinicFlags(_Data):
     booking_holds: tuple[str, ...] = ()
     # «любое время», «выберите сами» on a step of the time: the button «Ближайшее»
     any_time: tuple[str, ...] = ()
+    # «перенесите на пораньше»: only the times earlier (later) than the visit that is moved
+    move_relative: MoveRelative = MoveRelative()
     after_route: AfterRoute = AfterRoute()
     injury_time: InjuryTime
     emergency: Emergency

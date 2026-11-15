@@ -40,7 +40,7 @@ READINGS = {  # what DeepSeek may make of the message about the son
     "жалоба": {"type": "complaint", "area": "limb", "scenario": None, "facts": {},
                "candidates": ["dislocation", "fracture", "ligament_rupture"]},
 }  # fmt: skip
-HEADER = "Перенос записи: Петров И. С., вс 15.11, 18:00"
+HEADER = "Перенос записи: Петров И. С., сегодня, 15 ноября, 18:00"
 
 
 async def with_a_booking(make_chat, kb: KnowledgeBase, clock, *replies):

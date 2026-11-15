@@ -74,6 +74,7 @@ from app.flow.commands import (
     names_several,
     normalize,
     refuses_new_booking,
+    relative_time,
     request_in,
     same_or_other,
     says_goodbye,
@@ -460,6 +461,11 @@ class Session(BaseModel):
     # the wish was said with the words of a move («перенеси на завтра»): only then it goes
     # with «Перенести»; a wish of a new booking never touches a booking that exists
     wish_moves: bool = False
+    # «перенесите на пораньше»: only the times earlier (later) than the visit are offered;
+    # after «Другой день» — any time of another day, «Ближайшее» still by the wish
+    move_rel: Literal["earlier", "later"] | None = None
+    move_other: bool = False
+    move_time: str | None = None  # «13:30» — the time of the visit that is moved
     booking_id: int | None = None
     visit_booking: int | None = None
     reply_handoff: int | None = None
@@ -1396,7 +1402,11 @@ class Conversation:
                 if wish.day is not None
                 else texts.MARK_TIME
             )
-            lines.append(f"{mark} {render.wish_line(wish, self._local(c.now).date())}")
+            line = render.wish_line(wish, self._local(c.now).date())
+            if c.s.move_rel is not None and not c.s.move_other and c.s.move_time:
+                # «📅 Пожелание: сегодня, 12 ноября, раньше 13:30»
+                line = f"{line}, {texts.MOVE_WISH[c.s.move_rel].format(time=c.s.move_time)}"
+            lines.append(f"{mark} {line}")
         return "\n".join(lines) or None
 
     def _who_shown(self, c: Ctx) -> bool:
@@ -1759,6 +1769,8 @@ class Conversation:
             return
         if step in TIME_STEPS and await self._press_time(c, text, found, shown):
             return  # «записывайте на 13:30»: the time is on a button of this screen
+        if step in TIME_STEPS and await self._move_relative(c, text, found):
+            return  # «а пораньше есть?» on a screen of a move
         if await self._on_wish_text(c, found):
             return
         if action == "book":
@@ -4484,8 +4496,37 @@ class Conversation:
             return None
         spec, _ = found
         slots = await all_slots(self.schedule, spec, now=c.now, config=self.clinic.schedule)
+        slots = await self._by_move(c, slots)
         wish = self._wish(c) if wished else None
         return spec, slots_view.matching(slots, wish, self.settings.tz)
+
+    async def _moved(self, c: Ctx) -> Booking | None:
+        """The visit of a move asked «пораньше» or «попозже»."""
+        if c.s.move_rel is None or c.s.reschedule_of is None:
+            return None
+        return await c.db.get(Booking, c.s.reschedule_of)
+
+    async def _move_related(self, c: Ctx, slots: Sequence[Slot]) -> list[Slot]:
+        """Of ``slots``, the times earlier (later) than the visit that is moved."""
+        booking = await self._moved(c)
+        if booking is None:
+            return list(slots)
+        tz, at = self.settings.tz, self._local(booking.start_at)
+        if c.s.move_rel == "earlier":
+            return [s for s in slots if slots_view.local(s, tz) < at]
+        return [s for s in slots if slots_view.local(s, tz) > at]
+
+    async def _by_move(self, c: Ctx, slots: Sequence[Slot]) -> list[Slot]:
+        """«Перенесите на пораньше»: nothing later than the visit is offered — on a day's
+        screen, in a part of the day, by «Ближайшее». After «Другой день» the patient picks
+        the day himself: any time, of any day but the one of the visit."""
+        booking = await self._moved(c)
+        if booking is None:
+            return list(slots)
+        if not c.s.move_other:
+            return await self._move_related(c, slots)
+        tz, day = self.settings.tz, self._local(booking.start_at).date()
+        return [s for s in slots if slots_view.local(s, tz).date() != day]
 
     def _no_slots(self, c: Ctx) -> None:
         c.s.step = "idle"
@@ -4580,6 +4621,12 @@ class Conversation:
             ]
             template = texts.WISH_DOCTOR_FULL if on_duty else texts.WISH_DOCTOR_OFF[spec.visit]
             text = template.format(day=day, doctor=short)
+        elif (moved := await self._moved(c)) is not None and not c.s.move_other:
+            # «Раньше 13:30 сегодня свободного времени нет.» — not a later time of that day
+            text = texts.MOVE_NONE[c.s.move_rel or "earlier"].format(
+                time=f"{self._local(moved.start_at):%H:%M}",
+                day=self._move_day_word(wish.day, today),
+            )
         else:
             text = texts.WISH_DAY_FULL.format(day=day)
         other_day = wish.without("day")
@@ -4659,7 +4706,8 @@ class Conversation:
         if self._wish(c) is not None:
             rows.append([Button(texts.WISH_CLEAR, "ws:clear")])
         rows.append([Button(texts.MENU_ADMIN, "m:admin")])  # no convenient day: a person helps
-        top = self._nearest(c, free[1])
+        # asked «пораньше», then «Другой день»: «Ближайшее» is still not later than the visit
+        top = self._nearest(c, await self._move_related(c, free[1]))
         self._screen(c, texts.DAY_PICK, buttons, top=top, rows=rows, columns=DAY_COLUMNS)
 
     async def _day_times(self, c: Ctx) -> tuple[BookingSpec, list[Slot], list[Slot]] | None:
@@ -5068,11 +5116,20 @@ class Conversation:
             c.line = "my"
         note = None  # the booking first, then what «Перенести» will do
         moves = c.text is not None and wants_move(c.text)
-        if wish is not None and not wish.empty and not asked and moves:
+        named = wish is not None and not wish.empty
+        # «а перенести на пораньше можно?»: the word goes with «Перенести», as a day does
+        rel = self._relative(c.text or "") if moves and not asked else None
+        if rel is not None and wish is not None and wish.has_time:
+            rel = None  # «пораньше, часов в десять»: the time named is the wish
+        if (named or rel is not None) and not asked and moves:
             # only a wish said with the words of a move goes with «Перенести»
-            c.s.wish, c.s.wish_moves = wish, True
-            words = render.wish_words(wish, self._local(c.now).date())
-            note = texts.WISH_MOVE.format(wish=words)
+            c.s.wish, c.s.wish_moves, c.s.move_rel = (wish if named else None), True, rel
+            said = [render.wish_words(wish, self._local(c.now).date())] if named else []
+            if rel is not None and len(bookings) == 1:
+                at = f"{self._local(bookings[0].start_at):%H:%M}"
+                said.append(texts.MOVE_WISH[rel].format(time=at))
+            if said:
+                note = texts.WISH_MOVE.format(wish=", ".join(said))
         title = markup.bold(title)  # what is read first
         if len(bookings) > 1:  # one booking is one message: the title goes into it
             c.say(title)
@@ -5081,7 +5138,8 @@ class Conversation:
             start = self._local(b.start_at)
             day = start.date()
             item = texts.MY_ITEM.format(
-                date=render.booking_day(day, today) if asked else render.format_date(day),
+                # «сегодня, 12 ноября (четверг)»: «в четверг» alone may be read as not today
+                date=render.booking_day(day, today),
                 time=f"{start:%H:%M}",
                 patient=markup.esc(patient.full_name) if patient else "—",
                 doctor=b.doctor,
@@ -5120,6 +5178,7 @@ class Conversation:
             c.say(texts.MY_EMPTY, self._main_menu(c))
             return
         c.s.wish, c.s.wish_moves = named, True  # said with the words of a move
+        c.s.move_rel = self._relative(c.text or "")  # «…на пораньше»: kept for the one chosen
         rows = []
         for b in bookings:
             patient = await c.db.get(Patient, b.patient_id)
@@ -5133,16 +5192,66 @@ class Conversation:
         c.say(markup.bold(texts.MOVE_WHICH), [*rows, _home()])
 
     async def _start_move(self, c: Ctx, booking: Booking, wish: Wish | None) -> None:
-        """«Переношу запись с субботы, 14 ноября, 11:30», then the day and the time."""
+        """«Перенос записи: Петров И. С., сегодня, 12 ноября, 13:30», then the day and the
+        time. «Пораньше», «попозже» said with the move and no time named: the day of the
+        visit, and only the times earlier (later) than it."""
+        # «Какую запись переносим?» was asked in between: the word was said before it
+        kept = c.s.move_rel if c.s.wish_moves and c.s.reschedule_of is None else None
+        rel = self._relative(c.text) if c.text is not None else kept
+        start = self._local(booking.start_at)
+        if wish is not None and (wish.has_time or wish.day not in (None, start.date())):
+            rel = None  # «на завтра пораньше», «пораньше, часов в десять»: a plain wish
         self._reset(c)
         c.s.reschedule_of, c.s.wish = booking.id, wish
+        c.s.move_time = f"{start:%H:%M}"
+        if rel is not None:
+            c.s.move_rel = rel
+            c.s.wish = (wish or Wish()).merge(Wish(day=start.date(), noted=c.now))
         patient = await c.db.get(Patient, booking.patient_id)
         c.s.move_line = texts.MOVE_HEADER.format(
             patient=markup.esc(short_name(patient.full_name)) if patient else "—",
-            day=self._short_day(booking.start_at),
-            time=f"{self._local(booking.start_at):%H:%M}",
+            day=self._move_day(c, booking.start_at),
+            time=f"{start:%H:%M}",
         )
         await self._offer_time(c)
+
+    def _relative(self, text: str) -> Literal["earlier", "later"] | None:
+        words = self.clinic.clinic.move_relative
+        return relative_time(text, words.earlier, words.later)
+
+    async def _move_relative(self, c: Ctx, text: str, found: Parsed) -> bool:
+        """«А пораньше есть?», «попозже» typed on a screen of a move, no time named: the day
+        of the visit with the times earlier (later) than it — or the plain «no»."""
+        rel = self._relative(text)
+        booking = await c.db.get(Booking, c.s.reschedule_of) if c.s.reschedule_of else None
+        if rel is None or booking is None or found.question is not None:
+            return False
+        day = self._local(booking.start_at).date()
+        if found.wish.has_time or found.wish.day not in (None, day):
+            return False  # «пораньше, часов в десять», «в субботу пораньше»: a plain wish
+        kept = (self._wish(c) or Wish()).without_time().merge(found.wish)
+        c.s.move_rel, c.s.move_other = rel, False
+        c.s.wish = kept.merge(Wish(day=day, noted=c.now))
+        c.s.day = c.s.period = c.s.day_from = None
+        await self._offer_time(c)
+        return True
+
+    def _move_day(self, c: Ctx, moment: datetime) -> str:
+        """The day of the visit in the header of its move: «сегодня, 12 ноября», «завтра,
+        13 ноября» in words — «в четверг» may be today; any other day — «вс 15.11»."""
+        local, today = self._local(moment), self._local(c.now).date()
+        if local.date() in (today, today + timedelta(days=1)):
+            return render.wish_day(local.date(), today)
+        return self._short_day(moment)
+
+    @staticmethod
+    def _move_day_word(day: date, today: date) -> str:
+        """«сегодня», «завтра», «в воскресенье, 15 ноября,» — in «Раньше 13:30 … нет»."""
+        if day == today:
+            return texts.TODAY.lower()
+        if day == today + timedelta(days=1):
+            return texts.TOMORROW.lower()
+        return f"{render.wish_day(day, today)},"
 
     @staticmethod
     def _whose(patient: Patient | None) -> str:
@@ -5707,6 +5816,9 @@ class Conversation:
         step = c.s.step
         wish = (self._wish(c) or Wish()).merge(found.wish)
         if step in TIME_STEPS:  # choosing the time: the wish is applied at once
+            if found.wish.day is not None or found.wish.has_time:
+                # a day or a time named now replaces «пораньше» said before it
+                c.s.move_rel, c.s.move_other = None, False
             if found.unknown_doctor:
                 self._no_such_doctor(c)
             if found.wish.day is None and c.s.day is not None:  # «вечером» on a day's screen
@@ -5777,8 +5889,10 @@ class Conversation:
             wish = wish.without("doctor")
         elif wish is not None and action == "day":  # «Другой день»: the doctor stays
             wish = wish.without("day")
+            c.s.move_other = c.s.move_rel is not None  # … and any time of another day
         else:  # «Убрать пожелание»
             wish = None
+            c.s.move_rel, c.s.move_other = None, False
         c.s.wish = None if wish is None or wish.empty else wish
         c.s.day = c.s.period = c.s.day_from = None
         await self._offer_time(c)

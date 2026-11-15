@@ -301,7 +301,9 @@ async def test_cancel_the_husbands_then_move_mine(make_chat) -> None:
     await chat.press(texts.CANCEL_YES)
     done, about, screen = chat.replies
     assert done.text == texts.CANCELLED and about.text == "Теперь перенесу Вашу запись."
-    assert screen.text.split("\n")[0].startswith("Перенос записи: Фролова Е. Д., пт 13.11, ")
+    assert screen.text.split("\n")[0].startswith(
+        "Перенос записи: Фролова Е. Д., завтра, 13 ноября, "
+    )
     state = await session(chat)
     assert state["reschedule_of"] == mine.id and state["wish"]["period"] == "evening"
     await chat.press(chat.nearest().label)
@@ -320,7 +322,9 @@ async def test_the_one_not_to_be_booked_and_one_move(make_chat) -> None:
     await chat.say("мужа не записывайте, а мою перенесите на вечер")
     line, screen = chat.replies
     assert line.text == "Хорошо, мужа не записываю. Понадобится — напишите."
-    assert screen.text.split("\n")[0].startswith("Перенос записи: Фролова Е. Д., пт 13.11, ")
+    assert screen.text.split("\n")[0].startswith(
+        "Перенос записи: Фролова Е. Д., завтра, 13 ноября, "
+    )
     state = await session(chat)
     assert state["reschedule_of"] == mine.id and state["wish"]["period"] == "evening"
     assert state["people"] == [] and state["talk"]["who"] is None  # he is not remembered

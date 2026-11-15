@@ -195,7 +195,7 @@ async def test_no_bookings_to_cancel(make_chat) -> None:
 async def test_cancel_and_book_again_is_still_a_move(make_chat) -> None:
     chat = await booked(make_chat)
     await chat.say("отмени и запиши на воскресенье")
-    assert chat.text.startswith("Перенос записи: Петров И. С., чт 12.11")
+    assert chat.text.startswith("Перенос записи: Петров И. С., сегодня, 12 ноября")
 
 
 # --- 3. the word order of a full name -----------------------------------------------------------
@@ -320,7 +320,7 @@ async def test_move_that_booking_instead_of_a_second_one(make_chat) -> None:
     await through_dislocation(chat)
     assert texts.ALREADY_MOVE in chat.labels() and "Пожелание: завтра, 13 ноября" in chat.text
     await chat.press(texts.ALREADY_MOVE)
-    assert chat.text.startswith("Перенос записи: Петров И. С., чт 12.11")
+    assert chat.text.startswith("Перенос записи: Петров И. С., сегодня, 12 ноября")
     assert "13 ноября (пятница)" in chat.text and texts.KEEP_AS_IS in chat.labels()
     await chat.pick_time()
     (moved,) = await active(chat)

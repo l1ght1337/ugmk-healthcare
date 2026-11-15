@@ -555,6 +555,13 @@ NO_NEW_BOOKING = "Хорошо, новую запись не оформляю."
 # The first line of every screen of a move: whose booking it is — «Перенос записи:
 # Серябкина Л. В., вс 15.11, 19:30»
 MOVE_HEADER = "Перенос записи: {patient}, {day}, {time}"
+# «перенесите на пораньше», «на попозже» (config/clinic.yaml, move_relative): the wish line of
+# the move, and the plain «no» when the day of the visit has no such time
+MOVE_WISH = {"earlier": "раньше {time}", "later": "позже {time}"}
+MOVE_NONE = {
+    "earlier": "Раньше {time} {day} свободного времени нет.",
+    "later": "Позже {time} {day} свободного времени нет.",
+}
 # Several things in one message (app/flow/actions.py): one at a time, the next is announced.
 # «Сначала перенесу Вашу запись, потом запишу сына.» — «Теперь запишу сына.»
 ACTIONS_FIRST = "Сначала {first}, потом {then}."

@@ -967,6 +967,21 @@ def wants_move(text: str) -> bool:
     return _MOVE_INTENT.search(normalize(text)) is not None
 
 
+def relative_time(
+    text: str, earlier: Sequence[str], later: Sequence[str]
+) -> Literal["earlier", "later"] | None:
+    """«Пораньше», «попозже»: a wish relative to the time of the visit that is moved (the
+    words — config/clinic.yaml, move_relative). «Не раньше 15», «не позже 12» are bounds of
+    a time, not this wish."""
+    t = f" {normalize(text)} "
+    for kind, words in (("earlier", earlier), ("later", later)):
+        for word in words:
+            said = normalize(word)
+            if f" {said} " in t and f" не {said} " not in t:
+                return kind  # type: ignore[return-value]
+    return None
+
+
 def wants_cancel(text: str) -> bool:
     """A request to cancel a booking: «отмени запись», «отмените запись на воскресенье»,
     «отмени все». «Я не приду» is not: the patient may want another time."""

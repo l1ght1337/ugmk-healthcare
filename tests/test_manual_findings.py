@@ -202,7 +202,7 @@ async def test_cancel_and_book_for_sunday_opens_sunday_at_once(make_chat, kb) ->
     await chat.say("эту запись отмени и давай на воскресенье запиши меня когда можно")
     assert fake.requests == []
     (screen,) = chat.replies  # whose booking is moved — the first line of the screen
-    assert screen.text.startswith("Перенос записи: Петров И. С., чт 12.11, 1")
+    assert screen.text.startswith("Перенос записи: Петров И. С., сегодня, 12 ноября, 1")
     assert "15 ноября (воскресенье)" in screen.text
     labels = [b.label for row in screen.buttons for b in row]
     assert labels[0].startswith("Ближайшее: вс, 15.11, ")
@@ -221,7 +221,7 @@ async def test_move_to_a_day_typed_as_text(make_chat) -> None:
     chat = await one_booking(make_chat)
     await chat.say("перенеси на завтра")
     (screen,) = chat.replies
-    assert screen.text.startswith("Перенос записи: Петров И. С., чт 12.11, 1")
+    assert screen.text.startswith("Перенос записи: Петров И. С., сегодня, 12 ноября, 1")
     assert "13 ноября (пятница)" in screen.text and texts.KEEP_AS_IS in chat.labels()
     await chat.press(texts.KEEP_AS_IS)
     assert chat.text == texts.KEPT and texts.MENU_BOOK in chat.labels()
@@ -270,7 +270,7 @@ async def test_with_two_bookings_the_bot_asks_which_one(make_chat) -> None:
     assert [label[:9] for label in chat.labels()[:2]] == ["Чт, 12.11", "Пт, 13.11"]
     assert chat.labels()[-1] == texts.MENU_HOME
     await chat.press(chat.labels()[1])
-    assert "Перенос записи: Петров И. С., пт 13.11" in chat.text
+    assert "Перенос записи: Петров И. С., завтра, 13 ноября" in chat.text
     assert "15 ноября (воскресенье)" in chat.text
 
 
@@ -296,7 +296,7 @@ async def test_explanation_comes_after_the_booking(make_chat, kb: KnowledgeBase)
     await chat.say("с записью не получается, можно на воскресенье?")
     (only,) = chat.replies
     title, item = only.text.split("\n")
-    assert title == texts.MY_ONE and item.startswith("12 ноября (четверг) в 1")
+    assert title == texts.MY_ONE and item.startswith("сегодня, 12 ноября (четверг) в 1")
     assert "При переносе" not in only.text and (await session(chat))["wish"] is None
 
 

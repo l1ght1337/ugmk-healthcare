@@ -89,12 +89,12 @@ async def test_one_booking_is_one_message(make_chat) -> None:
     await chat.press(texts.PAYMENT_SELF)
     await chat.say("мои записи")
     (only,) = chat.replies
-    assert only.text.startswith("Ваша запись:\n12 ноября (четверг) в 1")
+    assert only.text.startswith("Ваша запись:\nсегодня, 12 ноября (четверг) в 1")
     assert "Петров Иван Сергеевич. Врач: Кузнецов Николай Александрович." in only.text
     assert chat.labels() == [texts.MOVE, texts.CANCEL]
     await chat.say("перенеси запись на завтра")  # the move at once, no «Мои записи» between
     (screen,) = chat.replies
-    assert screen.text.startswith("Перенос записи: Петров И. С., чт 12.11, 1")
+    assert screen.text.startswith("Перенос записи: Петров И. С., сегодня, 12 ноября, 1")
     assert "13 ноября (пятница)" in screen.text
 
 
