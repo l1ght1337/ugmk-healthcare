@@ -275,6 +275,8 @@ class ClinicFlags(_Data):
     rabies_vaccine_available: bool
     control_visit_after_days: int = Field(gt=0, le=60)
     unfinished_booking: UnfinishedBooking
+    # injuries the scripts say nothing about: «в моих данных нет», not a scenario by guess
+    no_route_words: tuple[str, ...] = ()
     injury_time: InjuryTime
     emergency: Emergency
     crisis: Crisis

@@ -117,6 +117,7 @@ from app.flow.people import (
     find_people,
     merge,
     named_in,
+    refused,
     shared,
 )
 from app.flow.safety import find_phrase, sign_passed
@@ -472,6 +473,11 @@ class Session(BaseModel):
     # упал, болит нога» answers «Когда?» also when the topic is picked with a button
     told: list[str] = []
     taken: bool = False  # answers were taken from it: «Ваши ответы: …» is due over step 3
+    clarified: bool = False  # a question of DeepSeek was said for this complaint: once
+    # the full name and the birth date said before step 5 («…Петров Иван Сергеевич,
+    # 12.03.1985»): the patient of this booking, not asked for again
+    given_name: list[str | None] | None = None
+    given_birth: date | None = None
     teen_months: int | None = None  # 15–17 booking for himself: his age, in months
     teen_passed: bool = True  # … and the request has gone to an administrator
     teen_line: str | None = None  # the one-line answer of the last turn on that screen
@@ -992,7 +998,7 @@ class Conversation:
             c.s.people, c.s.shared, c.s.booked = s.people, s.shared, s.booked
         if booking:
             c.s.more, c.s.second_ok, c.s.person = s.more, s.second_ok, s.person
-            c.s.told = s.told
+            c.s.told, c.s.given_name, c.s.given_birth = s.told, s.given_name, s.given_birth
 
     def _paused_fresh(self, c: Ctx) -> bool:
         at = c.s.paused_at
@@ -1367,6 +1373,8 @@ class Conversation:
         if await self._urgency(c, step, text):
             return  # «скорую вызывать?», «это срочно?»: the same answer everywhere
         people = step not in PATIENT_DATA_STEPS  # on the steps of the data nobody is read
+        if people and step not in MESSAGE_STEPS and await self._not_this_one(c, step, text):
+            return  # «пока не записывай мужа, ещё посмотрим»: one line, he does not wait
         if people and await self._named_later(c, step, text):
             return  # «и сына тоже запишите» in the middle of a booking: his turn is next
         if people:
@@ -1382,8 +1390,13 @@ class Conversation:
             one = named[0] if len(named) == 1 and named[0].name else None
             if one is not None and one.complaint and one.audience in ("child", "adult"):
                 c.for_whom = one.audience
+        born = self._given(c, step, text) if people else None
+        if born is not None and c.for_whom is None and not c.more:
+            # «…Петров Иван Сергеевич, 12.03.1985»: an adult or a child by the birth date
+            c.for_whom = "child" if born < ADULT_FROM_MONTHS else "adult"
         if c.for_whom is not None and not c.more:  # kept for the whole conversation
-            self._said_who(c, c.for_whom)  # the age is kept once it is confirmed or asked
+            # the age is kept once it is confirmed or asked — or counted from a birth date
+            self._said_who(c, c.for_whom, born if c.for_whom == "child" else None)
         elif c.s.talk.who is not None and self._read_wish(c, text).patient_spans:
             c.s.talk.who = None  # «запишите Кузнецову Марию»: another person is named
             if c.s.who_kept:
@@ -2439,6 +2452,14 @@ class Conversation:
         ``reading`` — what route has already said about the text.
         """
         asked = c.s.step == "info"
+        if not asked and find_phrase(text, self.clinic.clinic.no_route_words):
+            # a knocked-out tooth: the scripts say nothing — said so, not a scenario by guess
+            self._reset(c)
+            c.s.step = "offer_admin"
+            c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
+            said = f"{markup.bold(texts.NO_ROUTE_DATA)}\n\n{texts.QUESTIONS_TO_ADMIN}"
+            c.say(said, self._ask_admin_buttons())
+            return
         at_start = c.s.wizard and c.s.step in START_STEPS  # step 1 of a booking: it goes on
         if reading is None:
             reading = await read_text(self._llm(c), text, await self._known(c))
@@ -2623,8 +2644,9 @@ class Conversation:
         description is never «опишите своими словами».
         """
         shown = c.s.menu if c.s.wizard and c.s.step == "topic" else None
-        wish, (for_whom, kept) = c.s.wish, self._for_whom(c)
+        wish, (for_whom, kept), clarified = c.s.wish, self._for_whom(c), c.s.clarified
         self._reset(c, booking=True)
+        c.s.clarified = clarified
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
         c.s.who_kept = kept
         menu = topics.best_menu(self.kb, area, candidates)
@@ -2635,7 +2657,9 @@ class Conversation:
             return
         menus = self.kb.topics.menus
         if shown is not None and menus[menu].text == menus[shown].text and not said:
-            c.say(unclear)  # the same question again: why
+            # the same question again: why — once in DeepSeek's words, then «Другое»
+            c.say(texts.NONE_FITS if c.s.clarified else unclear)
+            c.s.clarified = True
         self._menu_screen(c, menu)
 
     async def _crisis(self, c: Ctx, text: str) -> None:
@@ -3276,6 +3300,37 @@ class Conversation:
         if short or not person.complaint:
             return line
         return f"{line}: {markup.esc(person.complaint)}"
+
+    def _given(self, c: Ctx, step: str, text: str) -> int | None:
+        """A full name with a patronymic and a birth date in a message before step 5: kept
+        for that step. Returns the age in months by the date — or None: not said."""
+        if step in MESSAGE_STEPS:
+            return None
+        today = self._local(c.now).date()
+        name, birth = find_full_name(text, whole=False), parse_birth_date(text, today)
+        if name is None or birth is None or not has_patronymic(name):
+            return None
+        c.s.given_name, c.s.given_birth = list(name), birth
+        return age_in_months(birth, today)
+
+    async def _not_this_one(self, c: Ctx, step: str, text: str) -> bool:
+        """«Пока не записывай мужа, ещё посмотрим», «мужа не надо», «мужа потом»: he is taken
+        out of those who wait; one line and the menu — or the same step of the booking that
+        goes on for somebody else. He is not remembered as the one a booking is for."""
+        who = refused(text)
+        if not who:
+            return False
+        person = who[0]
+        c.s.people = [p for p in c.s.people if not p.same(person)]
+        line = texts.NOT_BOOKING.format(whom=person.whom)
+        his = c.s.person is not None and c.s.person.same(person)
+        if c.s.wizard and step in WIZARD_STEPS and not his:
+            c.say(line)  # a booking of somebody else is under way: it goes on
+            await self._render_screen(c)
+        else:
+            self._reset(c, named=True)
+            c.say(line, self._main_menu(c))
+        return True
 
     async def _named_later(self, c: Ctx, step: str, text: str) -> bool:
         """«И сына тоже запишите» while a booking is under way: one line — «Сына запишу
@@ -4156,6 +4211,15 @@ class Conversation:
         if self._needs_consent(c):
             c.s.resume = "identify"
             self._consent_prompt(c, "identify")
+            return
+        if c.s.patient_id is None and c.s.given_name and c.s.given_birth:
+            # the name and the birth date were in a message before: taken, not asked again
+            name, birth = c.s.given_name, c.s.given_birth
+            c.s.given_name = c.s.given_birth = None
+            full = " ".join(part for part in name if part)
+            c.say(texts.PATIENT_GIVEN.format(name=markup.esc(full), birth=f"{birth:%d.%m.%Y}"))
+            c.s.draft_name = name
+            await self._on_birth(c, f"{birth:%d.%m.%Y}")
             return
         if c.s.patient_id is None:
             audience = c.s.dialog.audience or "adult"

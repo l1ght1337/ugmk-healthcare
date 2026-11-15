@@ -321,8 +321,10 @@ CASES: tuple[Case, ...] = (
         BOOK,
         Step("say", "Меня зовут Петров Иван Сергеевич, 12.03.1985 г.р., телефон "
                     "+7 912 345-67-89. Вчера подвернул ногу на тренировке",
-             ("для кого запись?",), private=True,
-             llm=(route("dislocation", assault=False, injury_age="within_7_days"),)),
+             ("Обращались ли к врачу",), absent=("для кого запись?",), private=True,
+             llm=(route("dislocation", assault=False, injury_age="within_7_days"),),
+             hint="по дате рождения бот сам видит, что пациент взрослый, и «для кого запись?» "
+                  "не спрашивает; ФИО и дата сохраняются до шага 5"),
         MENU,
     ), note="В Telegram это не видно: проверка автоматическая (tests/test_privacy.py и этот "
             "прогон). В журнале data/llm_usage.jsonl только счётчики токенов, без текстов."),

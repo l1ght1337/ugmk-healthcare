@@ -29,6 +29,12 @@ BOOK_PERSON = "Записать {whom}"  # after the card, instead of «Запи
 BOOK_MORE = "Записать ещё одного"  # under «Спасибо!» after the booking card
 # «И сына тоже запишите» in the middle of a booking: one line, the step stays
 NAMED_LATER = "{whom} запишу следующим — после этой записи."
+# «Пока не записывай мужа, ещё посмотрим»: he is not booked and does not wait; one line
+NOT_BOOKING = "Хорошо, {whom} не записываю. Понадобится — напишите."
+# the name and the birth date were in a message before step 5: taken, not asked again
+PATIENT_GIVEN = "Пациент: {name}, {birth}."
+# an injury the scripts say nothing about (config/clinic.yaml, no_route_words): a tooth
+NO_ROUTE_DATA = "Куда с этим обращаться, в моих данных нет."
 NEXT_PATIENT = "Спасибо! Теперь запишем второго пациента?"
 NEXT_PATIENT_MORE = "Спасибо! Теперь запишем следующего пациента?"  # the third and those after
 WHOM_ADULT = "Для взрослого"  # «для кого» of one more booking: «Для себя» would not fit

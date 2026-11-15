@@ -319,6 +319,38 @@ def _asked_for(clause: str) -> bool:
     return not _REQUEST_WORD.sub(" ", around).strip(" ,.:—-?!")
 
 
+_REFUSES = re.compile(
+    r"\bне\s+(?:надо|нужно|записыва\w+|запиш\w+|будем|буду)\b|\bпока\s+не\b|\bпотом\b|\bпозже\b"
+)
+_REFUSAL_WORD = re.compile(
+    r"\b(?:не|надо|нужно|записыва\w+|запиш\w+|будем|буду|пока|потом|позже|еще|посмотрим|"
+    r"пожалуйста|его|ее)\b"
+)
+
+
+def refused(text: str) -> list[Person]:
+    """Who the patient asks not to book: «пока не записывай мужа, ещё посмотрим», «мужа не
+    надо», «мужа потом», «Ваню не записывайте». One person and nothing else: an order of two
+    («сначала меня, потом мужа»), a request for another and a complaint are not a refusal."""
+    low = _norm(text)
+    if not _REFUSES.search(low) or re.search(r"\b(?:сначала|сперва)\b", low):
+        return []
+    found: list[Person] = []
+    for sentence in _SENTENCE.split(text):
+        for clause in _clauses(sentence):
+            marker = _marker(clause)
+            if marker is None:
+                continue
+            name, audience, span, _ = marker
+            around = _norm(clause[: span[0]] + " " + clause[span[1] :])
+            if _about_injury(around) or not name:
+                return []  # a complaint, or the writer: not «do not book him»
+            if audience is None and _REFUSAL_WORD.sub(" ", around).strip(" ,.:—-?!"):
+                return []  # a first name with something else about it
+            found.append(Person(name=name, audience=audience))  # type: ignore[arg-type]
+    return found if len(found) == 1 else []
+
+
 def asked_too(text: str) -> list[Person]:
     """Who else is asked to be booked: «и сына тоже запишите», «ещё Ваню запишите, ему 10
     лет, ногу подвернул», «и меня тоже». A sentence with a request to book, «тоже» or «ещё»
