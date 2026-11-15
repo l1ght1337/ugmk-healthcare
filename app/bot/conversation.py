@@ -1700,6 +1700,12 @@ class Conversation:
             await self._on_input_text(c, step, text, action)
             return
         found = self._read_wish(c, text)
+        complaint = self._injury_in(text) is not None and not find_command(text)
+        if found.question is not None and complaint and step in ("idle", *START_STEPS):
+            # «…болят рёбра, особенно когда двигаюсь или кашляю»: a complaint goes its usual
+            # way — to its route or to the step of its scenario; «когда» in it is not a
+            # question about free time, and «Ближайшее: сегодня, 13:30» is not its answer
+            found = replace(found, question=None)
         under_way = step in WIZARD_STEPS and step not in START_STEPS
         if action == "confirm" and under_way:  # «буду» there is an answer, not a confirmation
             action = None

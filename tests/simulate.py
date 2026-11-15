@@ -46,12 +46,18 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 from app.bot import texts
-from app.bot.conversation import PATIENT_DATA_STEPS, Conversation, Reply, UserRef
+from app.bot.conversation import (
+    PATIENT_DATA_STEPS,
+    START_STEPS,
+    Conversation,
+    Reply,
+    UserRef,
+)
 from app.config import PROJECT_ROOT, ClinicData, get_settings, load_clinic_data
 from app.db.models import Booking, Handoff, Patient, User
 from app.db.session import Database
 from app.flow import topics
-from app.flow.commands import find_audience, is_question
+from app.flow.commands import find_audience, is_question, same_or_other
 from app.flow.loader import KnowledgeBase, load_kb
 from app.llm.assistant import Assistant
 from app.llm.client import DeepSeekClient, LLMUnavailable
@@ -80,13 +86,21 @@ ROUTED_BOOKED = "записан пациент, которому положен 
 # A visit booked before the dialog moved or cancelled though nobody asked, and a visit booked
 # for somebody nobody asked to book: what the base ends with is not what the patient wanted
 TOUCHED = "создана, изменена или отменена запись, о которой пациент не просил"
+# Found by reading run 7, now rules: after a route the reference went on about OUR trauma
+# centre; the same screen was shown eleven times; a route came on the third turn
+INVITES = "после маршрута бот зовёт в наш травмпункт"
+LATE_ROUTE = "маршрут пришёл не в ответ на первое сообщение с жалобой"
+CIRCLE = "один и тот же ответ три раза подряд"
 REPEAT = "один и тот же экран показан дважды подряд без новой строки"
 UNANSWERED = "вопрос пациента остался без ответа"
 LOST = "названные врач, день или «для кого» потерялись"
 NO_BUTTON = "у ответа нет кнопки, которая ведёт дальше"
 ADVICE = "диагноз или медицинский совет"
 CRASH = "ошибка в боте"
-RULES = (GOAL, ROUTED_BOOKED, TOUCHED, REPEAT, UNANSWERED, LOST, NO_BUTTON, ADVICE, CRASH)
+RULES = (
+    GOAL, ROUTED_BOOKED, TOUCHED, INVITES, LATE_ROUTE, REPEAT, CIRCLE, UNANSWERED, LOST,
+    NO_BUTTON, ADVICE, CRASH,
+)  # fmt: skip
 
 GOALS = {
     "book": "записаться на приём (или получить ясный ответ, почему нельзя и куда обратиться)",
@@ -778,6 +792,99 @@ def _routed_booked(dialog: Dialog) -> list[Violation]:
     return []
 
 
+# What the bot says about our trauma centre: its address, its hours, that it takes the
+# patient or books him. «В травмпункте принимают только травмы рук и ног» is a route.
+INVITE = re.compile(
+    r"шейнкмана|круглосуточн|записаться\s+можно|можно\s+записаться|мы\s+принимаем"
+    r"|в\s+травмпункт\s+записывают|при[её]м\s+(?:тоже\s+)?возможен"
+    r"|в\s+травмпункте\s+принимает\s+(?!только)|есть\s+свободное\s+время",
+    re.IGNORECASE,
+)
+
+
+def _invites(dialog: Dialog, phrases: Sequence[str]) -> list[Violation]:
+    """After a route the patient is told about our trauma centre — where it is, when it
+    works, that he may book — and reads it as «come here». Counted while the talk is about
+    the injury of the route: up to «Другая» or a booking that is under way."""
+    found: list[Violation] = []
+    routed = False
+    for step in dialog.steps:
+        pressed = step.action.kind == "press" and step.action.value == texts.OTHER_INJURY
+        other = pressed or same_or_other(step.action.value) == "other"
+        under_way = step.state["wizard"] and step.state["step"] not in ("same", *START_STEPS)
+        if routed and (other or under_way):
+            routed = False  # another injury: the reference answers about us again
+        if routed:
+            for reply in step.replies:
+                rest = reply.text
+                for phrase in phrases:  # the scripts' own words are the route itself
+                    rest = rest.replace(phrase, " ")
+                if match := INVITE.search(rest):
+                    start = max(match.start() - 60, 0)
+                    said = "…" + " ".join(rest[start : match.end() + 80].split())
+                    found.append(Violation(INVITES, step.n, said))
+                    break
+        if step.state["outcome"] == "route":
+            routed = True
+    return found
+
+
+def _late_route(dialog: Dialog, kb: KnowledgeBase, clinic: ClinicData) -> list[Violation]:
+    """A patient due a route wrote what happened — and the answer was neither the route nor a
+    step of its scenario («Оценить состояние я не могу» and the menu): the route came later,
+    after he had asked again."""
+    if not dialog.persona.route:
+        return []
+    emergency = clinic.clinic.emergency.reply
+    handoffs = 0
+    for step in dialog.steps:
+        said = step.action.value if step.action.kind == "say" else ""
+        complaint = said and (
+            topics.guess_area(said) or topics.guess_candidates(said)
+            or topics.guard_scenarios(kb, said)
+        )  # fmt: skip
+        if complaint:
+            answered = step.state["wizard"] or _refused(step, handoffs, emergency)
+            if answered or not step.replies:
+                return []
+            return [Violation(LATE_ROUTE, step.n, _cut(step.replies[0].text, 120))]
+        handoffs = step.handoffs
+    return []
+
+
+AS_IT_IS = (texts.URGENCY.split(".")[0], texts.OFFTOPIC, texts.STUCK_ASK)
+
+
+def _circles(dialog: Dialog, emergency: str) -> list[Violation]:
+    """The same answer or screen in three turns of text in a row. A button in between starts
+    the count anew — but for the buttons of step 1 («Другое» → «опишите» → the same screen).
+    A new answer to a new question over the same step is not a circle; the template about
+    urgency, the line about 103 and 112 and the refusal of an off-topic request repeat by
+    design."""
+    found: list[Violation] = []
+    as_it_is = (*AS_IT_IS, emergency, f"⚠️ {emergency}")
+    recent: list[Step] = []
+    for step in dialog.steps:
+        if step.action.kind != "say":
+            if step.state["step"] not in START_STEPS:
+                recent = []
+            continue
+        earlier, recent = recent[-2:], [*recent, step][-3:]
+        if len(earlier) < 2 or not step.replies:
+            continue
+        before = [{r.text for r in s.replies} for s in earlier]
+        again = [
+            r.text
+            for r in step.replies
+            if all(r.text in said for said in before) and not r.text.startswith(as_it_is)
+        ]
+        first = step.replies[0].text
+        new = not any(first in said for said in before)
+        if again and not (len(step.replies) > 1 and new and "?" in step.action.value):
+            found.append(Violation(CIRCLE, step.n, _cut(again[-1], 120)))
+    return found
+
+
 def _repeats(dialog: Dialog) -> list[Violation]:
     found = []
     last = dialog.opening[-1] if dialog.opening else None
@@ -939,6 +1046,11 @@ def _no_button(dialog: Dialog) -> list[Violation]:
 CRISIS_HEAD = texts.CRISIS.split("{")[0][:40]
 
 
+QUOTED = re.compile(
+    re.escape(texts.PASSED_MESSAGE).replace(re.escape("{text}"), r"[^»]*"), re.DOTALL
+)
+
+
 def _advice(dialog: Dialog, phrases: Sequence[str]) -> list[Violation]:
     found = []
     for step in dialog.steps:
@@ -946,6 +1058,9 @@ def _advice(dialog: Dialog, phrases: Sequence[str]) -> list[Violation]:
             rest = reply.text
             for phrase in phrases:  # what the scripts and the bot's own texts say is not advice
                 rest = rest.replace(phrase, " ")
+            # «Администратору передано: Ваше сообщение «…Примите нас пожалуйста…»» quotes the
+            # patient: his words are not the bot's advice
+            rest = QUOTED.sub(" ", rest)
             match = ADVICE_WORDS.search(rest)
             if match:
                 start = max(match.start() - 40, 0)
@@ -1012,7 +1127,10 @@ def check(dialog: Dialog, kb: KnowledgeBase, clinic: ClinicData) -> list[Violati
         found.append(Violation(GOAL, 0, problem))
     found += _routed_booked(dialog)
     found += _touched(dialog)
+    found += _invites(dialog, fixed_phrases(kb))
+    found += _late_route(dialog, kb, clinic)
     found += _repeats(dialog)
+    found += _circles(dialog, clinic.clinic.emergency.reply)
     found += _unanswered(dialog)
     found += _lost(dialog)
     found += _no_button(dialog)

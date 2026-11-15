@@ -306,3 +306,34 @@ async def test_what_the_patient_is_going_to_do_is_not_answered_with_the_template
     await chat.say(NOT_ASKED[-4])
     assert chat.replies[0].text == "Приём по предварительной записи."
     assert CANNOT not in chat.text
+
+
+CHEST = (
+    "Здравствуйте, я утром поскользнулась в ванной и упала грудью на край ванны. Болят рёбра "
+    "справа, особенно когда двигаюсь или кашляю. Дышу вроде свободно, крови нет. Хочу "
+    "записаться к вам на приём."
+)
+
+
+async def test_when_inside_a_complaint_is_not_a_question_about_the_schedule(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    """chest, runs 5–7 (found by the rule «маршрут пришёл не в ответ на первое сообщение с
+    жалобой»): «…болят рёбра, особенно когда двигаюсь или кашляю» was answered «Ближайшее:
+    сегодня, 13:30» — the word «когда» was read as a question about free time, and the route
+    came five turns later. A complaint goes its usual way."""
+    chest = {"type": "complaint", "area": "chest", "scenario": "chest_abdomen",
+             "candidates": ["chest_abdomen"], "facts": {}}  # fmt: skip
+    chat = make_chat(assistant=FakeDeepSeek(chest).assistant(kb))
+    await chat.start()
+    await chat.say(CHEST)
+    assert "Ближайшее:" not in chat.text
+    state = await session(chat)
+    assert state["wizard"] and state["dialog"]["scenario_id"] == "chest_abdomen", chat.text
+
+
+async def test_a_question_about_the_schedule_with_no_complaint_is_answered(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say("когда можно прийти?")
+    assert "Ближайшее:" in chat.text

@@ -710,3 +710,145 @@ def test_a_name_and_a_birth_date_given_at_once_and_asked_again(env: sim.Env) -> 
     mother = replace(persona, child=("Родионова Анна Ивановна", "01.02.2019"))
     name = step(2, Action("press", "Да"), Shown(texts.ASK_NAME, ("Меню",)), wizard=True)
     assert sim.LOST not in rules(made(mother, told, name), env)
+
+
+# --- what run 7 showed only to a reader: three rules more, and a quote that is not advice --------
+
+ROUTE = Shown("В травмпункте принимают только травмы рук и ног.\nВам нужно обратиться:\n"
+              "📍 Центр борьбы со СПИДом, ул. Ясная, 46", ("Меню",))  # fmt: skip
+NOT_HERE = Shown("С этим в травмпункт не записываем.\nОбратиться нужно:\n"
+                 "📍 Центр борьбы со СПИДом, ул. Ясная, 46", ("В главное меню",))  # fmt: skip
+TOPICS = Shown("Шаг 1 из 5 · Что случилось\n\nЧто случилось с рукой или ногой?", ("Другое",))
+NEEDLE_SAID = "Я сегодня во дворе наступила на иглу от шприца, проколола стопу. Это опасно?"
+
+
+def routed(n: int = 1, said: str = NEEDLE_SAID) -> Step:
+    return step(n, Action("say", said), ROUTE, outcome="route")
+
+
+def test_the_three_rules_are_in_the_report_table() -> None:
+    assert sim.INVITES == "после маршрута бот зовёт в наш травмпункт"
+    assert sim.CIRCLE == "один и тот же ответ три раза подряд"
+    assert sim.LATE_ROUTE == "маршрут пришёл не в ответ на первое сообщение с жалобой"
+    assert {sim.INVITES, sim.CIRCLE, sim.LATE_ROUTE} <= set(sim.RULES)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Да, с раной на стопе в травмпункт записывают: принимаем скелетно-костные травмы. "
+        "Записаться можно в этом чате кнопкой «Записаться в травмпункт».",
+        "Травмпункт «УГМК-Здоровье» находится по адресу: ул. Шейнкмана, 113/2.",
+        "Травмпункт работает круглосуточно по предварительной записи, поэтому ночью приём "
+        "тоже возможен.",
+        "В травмпункте принимает травматолог-ортопед: он осмотрит рану.",
+        "Ожоги мы принимаем, кроме химических.",
+    ],
+)
+def test_after_a_route_the_bot_calls_to_our_centre(env: sim.Env, answer: str) -> None:
+    invited = step(2, Action("say", "а рану мне посмотрят?"), Shown(answer, ("Меню",)))
+    found = [v for v in check(made(BY_KEY["needle"], routed(), invited), env.kb, env.clinic)
+             if v.rule == sim.INVITES]  # fmt: skip
+    assert [v.turn for v in found] == [2]
+
+
+def test_the_route_itself_and_another_injury_are_not_a_call_to_us(env: sim.Env) -> None:
+    again = step(2, Action("say", "а к вам можно?"), NOT_HERE)
+    assert sim.INVITES not in rules(made(BY_KEY["needle"], routed(), again), env)
+    # «Другая»: the talk is about another injury — the reference answers about us again
+    other = step(2, Action("press", "Другая"), TOPICS, wizard=True, step="complaint")
+    hours = step(3, Action("say", "а вы круглосуточно работаете?"),
+                 Shown("Травмпункт работает круглосуточно."), TOPICS, wizard=True)  # fmt: skip
+    assert sim.INVITES not in rules(made(BY_KEY["needle"], routed(), other, hours), env)
+    # before any route the reference may say it
+    first = step(1, Action("say", "а вы круглосуточно работаете?"),
+                 Shown("Травмпункт работает круглосуточно.", ("Меню",)))  # fmt: skip
+    assert sim.INVITES not in rules(made(BY_KEY["needle"], first, routed(2)), env)
+
+
+def circle(*turns: tuple[str, tuple[Shown, ...]], **state: object) -> Dialog:
+    steps = [step(n, Action("say", said), *shown, **state) for n, (said, shown) in
+             enumerate(turns, 1)]  # fmt: skip
+    return made(BY_KEY["frostbite"], *steps)
+
+
+def test_the_same_answer_three_times_in_a_row(env: sim.Env) -> None:
+    line = [Shown(f"строка {n}") for n in range(3)]
+    thrice = circle(("отморозил пальцы", (TOPICS,)), ("это отморожение", (line[1], TOPICS)),
+                    ("да я уже писал", (line[2], TOPICS)), wizard=True, step="topic")  # fmt: skip
+    found = [v for v in check(thrice, env.kb, env.clinic) if v.rule == sim.CIRCLE]
+    assert [v.turn for v in found] == [3] and "Что случилось с рукой или ногой?" in found[0].detail
+    twice = circle(("отморозил пальцы", (TOPICS,)), ("это отморожение", (line[1], TOPICS)),
+                   wizard=True, step="topic")  # fmt: skip
+    assert sim.CIRCLE not in rules(twice, env)
+
+
+def test_a_new_answer_to_a_new_question_is_not_a_circle(env: sim.Env) -> None:
+    answers = [Shown(f"Ответ {n}.") for n in range(3)]
+    questions = ("а где вы?", "а парковка есть?", "а сколько стоит?")
+    turns = [(asked, (answers[n], TOPICS)) for n, asked in enumerate(questions)]
+    asked = circle(*turns, wizard=True, step="topic")
+    assert sim.CIRCLE not in rules(asked, env)
+    # the same answer to each of them is one
+    turns = [(asked, (answers[0], TOPICS)) for asked in questions]
+    same = circle(*turns, wizard=True, step="topic")
+    assert sim.CIRCLE in rules(same, env)
+
+
+def test_what_repeats_by_design_is_not_a_circle(env: sim.Env) -> None:
+    urgency = Shown(texts.URGENCY)
+    asks = circle(*[("скорую вызывать?", (urgency,))] * 4)
+    assert sim.CIRCLE not in rules(asks, env)
+    offtopic = circle(*[("расскажи анекдот", (Shown(texts.OFFTOPIC, ("Меню",)),))] * 3)
+    assert sim.CIRCLE not in rules(offtopic, env)
+
+
+def test_a_button_in_between_breaks_the_circle_but_for_step_one(env: sim.Env) -> None:
+    said = [step(n, Action("say", f"отморозил пальцы {n}"), TOPICS, wizard=True, step="topic")
+            for n in (1, 3, 5)]  # fmt: skip
+    other = [step(n, Action("press", "Другое"), Shown("Опишите своими словами", ("Назад",)),
+                  wizard=True, step="describe") for n in (2, 4)]  # fmt: skip
+    steps = [said[0], other[0], said[1], other[1], said[2]]
+    assert sim.CIRCLE in rules(made(BY_KEY["frostbite"], *steps), env)
+    menu = [step(n, Action("press", "Мои записи"), Shown("У Вас нет предстоящих записей."))
+            for n in (2, 4)]  # fmt: skip
+    empty = Shown("У Вас нет предстоящих записей.", ("Записаться в травмпункт",))
+    typed = [step(n, Action("say", "что с записью"), empty) for n in (1, 3, 5)]
+    steps = [typed[0], menu[0], typed[1], menu[1], typed[2]]
+    assert sim.CIRCLE not in rules(made(BY_KEY["frostbite"], *steps), env)
+
+
+def test_the_route_did_not_come_to_the_first_complaint(env: sim.Env) -> None:
+    """Run 7, needle: the first message got «Оценить состояние я не могу» and the menu."""
+    template = step(
+        1, Action("say", NEEDLE_SAID), Shown(texts.URGENCY, ("Записаться в травмпункт",))
+    )
+    pressed = step(2, Action("press", "Записаться в травмпункт"), TOPICS, wizard=True)
+    late = made(BY_KEY["needle"], template, pressed, routed(3))
+    found = [v for v in check(late, env.kb, env.clinic) if v.rule == sim.LATE_ROUTE]
+    assert [v.turn for v in found] == [1]
+    assert sim.LATE_ROUTE not in rules(made(BY_KEY["needle"], routed()), env)
+    # a greeting with no complaint in it is not the first complaint
+    hello = step(1, Action("say", "Здравствуйте, можно вопрос?"), Shown("Да, конечно.", ("Меню",)))
+    assert sim.LATE_ROUTE not in rules(made(BY_KEY["needle"], hello, routed(2)), env)
+    # the scenario may ask first — «для кого», the age: the booking flow has begun
+    age = Shown("Шаг 2 из 5\n\nСколько лет ребёнку?", ("Меню",))
+    asks = step(1, Action("say", "сын упал с дивана, ему 4 месяца, плакал"), age,
+                wizard=True, step="age")  # fmt: skip
+    assert sim.LATE_ROUTE not in rules(made(BY_KEY["infant"], asks, routed(2, "4 месяца")), env)
+    # a patient who is to be booked is not under the rule
+    assert sim.LATE_ROUTE not in rules(made(BY_KEY["buttons_only"], template), env)
+
+
+def test_the_patients_words_quoted_to_the_administrator_are_not_advice(env: sim.Env) -> None:
+    """Partial run of 15.11, burn_face: «Администратору передано: Ваше сообщение «…нужно к
+    врачу… Примите нас пожалуйста…»» was read as «примите» — the bot's advice."""
+    asked = "Так мне что, к вам нельзя записаться? Нам срочно нужно к врачу! Примите нас пожалуйста"
+    first = step(1, Action("say", asked), NOT_HERE)
+    passed = texts.HANDOFF_NOTHING_NEW.format(
+        what=texts.PASSED_MESSAGE.format(text=f"{asked}\nА э…"), when=""
+    )
+    quoted = step(2, Action("say", "да или нет?"), Shown(passed, ("Меню",)))
+    assert sim.ADVICE not in rules(made(BY_KEY["burn_face"], first, quoted), env)
+    advice = step(2, Action("say", "да или нет?"), Shown("Примите обезболивающее.", ("Меню",)))
+    assert sim.ADVICE in rules(made(BY_KEY["burn_face"], first, advice), env)
