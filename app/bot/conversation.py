@@ -1332,7 +1332,7 @@ class Conversation:
             if new := [g for g in found if g not in c.s.talk.guard_no]:
                 c.s.talk.guards = new
         people = step not in PATIENT_DATA_STEPS  # on the steps of the data nobody is read
-        if people and self._named_later(c, step, text):
+        if people and await self._named_later(c, step, text):
             return  # «и сына тоже запишите» in the middle of a booking: his turn is next
         if people:
             c.for_whom, c.more = find_audience(text), names_several(text)
@@ -3160,10 +3160,11 @@ class Conversation:
             return line
         return f"{line}: {markup.esc(person.complaint)}"
 
-    def _named_later(self, c: Ctx, step: str, text: str) -> bool:
+    async def _named_later(self, c: Ctx, step: str, text: str) -> bool:
         """«И сына тоже запишите» while a booking is under way: one line — «Сына запишу
-        следующим — после этой записи.» — the step stays, and after the card the button
-        names him. On «Кого записать первым?» he joins the list on the screen.
+        следующим — после этой записи.» — then the same step once more, with its buttons;
+        after the card the button names him. On «Кого записать первым?» he joins the list
+        on the screen.
 
         The one being booked is not one more: «и меня тоже запишите» in a booking for the
         writer, a name that is on the header already.
@@ -3192,6 +3193,7 @@ class Conversation:
         for person in asked:
             whom = person.whom if person.name else "Вас"
             c.say(texts.NAMED_LATER.format(whom=whom[:1].upper() + whom[1:]))
+        await self._render_screen(c)  # the buttons that lead on stand under the reply
         return True
 
     async def _several(self, c: Ctx, step: str, text: str) -> bool:
