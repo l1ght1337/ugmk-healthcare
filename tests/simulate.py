@@ -79,7 +79,7 @@ GOAL = "цель не достигнута, и понятного отказа �
 ROUTED_BOOKED = "записан пациент, которому положен маршрут"  # Persona.route (rule 5)
 # A visit booked before the dialog moved or cancelled though nobody asked, and a visit booked
 # for somebody nobody asked to book: what the base ends with is not what the patient wanted
-TOUCHED = "изменена или отменена запись, о которой пациент не просил"
+TOUCHED = "создана, изменена или отменена запись, о которой пациент не просил"
 REPEAT = "один и тот же экран показан дважды подряд без новой строки"
 UNANSWERED = "вопрос пациента остался без ответа"
 LOST = "названные врач, день или «для кого» потерялись"

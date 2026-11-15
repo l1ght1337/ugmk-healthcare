@@ -526,7 +526,7 @@ def touched(dialog: Dialog) -> list[str]:
 
 
 def test_the_new_rule_stands_next_to_the_gravest_one() -> None:
-    assert sim.TOUCHED == "изменена или отменена запись, о которой пациент не просил"
+    assert sim.TOUCHED == "создана, изменена или отменена запись, о которой пациент не просил"
     assert sim.RULES.index(sim.TOUCHED) == sim.RULES.index(sim.ROUTED_BOOKED) + 1
     assert "several" in sim.GOALS
 
