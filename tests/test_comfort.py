@@ -30,14 +30,14 @@ def labels_of(reply) -> list[str]:  # type: ignore[no-untyped-def]
 # --- 1. the greeting ---------------------------------------------------------------------
 
 
-async def test_greeting_has_examples_in_text_and_as_buttons(make_chat) -> None:
+async def test_greeting_has_examples_in_text_not_as_buttons(make_chat) -> None:
     chat = make_chat()
     await chat.start()
     assert chat.text.startswith("Добрый день! Травмпункт «УГМК-Здоровье», я виртуальный помощник")
     assert "Запишу в травмпункт за минуту — 5 коротких шагов" in chat.text
-    assert "«запишите к Ярунину на завтра»" in chat.text  # a doctor from the data
+    assert "запишите к Ярунину на завтра" in chat.text  # a doctor from the data
     assert texts.BOT_DEMO_NOTE in chat.text
-    assert chat.labels() == [*EXAMPLES, *MENU]
+    assert chat.labels() == MENU  # tests/test_style.py has the whole text and its marks
 
 
 async def test_menu_after_the_greeting_has_no_examples(make_chat, kb: KnowledgeBase) -> None:
@@ -51,7 +51,7 @@ async def test_example_twisted_ankle_opens_the_limb_topics(make_chat, kb: Knowle
     fake = FakeDeepSeek()
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
-    await chat.press("Подвернул ногу")
+    await chat.data("ex:ankle")  # «Подвернул ногу» under an older greeting
     assert fake.requests == []  # an example is a button: no DeepSeek
     assert "Шаг 1 из 5" in chat.text and "На что больше похоже?" in chat.text
     assert chat.labels()[:3] == [
@@ -64,7 +64,7 @@ async def test_example_twisted_ankle_opens_the_limb_topics(make_chat, kb: Knowle
 async def test_example_dressing_starts_its_scenario(make_chat) -> None:
     chat = make_chat()
     await chat.start()
-    await chat.press("Нужна перевязка")
+    await chat.data("ex:dressing")  # «Нужна перевязка» under an older greeting
     assert texts.ASK_AUDIENCE in chat.text
     assert (await session(chat))["dialog"]["scenario_id"] == "dressing"
 
@@ -73,7 +73,7 @@ async def test_example_parking_answers_from_the_scripts(make_chat, kb: Knowledge
     fake = FakeDeepSeek()
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
-    await chat.press("Где парковаться?")
+    await chat.data("ex:parking")  # «Где парковаться?» under an older greeting
     assert fake.requests == []
     assert "С 8:00 до 20:00" in chat.text and "После 20:00" in chat.text
     assert chat.labels()[-3:] == [texts.HELPED, texts.MENU_ADMIN, texts.MENU_HOME]

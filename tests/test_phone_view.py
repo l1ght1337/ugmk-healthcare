@@ -149,8 +149,8 @@ async def test_demo_notes_are_one_line(make_chat) -> None:
     chat = make_chat()
     await chat.start()
     assert chat.text.endswith(texts.BOT_DEMO_NOTE) and "не попадают" not in chat.text
-    assert "«запишите к Ярунину на завтра»" in chat.text  # the one example that is not a button
-    assert "подвернул ногу" not in chat.text and "где парковаться" not in chat.text
+    # the examples are in the text (italic), not buttons: tests/test_style.py
+    assert "запишите к Ярунину на завтра" in chat.text and "подвернул ногу" in chat.text
     await book_dislocation(chat)
     card = next(r for r in chat.replies if r.card is not None)
     assert card.text.endswith("Тестовая запись: в расписание клиники не попадает.")

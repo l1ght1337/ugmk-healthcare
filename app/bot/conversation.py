@@ -125,7 +125,14 @@ from app.flow.words import format_age
 from app.flow.words import years as years_word
 from app.llm.assistant import Assistant
 from app.llm.masking import KnownPerson, mask
-from app.llm.reader import AnswerReading, TextReading, read_answer, read_question, read_text
+from app.llm.reader import (
+    AnswerReading,
+    InfoReading,
+    TextReading,
+    read_answer,
+    read_question,
+    read_text,
+)
 from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, plan
 from app.schedule.base import ScheduleProvider, Slot, SlotUnavailable
 from app.schedule.rules import all_slots, eligible
@@ -147,6 +154,7 @@ LABEL_MAX = 40  # a button's label, so that it is not cut on a phone
 TOPIC_DEPTH = 3  # how many topic menus one typed word may go through
 SAME_COMPLAINT = timedelta(minutes=30)  # the same complaint this soon is not a new one
 TALK_IDLE = timedelta(hours=6)  # a silence this long starts a new conversation (Talk)
+WELCOME_EVERY = timedelta(days=1)  # the welcome animation: not more often for one user
 FEW_WORDS = 3  # «да, передайте», «для сына»: a longer message says something more
 TEEN_FROM_MONTHS = 15 * 12  # 15–17 booking for themselves: an administrator, not the bot
 PERSON_EDIT_UNTIL = 3  # «Изменить» under «Записываю Ваню: …» up to the scenario questions
@@ -506,6 +514,12 @@ def _answer_label(question: Question, facts: dict[str, FactValue]) -> str | None
 
 def _home() -> list[Button]:
     return [Button(texts.MENU_HOME, "m:home")]
+
+
+async def _answered(*args: Any, **kw: Any) -> InfoReading:
+    """read_question, the answer escaped: DeepSeek's text is not a template of the bot."""
+    info = await read_question(*args, **kw)
+    return replace(info, answer=markup.esc(info.answer)) if info.answer else info
 
 
 def _same_screen(reply: Reply, shown: Reply) -> bool:
@@ -955,19 +969,24 @@ class Conversation:
         # a new conversation; that the state was on is kept for a booking made after it
         c.s.talk = Talk(at=c.now, danger_said=c.s.talk.danger_said)
         common = self.kb.common
-        text = common.greeting.text.format(
-            part_of_day=common.greeting_for(self._local(c.now).time())
-        )
+        # the phrase of script 01 with its first words bold, then what the bot does, an
+        # example of what to type and the note of the test mode (a quote)
+        hello = common.greeting.text.replace("{part_of_day}!", "**{part_of_day}!**", 1)
         doctors = self.clinic.schedule.doctors  # the example names a real doctor
         doctor = dative(doctors[min(EXAMPLE_DOCTOR, len(doctors) - 1)], initials=False)
-        text += "\n\n" + texts.GREETING_HINT.format(doctor=doctor)
+        parts = [
+            hello.format(part_of_day=common.greeting_for(self._local(c.now).time())),
+            f"{texts.GREETING_BOOK}\n{texts.GREETING_ASK}",
+            texts.GREETING_HINT.format(doctor=doctor),
+        ]
         if self.settings.is_demo_booking:
-            text += "\n\n" + texts.BOT_DEMO_NOTE
-        first = c.user.welcomed_at is None  # the welcome animation — at the first /start only
-        if first:
+            parts.append(texts.BOT_DEMO_NOTE)
+        # the animation: at a /start, but not more often than once a day for a user
+        shown = c.user.welcomed_at
+        animate = shown is None or c.now - shown >= WELCOME_EVERY
+        if animate:
             c.user.welcomed_at = c.now
-        examples = pack([Button(label, f"ex:{key}") for key, label in texts.EXAMPLES])
-        c.say(text, [*examples, *self._main_menu(c)], media=WELCOME if first else None)
+        c.say("\n\n".join(parts), self._main_menu(c), media=WELCOME if animate else None)
 
     async def _on_example(self, c: Ctx, key: str) -> None:
         """An example button under the greeting: what a typed phrase would do, without the LLM."""
@@ -1004,13 +1023,22 @@ class Conversation:
             name = texts.STAGES[stage - 1]
             lines.append(texts.STEP.format(n=stage, total=len(texts.STAGES), name=name))
         if c.s.wizard and c.s.person is not None and stage <= WISH_SHOWN_UNTIL:
-            lines.append(self._person_line(c.s.person))  # «Записываю Ваню: ногу подвернул»
+            # «📝 Записываю Ваню: ногу подвернул»
+            lines.append(f"{texts.MARK_BOOKING} {self._person_line(c.s.person)}")
         elif self._who_shown(c):
-            lines.append(self._who_line(c))  # «Запись для ребёнка, 4 месяца»
+            lines.append(f"{texts.MARK_BOOKING} {self._who_line(c)}")  # «📝 Запись для себя»
         wish = self._wish(c)
         booking = c.s.wizard or c.s.reschedule_of is not None
         if wish is not None and booking and stage <= WISH_SHOWN_UNTIL:
-            lines.append(render.wish_line(wish, self._local(c.now).date()))
+            # the label of what the wish names first: the doctor, the day or the time
+            mark = (
+                texts.MARK_DOCTOR
+                if wish.doctor
+                else texts.MARK_DAY
+                if wish.day is not None
+                else texts.MARK_TIME
+            )
+            lines.append(f"{mark} {render.wish_line(wish, self._local(c.now).date())}")
         return "\n".join(lines) or None
 
     def _who_shown(self, c: Ctx) -> bool:
@@ -1029,7 +1057,7 @@ class Conversation:
         if who is not None and who.audience == "child":
             age = who.age_months if age is None else age
             if who.name:
-                line = texts.FOR_WHOM_NAMED.format(line=line, name=who.name)
+                line = texts.FOR_WHOM_NAMED.format(line=line, name=markup.esc(who.name))
         return f"{line}, {format_age(age)}" if age is not None else line
 
     def _for_whom(self, c: Ctx) -> tuple[str | None, bool]:
@@ -1102,6 +1130,7 @@ class Conversation:
     ) -> None:
         """A wizard screen: replaces the pressed message; short labels two in a row."""
         header = self._header(c)
+        text = markup.lead(text, notes=texts.QUOTED)  # the question, or what is read first
         body = f"{header}\n\n{text}" if header else text
         layout = [list(r) for r in top]
         layout += grid(list(buttons), columns) if columns else pack(buttons)
@@ -1451,7 +1480,7 @@ class Conversation:
         what = texts.PASSED_ANSWERS
         if said:
             shown = said if len(said) <= 120 else said[:120] + "…"
-            what = texts.PASSED_MESSAGE.format(text=shown)
+            what = texts.PASSED_MESSAGE.format(text=markup.esc(shown))
         when = render.handoff_when(self.clinic, local)
         return texts.HANDOFF_NOTHING_NEW.format(what=what, when=when)
 
@@ -1514,7 +1543,7 @@ class Conversation:
         elif reading.kind in ("clinic_question", "medical_question") or (
             reading.kind == "menu_action" and reading.action == "ask"
         ):
-            info = await read_question(self._llm(c), text, await self._known(c))
+            info = await _answered(self._llm(c), text, await self._known(c))
             note = not info.answer
             line = info.answer or texts.ADMIN_WILL_ANSWER
         elif reading.kind == "about_bot":
@@ -1988,7 +2017,7 @@ class Conversation:
         if not under_way or not refuses_new_booking(text) or not await self._upcoming(c):
             return False
         if is_question(text):
-            info = await read_question(self._llm(c), text, await self._known(c))
+            info = await _answered(self._llm(c), text, await self._known(c))
             if info.answer:
                 c.say(info.answer)
         c.say(texts.NO_NEW_BOOKING)
@@ -2155,7 +2184,7 @@ class Conversation:
             await self._command(c, reading.action)  # type: ignore[arg-type]
             return True
         if reading.kind == "clinic_question" or asks:
-            info = await read_question(self._llm(c), text, known, on_partial=c.draft)
+            info = await _answered(self._llm(c), text, known, on_partial=c.draft)
             c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
         elif reading.kind == "about_bot":
             c.say(texts.ABOUT_BOT)
@@ -2165,7 +2194,7 @@ class Conversation:
             # «а сколько стоит приём? и на ближайшее можно?» on the day step, read by route
             # as a booking: a text answers nothing there, so the question in it is answered
             # and the same buttons follow — not «Не понял сообщение»
-            info = await read_question(self._llm(c), text, known, on_partial=c.draft)
+            info = await _answered(self._llm(c), text, known, on_partial=c.draft)
             c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
         else:
             return False
@@ -2175,7 +2204,7 @@ class Conversation:
 
     async def _answer_too(self, c: Ctx, text: str) -> None:
         """«Сколько стоит и запишите на завтра»: the answer first, then the request."""
-        info = await read_question(self._llm(c), text, await self._known(c))
+        info = await _answered(self._llm(c), text, await self._known(c))
         c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
 
     async def _next_booking(self, c: Ctx) -> Booking | None:
@@ -2291,7 +2320,7 @@ class Conversation:
             area = reading.area or topics.guess_area(text) or c.s.area
             # «ударился, болит сильно» with the area known: the word list names the kinds
             words = topics.guess_candidates(text) if area else []
-            unclear = reading.clarify or texts.TOPIC_UNCLEAR
+            unclear = markup.esc(reading.clarify) if reading.clarify else texts.TOPIC_UNCLEAR
             if advice:
                 self._advice(c)
             self._topics_for(c, area, reading.candidates or words, unclear, said=advice)
@@ -2545,7 +2574,7 @@ class Conversation:
             Button(texts.NAME_YES, "nm:yes", "primary"),
             Button(texts.NAME_AGAIN, "nm:again"),
         ]
-        self._screen(c, texts.NAME_CONFIRM.format(name=name), buttons)
+        self._screen(c, texts.NAME_CONFIRM.format(name=markup.esc(name)), buttons)
 
     async def _on_name_ok(self, c: Ctx, value: str) -> None:
         if c.s.step != "name_ok" or not c.s.draft_name:
@@ -2584,7 +2613,7 @@ class Conversation:
         """The birth date; above it — how the name was read: any word order is accepted."""
         c.s.step = "birth"
         name = " ".join(part for part in c.s.draft_name or [] if part)
-        said = [texts.PATIENT_IS.format(name=name)] if name else []
+        said = [texts.PATIENT_IS.format(name=markup.esc(name))] if name else []
         self._screen(c, "\n".join([*said, texts.ASK_BIRTH]))
 
     async def _on_birth(self, c: Ctx, text: str) -> None:
@@ -3034,7 +3063,7 @@ class Conversation:
 
     def _person_line(self, person: Person) -> str:
         line = texts.PERSON_LINE.format(whom=person.whom if person.name else "Вас")
-        return f"{line}: {person.complaint}" if person.complaint else line
+        return f"{line}: {markup.esc(person.complaint)}" if person.complaint else line
 
     async def _several(self, c: Ctx, step: str, text: str) -> bool:
         """A message that names two patients or more: one booking at a time.
@@ -3248,8 +3277,8 @@ class Conversation:
         c.s.step = "question"
         qid = c.s.dialog.question_id
         buttons = [Button(ch.label, f"q:{qid}:{i}") for i, ch in enumerate(prompt.choices)]
-        text, more = self._shorten(prompt.text)
-        self._screen(c, text, buttons, rows=more)
+        text, more = self._shorten(prompt.text)  # may be DeepSeek's wording of the question
+        self._screen(c, markup.esc(text), buttons, rows=more)
 
     def _shorten(self, text: str) -> tuple[str, list[list[Button]]]:
         """A long script phrase in two lines, with «Подробнее» for the whole of it."""
@@ -3863,7 +3892,7 @@ class Conversation:
                 Button(texts.CANCEL, f"b:cancel:{booking.id}", "danger"),
             ]
         ]
-        c.say(card.plain(), actions, card=card, pin=booking.id)
+        c.say(markup.esc(card.plain()), actions, card=card, pin=booking.id)
         if (place := render.venue(self.clinic)) is not None:
             c.say(place.address, venue=place)
         self._reset(c, booking=True)  # the second patient, if one was named, is offered next
@@ -4024,7 +4053,7 @@ class Conversation:
             item = texts.MY_ITEM.format(
                 date=render.booking_day(day, today) if asked else render.format_date(day),
                 time=f"{start:%H:%M}",
-                patient=patient.full_name if patient else "—",
+                patient=markup.esc(patient.full_name) if patient else "—",
                 doctor=b.doctor,
             )
             if len(bookings) == 1:
@@ -4140,7 +4169,7 @@ class Conversation:
                 texts.MY_LINE.format(
                     date=render.format_date(start.date()),
                     time=f"{start:%H:%M}",
-                    patient=patient.full_name if patient else "—",
+                    patient=markup.esc(patient.full_name) if patient else "—",
                     doctor=b.doctor,
                 )
             )
@@ -4269,7 +4298,7 @@ class Conversation:
         text = texts.ALREADY_BOOKED.format(
             date=render.format_date(start.date()),
             time=f"{start:%H:%M}",
-            patient=patient.full_name if patient else "—",
+            patient=markup.esc(patient.full_name) if patient else "—",
         )
         rows = [
             [Button(texts.ALREADY_MOVE, "sec:move", "primary")],
@@ -4779,7 +4808,7 @@ class Conversation:
     async def _answer_question(self, c: Ctx, text: str) -> None:
         """A question about the trauma centre, from kb/info; an administrator only by button."""
         known = await self._known(c)
-        reading = await read_question(self._llm(c), text, known, on_partial=c.draft)
+        reading = await _answered(self._llm(c), text, known, on_partial=c.draft)
         self._reset(c)
         if reading.answer and not reading.offer_admin:
             c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text

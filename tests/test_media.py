@@ -31,11 +31,11 @@ from tests.test_conversation import book_dislocation
 # --- what the conversation asks for --------------------------------------------------------
 
 
-async def test_welcome_animation_only_at_the_first_start(make_chat) -> None:
+async def test_welcome_animation_at_a_start_not_twice_a_day(make_chat) -> None:
     chat = make_chat()
     await chat.start()
     assert chat.replies[0].media == WELCOME
-    await chat.start()
+    await chat.start()  # the same day (tests/test_style.py: a day later it is shown again)
     assert chat.replies[0].media is None
 
 

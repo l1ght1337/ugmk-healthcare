@@ -134,3 +134,71 @@ def test_the_helpers_wrap_and_escape() -> None:
         ("link", "ул. Ясная, 46")
     ]
     assert kinds(markup.quote("первая\nвторая")) == [("quote", "первая\nвторая")]
+
+
+# --- the bold line of a screen: what the patient is to answer or to read first ------------------
+
+NOTE = "Эти данные нужны только для записи и хранятся у клиники."
+
+
+@pytest.mark.parametrize(
+    ("body", "bold"),
+    [
+        ("Как получена травма? Что произошло?", "Как получена травма? Что произошло?"),
+        ("С чем обращаетесь? Что произошло? Опишите своими словами или выберите из списка.",
+         "С чем обращаетесь? Что произошло?"),
+        ("Только хирургический шов. Если нужен косметический — в другое учреждение. Записать Вас?",
+         "Записать Вас?"),
+        ("Сколько лет ребёнку? Если меньше года — сколько месяцев?",
+         "Сколько лет ребёнку? Если меньше года — сколько месяцев?"),
+        ("12 ноября (четверг)\nВрач смены: Кузнецов Н. А. (08:00–20:00)\n\n"
+         "Выберите, пожалуйста, время:",
+         "Выберите, пожалуйста, время:"),
+        (f"Для записи мне потребуется фамилия, имя, отчество.\nНачнём с ФИО.\n{NOTE}",
+         "Начнём с ФИО."),
+        ("Пациент: Белов Артём Игоревич. Если неверно, нажмите «Назад».\n"
+         "Дата рождения пациента — например, 12.03.2015.",
+         "Дата рождения пациента — например, 12.03.2015."),
+        ("Опишите, пожалуйста, своими словами, что случилось, — или позовите администратора.",
+         "Опишите, пожалуйста, своими словами, что случилось, — или позовите администратора."),
+    ],
+)  # fmt: skip
+def test_the_lead_of_a_screen(body: str, bold: str) -> None:
+    text, spans = parse(markup.lead(body, notes=(NOTE,)))
+    assert text == body  # the words and the lines are the same
+    assert [(s.kind, cut(text, s)) for s in spans] == [("bold", bold)]
+
+
+def test_the_lead_is_not_added_to_a_text_that_has_its_own() -> None:
+    marked = "**Добрый день!** Чем я могу Вам помочь?"
+    assert markup.lead(marked) == marked
+
+
+def test_the_lead_with_a_patients_name_in_it() -> None:
+    name = "Ли_Вэй **Чжан**"
+    text, spans = parse(markup.lead(f"Пациент: {esc(name)} — верно?"))
+    assert text == f"Пациент: {name} — верно?"
+    assert [(s.kind, cut(text, s)) for s in spans] == [("bold", text)]
+
+
+@pytest.mark.parametrize(
+    ("route", "bold", "rest"),
+    [
+        ("Травму головы не принимаем: нужно исключить сотрясение. Обратитесь в одну из "
+         "больниц:\n📍 A",
+         "Травму головы не принимаем: нужно исключить сотрясение.",
+         "Обратитесь в одну из больниц:\n📍 A"),
+        ("Детей до 6 месяцев травмпункт не принимает — их направляют в:\n📍 A",
+         "Детей до 6 месяцев травмпункт не принимает — их направляют в:", "📍 A"),
+        ("Обратиться нужно:\n📍 A", "Обратиться нужно:", "📍 A"),
+    ],
+)  # fmt: skip
+def test_the_first_sentence_of_a_route_is_bold(route: str, bold: str, rest: str) -> None:
+    text, spans = parse(markup.first_sentence(route))
+    assert text == f"{bold}\n{rest}"
+    assert [(s.kind, cut(text, s)) for s in spans] == [("bold", bold)]
+
+
+def test_a_route_that_begins_with_the_ambulance_has_no_other_bold_line() -> None:
+    route = "⚠️ Если кость видна в ране, вызывайте скорую: 103 или 112.\nВам нужно обратиться:\n📍 A"
+    assert markup.first_sentence(route) == route

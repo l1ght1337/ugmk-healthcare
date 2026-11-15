@@ -50,7 +50,8 @@ class User(Base):
     phone: Mapped[str | None] = mapped_column(String(32))
     consent_at: Mapped[datetime | None]
     guardian_at: Mapped[datetime | None]  # «я законный представитель ребёнка»
-    welcomed_at: Mapped[datetime | None]  # the welcome animation was shown (first /start)
+    # the welcome animation was shown last: at a /start, not more often than once a day
+    welcomed_at: Mapped[datetime | None]
     active_at: Mapped[datetime | None]  # the patient's last message or button press
     session: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)

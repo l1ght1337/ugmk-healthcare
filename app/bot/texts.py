@@ -224,11 +224,18 @@ REQUEST_UNCLEAR = "Не совсем понял Вашу просьбу. Выб�
 ONLY_TEXT = "Я понимаю только текст и кнопки. Напишите, пожалуйста, словами или выберите кнопкой."
 
 # --- comfort (task 3): the greeting, the summary, «зачем данные», answers, unfinished bookings
-# One example in the text — the one that is not a button below it.
-GREETING_HINT = (
-    "Запишу в травмпункт за минуту — 5 коротких шагов. Напишите своими словами, например "
-    "«запишите {doctor} на завтра», или нажмите кнопку."
+# The greeting after the phrase of script 01 (the customer's wording of 15.11.2026). The
+# marks are those of app/bot/markup.py; the examples are in the text, not buttons.
+GREETING_BOOK = "📝 **Запишу в травмпункт за минуту** — 5 коротких шагов."
+GREETING_ASK = (
+    "💬 **Отвечу на вопросы о травмпункте**: адрес, цены, парковка, документы. Если ответа у "
+    "меня нет — передам вопрос администратору."
 )
+GREETING_HINT = (
+    "Напишите своими словами, например _подвернул ногу_ или _запишите {doctor} на завтра_, — "
+    "или нажмите кнопку."
+)
+# the buttons of an older greeting («Подвернул ногу», «Нужна перевязка», «Где парковаться?»)
 EXAMPLES = (
     ("ankle", "Подвернул ногу"),
     ("dressing", "Нужна перевязка"),

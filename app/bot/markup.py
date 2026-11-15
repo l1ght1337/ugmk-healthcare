@@ -205,6 +205,62 @@ def ambulance(text: str) -> str:
     return "\n".join(lines)
 
 
+def _has_bold(marked: str) -> bool:
+    return "**" in marked.replace("\\*", "")
+
+
+def _sentences(line: str) -> list[str]:
+    return re.split(r"(?<=[.!?…])\s+", line)
+
+
+def lead(marked: str, notes: Iterable[str] = ()) -> str:
+    """The bold line of a screen — what the patient is to answer or to read first.
+
+    The question: the first line with «?», its sentences that ask («С чем обращаетесь? Что
+    произошло?», not «Опишите своими словами…» after them). No question — the last line
+    that ends with a colon («Выберите, пожалуйста, время:»); no such line — the last one
+    that is not a service note («Начнём с ФИО.»). A text with a bold of its own stays.
+    """
+    if _has_bold(marked):
+        return marked
+    skipped = (*notes, "")
+    lines = marked.split("\n")
+
+    def plain_line(line: str) -> bool:
+        return line not in skipped and not line.startswith(("> ", AMBULANCE, PLACE, "•"))
+
+    for n, line in enumerate(lines):
+        if "?" not in line or not plain_line(line):
+            continue
+        parts = _sentences(line)
+        first = next(i for i, part in enumerate(parts) if "?" in part)
+        last = first
+        while last + 1 < len(parts) and parts[last + 1].rstrip('»")').endswith("?"):
+            last += 1
+        asked = " ".join(parts[first : last + 1])
+        lines[n] = line.replace(asked, bold(asked), 1)
+        return "\n".join(lines)
+    candidates = [n for n, line in enumerate(lines) if plain_line(line)]
+    if not candidates:
+        return marked
+    colon = [n for n in candidates if lines[n].rstrip().endswith(":")]
+    n = colon[-1] if colon else candidates[-1]
+    lines[n] = bold(lines[n])
+    return "\n".join(lines)
+
+
+def first_sentence(marked: str) -> str:
+    """A route: its first sentence is the bold line, what follows goes to the next line. A
+    route that begins with the line about the ambulance has that line for it."""
+    if _has_bold(marked) or marked.startswith(AMBULANCE):
+        return marked
+    head, sep, tail = marked.partition("\n")
+    parts = _sentences(head)
+    rest = " ".join(parts[1:])
+    lines = [bold(parts[0]), *([rest] if rest else [])]
+    return "\n".join(lines) + sep + tail
+
+
 def _covered(spans: Iterable[Span], kind: Kind, start: int, end: int) -> bool:
     return any(s.kind == kind and s.start <= start and end <= s.end for s in spans)
 
