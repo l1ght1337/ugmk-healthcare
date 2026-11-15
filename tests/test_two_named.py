@@ -4,7 +4,9 @@ From the second simulation run (two_kids, turns 1–7): «Маша 7 лет ру
 подвернул» — the bot promised to book one at a time and kept the patient on step 1 for seven
 turns, asking DeepSeek about both injuries at once. Now it asks «Кого записать первым?» with a
 button for each name, leads step 1 with the part about the chosen one, does not ask the age it
-has been told, and after the card offers the other by name: «Записать Ваню».
+has been told (it stands over the step: «Записываю Машу, 7 лет: руку ушибла»), and after the
+card offers the other by name: «Записать Ваню». The brother is not offered the sister booked a
+minute ago on «Кого записываем?»: the bot asks his name at once.
 
 The clinic clock is Thursday, 12 November 2026, 12:00.
 """
@@ -76,7 +78,8 @@ async def test_step_one_gets_only_the_part_about_the_chosen_child(
     (request,) = fake.requests
     sent = json.loads(request["messages"][1]["content"])["text"]
     assert sent == "руку ушибла"  # not a word about Ваня and his leg
-    assert "Записываю Машу: руку ушибла" in chat.text and texts.PERSON_EDIT in chat.labels()
+    assert "Записываю Машу, 7 лет: руку ушибла" in chat.text
+    assert texts.PERSON_EDIT in chat.labels()
     state = await session(chat)
     assert state["for_whom"] == "child" and [p["name"] for p in state["people"]] == ["Ваня"]
 
@@ -86,7 +89,7 @@ async def test_the_age_told_is_not_asked_and_the_other_child_is_offered_by_name(
     await chat.start()
     await chat.say(KIDS)
     await chat.press("Машу, 7 лет")
-    assert "Записываю Машу: руку ушибла" in chat.text
+    assert "Записываю Машу, 7 лет: руку ушибла" in chat.text
     await chat.press("Похоже на вывих")
     assert "Как получена травма" in chat.text  # neither «для кого», nor «сколько лет»
     assert (await session(chat))["dialog"]["age_months"] == 84
@@ -100,14 +103,16 @@ async def test_the_age_told_is_not_asked_and_the_other_child_is_offered_by_name(
     assert chat.text == texts.NEXT_PATIENT and chat.labels() == ["Записать Ваню", *MENU]
 
     await chat.press("Записать Ваню")  # his part and his age are in place: no «для кого»
-    assert "Записываю Ваню: ногу подвернул" in chat.text and texts.ASK_AUDIENCE not in chat.text
+    assert "Записываю Ваню, 10 лет: ногу подвернул" in chat.text
+    assert texts.ASK_AUDIENCE not in chat.text
     await chat.press("Похоже на вывих")
     assert "Как получена травма" in chat.text
     assert (await session(chat))["dialog"]["age_months"] == 120
     for label in ANSWERS:
         await chat.press(label)
     await chat.pick_slot("Завтра")
-    await chat.press(texts.PATIENT_NEW)
+    # «Кого записываем?» with Мария on it is not shown: «Записываю Ваню» and the name at once
+    assert texts.PATIENT_PICK not in chat.text and texts.ASK_NAME in chat.text
     await chat.say("Воронин Иван Кириллович, 05.05.2016")
     assert "Иван Кириллович записан" in chat.text
     assert len(await bookings(chat.conversation.db)) == 2

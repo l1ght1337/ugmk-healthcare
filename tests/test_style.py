@@ -166,7 +166,7 @@ async def test_a_complaint_with_marks_in_it_is_shown_as_typed(make_chat) -> None
     await chat.say(said)
     await chat.press("Машу, 7 лет")
     screen = chat.replies[-1]
-    assert "📝 Записываю Машу: руку **ушибла** _сильно_" in screen.text.split("\n")
+    assert "📝 Записываю Машу, 7 лет: руку **ушибла** _сильно_" in screen.text.split("\n")
     assert [kind for kind, _ in marked(screen)] == ["bold"]  # the question only
     assert all("ушибла" not in piece for _, piece in marked(screen))
 

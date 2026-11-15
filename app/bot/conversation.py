@@ -106,7 +106,7 @@ from app.flow.identity import (
     parse_birth_date,
 )
 from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
-from app.flow.people import Person, find_people, merge, named_in
+from app.flow.people import Person, find_people, merge, named_in, shared
 from app.flow.safety import find_phrase, sign_passed
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import Choice, FactValue, Question, Scenario
@@ -158,6 +158,8 @@ WELCOME_EVERY = timedelta(days=1)  # the welcome animation: not more often for o
 FEW_WORDS = 3  # «да, передайте», «для сына»: a longer message says something more
 TEEN_FROM_MONTHS = 15 * 12  # 15–17 booking for themselves: an administrator, not the bot
 PERSON_EDIT_UNTIL = 3  # «Изменить» under «Записываю Ваню: …» up to the scenario questions
+# … and «Записываю Ваню, 10 лет» stands over the name and the birth date: whose they are
+PERSON_NAMED_STEPS = frozenset({"patient", "name", "name_ok", "birth"})
 # Where a message that names several patients is asked «Кого записать первым?»
 SEVERAL_STEPS = frozenset({"idle", "complaint", "topic", "describe", "audience", "age", "whom"})
 STUCK_AFTER = 3  # «не понял» this many times in a row is said plainly, with an administrator
@@ -434,6 +436,10 @@ class Session(BaseModel):
     more: bool = False  # two patients were named: the second is offered after the card
     people: list[Person] = []  # the patients named in the conversation, not booked yet
     person: Person | None = None  # … and the one of them being booked now
+    # what was said about all of them, not about one: «сегодня с горки упали», «к врачу не
+    # обращались» — it answers the scenario questions of each
+    shared: list[str] = []
+    booked: list[int] = []  # the patients (Patient.id) booked for those named: not offered again
     teen_months: int | None = None  # 15–17 booking for himself: his age, in months
     teen_passed: bool = True  # … and the request has gone to an administrator
     teen_line: str | None = None  # the one-line answer of the last turn on that screen
@@ -910,21 +916,19 @@ class Conversation:
             chat_id=c.user.chat_id,
         )
 
-    def _reset(self, c: Ctx, *, booking: bool = False) -> None:
+    def _reset(self, c: Ctx, *, booking: bool = False, named: bool = False) -> None:
         """A clean session; a booking left for the menu stays until it is resumed or old.
 
         ``booking`` — the same booking goes on: the second patient to offer after the card and
-        «Записать ещё раз» stay.
+        «Записать ещё раз» stay. ``named`` — the patients named in the conversation go on:
+        those who wait, what was said about all of them, who of them is booked.
         """
         s = c.s
         c.s = Session(paused=s.paused, paused_at=s.paused_at, talk=s.talk)
+        if booking or named:
+            c.s.people, c.s.shared, c.s.booked = s.people, s.shared, s.booked
         if booking:
-            c.s.more, c.s.second_ok, c.s.people, c.s.person = (
-                s.more,
-                s.second_ok,
-                s.people,
-                s.person,
-            )
+            c.s.more, c.s.second_ok, c.s.person = s.more, s.second_ok, s.person
 
     def _paused_fresh(self, c: Ctx) -> bool:
         at = c.s.paused_at
@@ -1025,6 +1029,9 @@ class Conversation:
         if c.s.wizard and c.s.person is not None and stage <= WISH_SHOWN_UNTIL:
             # «📝 Записываю Ваню: ногу подвернул»
             lines.append(f"{texts.MARK_BOOKING} {self._person_line(c.s.person)}")
+        elif c.s.wizard and c.s.person is not None and c.s.step in PERSON_NAMED_STEPS:
+            # «📝 Записываю Ваню, 10 лет» over «Начнём с ФИО»: not the one booked before
+            lines.append(f"{texts.MARK_BOOKING} {self._person_line(c.s.person, short=True)}")
         elif self._who_shown(c):
             lines.append(f"{texts.MARK_BOOKING} {self._who_line(c)}")  # «📝 Запись для себя»
         wish = self._wish(c)
@@ -1954,7 +1961,7 @@ class Conversation:
         # травма?» of 04-07 is not asked after «Нет» to the words of 05-01
         fields = self.kb.scenario(scenario).fields()
         answered = {k: v for k, v in self.kb.scenario(guard).guard_no.items() if k in fields}
-        await self._begin(c, scenario, {**facts, **answered}, age)
+        await self._begin(c, scenario, {**facts, **answered}, age, picked=picked)
         if c.s.step != "guard":
             c.s.picked = picked
 
@@ -2012,7 +2019,7 @@ class Conversation:
             return
         facts, age, picked = c.s.pending_facts, c.s.child_age, c.s.picked
         c.s.pending_scenario, c.s.pending_facts, c.s.child_age = None, {}, None
-        await self._begin(c, scenario, facts, age)
+        await self._begin(c, scenario, facts, age, picked=picked)
         c.s.picked = picked
 
     async def _no_new_booking(self, c: Ctx, step: str, text: str) -> bool:
@@ -2321,9 +2328,14 @@ class Conversation:
             c.s.area = area if fits else reading.area
             if advice:
                 self._advice(c, reading.scenario_id)
-            await self._begin(c, reading.scenario_id, reading.facts, find_child_age(text))
-            if not topics.names_kind(reading.scenario_id, text):
-                c.s.picked = "words"  # DeepSeek's choice, not the patient's word for the injury
+            # DeepSeek's choice, not the patient's word for the injury
+            words: Literal["words"] | None = (
+                None if topics.names_kind(reading.scenario_id, text) else "words"
+            )
+            age = find_child_age(text)
+            await self._begin(c, reading.scenario_id, reading.facts, age, picked=words)
+            if words:
+                c.s.picked = words
         elif reading.kind == "complaint":
             area = reading.area or topics.guess_area(text) or c.s.area
             # «ударился, болит сильно» with the area known: the word list names the kinds
@@ -2410,8 +2422,10 @@ class Conversation:
             self._advice(c, only)
         if only is not None:
             c.s.area = area
-            await self._begin(c, only, {}, None)
-            c.s.picked = "words" if only in topics.KIND_WORDS else None  # the word lists' guess
+            # the word lists' guess
+            guess: Literal["words"] | None = "words" if only in topics.KIND_WORDS else None
+            await self._begin(c, only, {}, None, picked=guess)
+            c.s.picked = guess
         else:
             self._topics_for(c, area, fitting, texts.PICK_TOPIC, said=advice)
 
@@ -2927,8 +2941,9 @@ class Conversation:
         if item.menu is not None:
             self._menu_screen(c, item.menu)
         elif item.scenario is not None:
-            await self._begin(c, item.scenario, dict(item.facts), None)
-            c.s.picked = "unsure" if item.unsure else None
+            unsure: Literal["unsure"] | None = "unsure" if item.unsure else None
+            await self._begin(c, item.scenario, dict(item.facts), None, picked=unsure)
+            c.s.picked = unsure
         elif item.action == "describe":
             c.s.step = "describe"
             self._screen(c, texts.DESCRIBE)
@@ -3056,8 +3071,7 @@ class Conversation:
                 text = await self._admin_booking(c, booking)
                 c.turn.admin.append(AdminPost(text, edit_message=booking.admin_message_id))
         people, more = c.s.people, c.s.more  # patients named before: now is their time
-        self._reset(c)
-        c.s.people = people
+        self._reset(c, named=True)
         waits = bool(people) or more
         text = texts.NEXT_PATIENT if waits else f"{texts.THANKS} {self.kb.common.more_help.text}"
         if len(people) == 1:  # exactly one named and not booked: by name, «для кого» is not asked
@@ -3069,9 +3083,14 @@ class Conversation:
 
     # --- several patients named in the conversation (app/flow/people.py) ----------------------
 
-    def _person_line(self, person: Person) -> str:
+    def _person_line(self, person: Person, *, short: bool = False) -> str:
+        """«Записываю Машу, 7 лет: руку ушибла»; ``short`` — without what happened."""
         line = texts.PERSON_LINE.format(whom=person.whom if person.name else "Вас")
-        return f"{line}: {markup.esc(person.complaint)}" if person.complaint else line
+        if person.name and person.age_months is not None:  # told with the name: not asked
+            line += f", {format_age(person.age_months)}"
+        if short or not person.complaint:
+            return line
+        return f"{line}: {markup.esc(person.complaint)}"
 
     async def _several(self, c: Ctx, step: str, text: str) -> bool:
         """A message that names two patients or more: one booking at a time.
@@ -3081,8 +3100,14 @@ class Conversation:
         about two injuries at once: step 1 gets the part about the chosen patient only.
         """
         named = find_people(text)
+        asked = step == "first"  # «Кого записать первым?» is on the screen
         if c.s.people:
             merge(c.s.people, named)  # «сыну 12 лет»: what is new about those who wait
+        # nobody is chosen yet: what the messages say about all of them is kept for each
+        waits = asked or (c.s.more and c.s.person is None and step in START_STEPS)
+        told = bool(named) or len(text.split()) > FEW_WORDS  # not «да всё равно»
+        if c.more or len(named) > 1 or (waits and told):
+            c.s.shared += [part for part in shared(text) if part not in c.s.shared]
         if len(named) < 2 or step not in SEVERAL_STEPS or c.alone:
             return False
         c.more = False  # said here, with the names
@@ -3091,8 +3116,8 @@ class Conversation:
         c.s.people = named
         if first is None:
             if c.s.dialog.scenario_id is None:  # nothing is chosen yet: a booking begins here
-                self._reset(c)
-                c.s.wizard, c.s.people = True, named
+                self._reset(c, named=True)
+                c.s.wizard = True
             self._first_screen(c)
             return True
         c.say(texts.ONE_BY_ONE)
@@ -3121,6 +3146,10 @@ class Conversation:
     async def _on_first_text(self, c: Ctx, text: str) -> None:
         """«Сначала Ваню», «второго», «с Маши» on «Кого записать первым?»."""
         low = text.lower().replace("ё", "е")
+        if len(find_people(text)) > 1:
+            # «у Маши ушиб руки, а у Вани нога подвернулась»: more about both, not a choice
+            self._first_screen(c)
+            return
         at = named_in(text, c.s.people)
         if at is None and re.search(r"\bперв\w+", low):
             at = 0
@@ -3156,7 +3185,7 @@ class Conversation:
             if step is not None:
                 await self._show(c, step)
             return
-        self._reset(c)
+        self._reset(c, named=True)
         c.s.wizard, c.s.second_ok = True, True  # the booking made before is not asked about
         c.s.person, c.s.people, c.s.for_whom = person, rest, person.audience
         if person.complaint:
@@ -3170,9 +3199,8 @@ class Conversation:
         if c.s.person is None or value != "edit":
             c.say(texts.STALE, [_home()])
             return
-        people = c.s.people
-        self._reset(c)
-        c.s.wizard, c.s.second_ok, c.s.people, c.s.talk.who = True, True, people, None
+        self._reset(c, named=True)
+        c.s.wizard, c.s.second_ok, c.s.talk.who = True, True, None
         self._whom_screen(c)
 
     def _whom_screen(self, c: Ctx) -> None:
@@ -3216,9 +3244,19 @@ class Conversation:
     # --- scenario steps ----------------------------------------------------------------
 
     async def _begin(
-        self, c: Ctx, scenario_id: str, facts: dict[str, FactValue], child_age: int | None
+        self,
+        c: Ctx,
+        scenario_id: str,
+        facts: dict[str, FactValue],
+        child_age: int | None,
+        *,
+        picked: Literal["unsure", "words"] | None = None,
     ) -> None:
-        """Start a scenario of the wizard; the body area may already answer a question."""
+        """Start a scenario of the wizard; the body area may already answer a question.
+
+        ``picked`` — the scenario was not named by the patient («Не знаю», route's choice):
+        «Ваши ответы» says so when every question is answered at once.
+        """
         if self._same_asked(c, scenario_id, facts, child_age):
             return  # after a route: «Это та же травма, о которой Вы писали, или другая?»
         if self._guard_asked(c, scenario_id, facts, child_age):
@@ -3226,7 +3264,7 @@ class Conversation:
         area, wish, (for_whom, remembered) = c.s.area, c.s.wish, self._for_whom(c)
         self._reset(c, booking=True)
         c.s.wizard, c.s.area, c.s.wish, c.s.for_whom = True, area, wish, for_whom  # type: ignore[assignment]
-        c.s.who_kept, c.s.notices_said = remembered, c.notices_said
+        c.s.who_kept, c.s.notices_said, c.s.picked = remembered, c.notices_said, picked
         who = c.s.talk.who
         known = who.age_months if who is not None and who.audience == "child" else None
         if child_age is not None and child_age == known and for_whom == "child":
@@ -3248,7 +3286,32 @@ class Conversation:
             c.s.pending_scenario, c.s.pending_facts, c.s.child_age = scenario_id, facts, child_age
             self._child_confirm(c)
             return
+        facts = await self._told_facts(c, scenario_id, facts)
         await self._show(c, self.engine.start(c.s.dialog, scenario_id, facts))
+
+    async def _told_facts(
+        self, c: Ctx, scenario_id: str, facts: dict[str, FactValue]
+    ) -> dict[str, FactValue]:
+        """What was said about all the patients named answers the questions of each.
+
+        «Мы сегодня с горки упали… К врачу ещё не обращались»: with this patient's own part
+        it is read once, as the answer to the first question the scenario would ask; DeepSeek
+        returns the other fields it names too. The patient sees «Ваши ответы: …» with
+        «Изменить ответы» instead of the questions; what was not said is asked as usual.
+        """
+        person = c.s.person
+        if person is None or not c.s.shared:
+            return facts
+        probe = c.s.dialog.model_copy(deep=True)
+        step = self.engine.start(probe, scenario_id, dict(facts))
+        if not isinstance(step, AskQuestion):
+            return facts
+        text = ". ".join(part for part in (person.complaint, *c.s.shared) if part)
+        known = await self._known(c)
+        reading = await read_answer(self._llm(c), step.scenario, step.question, text, known)
+        if reading.unavailable or reading.crisis:
+            return facts
+        return {**reading.facts, **facts}
 
     def _ends_at_once(self, c: Ctx, scenario_id: str, facts: dict[str, FactValue]) -> bool:
         """The scenario would end at once with a route or a request to the administrators.
@@ -3799,6 +3862,9 @@ class Conversation:
                     )
                 )
             ).all()
+            if c.s.person is not None:
+                # «Записываю Ваню»: his sister booked a minute ago is not offered for him
+                saved = [p for p in saved if p.id not in c.s.booked]
             if not saved:
                 self._ask_name(c)
                 return
@@ -3905,6 +3971,8 @@ class Conversation:
         c.say(markup.esc(card.plain()), actions, card=card, pin=booking.id)
         if (place := render.venue(self.clinic)) is not None:
             c.say(place.address, venue=place)
+        if c.s.person is not None:  # booked: not offered for the next of those named
+            c.s.booked = [*c.s.booked, patient.id]
         self._reset(c, booking=True)  # the second patient, if one was named, is offered next
         c.s.talk.who = None  # the booking is made: the next one is asked «для кого»
         c.s.talk.guards = []
