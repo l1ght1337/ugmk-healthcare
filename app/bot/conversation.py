@@ -331,6 +331,7 @@ START_STEPS = frozenset({"complaint", "topic", "describe"})  # the scenario is n
 # steps the text answers a question («Когда была получена травма?» — «в пятницу»).
 FREE_STEPS = frozenset({"idle", *START_STEPS, "info", "offer_admin", "payment"})
 WISH_SHOWN_UNTIL = 4  # the wish line stays on screen up to «День и время»
+TIME_STAGE = 4  # «День и время»: from here on a booking has its day or its time
 WHO_SHOWN_UNTIL = 3  # «Запись для себя» and «Изменить» stay up to the scenario questions
 # The text is an age, a name, a birth date, a phone number — unless it is a command or a
 # question: «позови администратора» on the name step is not the patient's name.
@@ -399,6 +400,11 @@ class Talk(BaseModel):
     # another; «Нет» to the question of a scenario is kept: not asked twice
     guards: list[str] = []
     guard_no: list[str] = []
+    # a request to the administrators was made in the middle of a booking: the day and the
+    # time it was for («сб, 14.11, 11:30»; empty — none was chosen yet) and the doctor. Said
+    # to the patient and to the administrators; dropped by a booking that is made
+    unbooked: str | None = None
+    unbooked_doctor: str | None = None
     danger: Danger | None = None  # on: by a phrase or an «emergency» outcome; off: «Меню»
     danger_said: str | None = None  # it was on: a booking made later tells the administrators
     line: str | None = None  # the template said last turn: not the same one twice in a row
@@ -875,7 +881,11 @@ class Conversation:
                 await self._note_misses(ctx, step, said)
             if not ctx.deleted:
                 self._remember_screen(ctx, before, before_key)
+                # the consent and the phone of a request to the administrators are not the
+                # booking: the one left for that request stays for «Продолжить запись»
                 under_way = ctx.s.wizard and ctx.s.step in WIZARD_STEPS
+                left = ctx.s.resume == "handoff" and ctx.s.talk.unbooked is not None
+                under_way = under_way and not left
                 if under_way or not self._paused_fresh(ctx):  # a booking is on screen, or old
                     ctx.s.paused = ctx.s.paused_at = None
                 row.session = ctx.s.model_dump(mode="json")
@@ -2280,6 +2290,11 @@ class Conversation:
         asks = reading.kind == "menu_action" and reading.action == "ask"
         asks = asks and c.s.step in WIZARD_STEPS
         command = reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS - {"book"}
+        if command and reading.action == "admin" and c.s.step in WIZARD_STEPS and is_question(text):
+            # «кто мне будет звонить — администратор?» on a step of a booking: a question is
+            # answered, the booking stays. A request to the administrators begins with its
+            # button or with a plain request
+            command, asks = False, True
         if command and not asks:
             await self._command(c, reading.action)  # type: ignore[arg-type]
             return True
@@ -4205,6 +4220,7 @@ class Conversation:
         c.say(markup.esc(card.plain()), actions, card=card, pin=booking.id)
         if (place := render.venue(self.clinic)) is not None:
             c.say(place.address, venue=place)
+        c.s.talk.unbooked = c.s.talk.unbooked_doctor = None  # the booking is made
         if c.s.person is not None:  # booked: not offered for the next of those named
             c.s.booked = [*c.s.booked, patient.id]
         self._reset(c, booking=True)  # the second patient, if one was named, is offered next
@@ -4335,7 +4351,14 @@ class Conversation:
         self._reset(c)
         bookings = await self._upcoming(c)
         if not bookings:
-            c.say(texts.MY_EMPTY, self._main_menu(c))
+            left, request = self._not_booked(c), await self._open_handoff(c)
+            if left is not None and request is not None:
+                # the booking was left for a request to the administrators: said plainly,
+                # with «Продолжить запись» — not «У Вас нет предстоящих записей»
+                with_admin = texts.HANDOFF_ALREADY.format(number=request.id, when="")
+                c.say(f"{markup.bold(left)}\n\n{with_admin}", self._main_menu(c))
+            else:
+                c.say(texts.MY_EMPTY, self._main_menu(c))
             return
         title = texts.MY_ONE if len(bookings) == 1 else texts.MY_TITLE
         today = self._local(c.now).date()
@@ -5243,6 +5266,7 @@ class Conversation:
         HANDOFF_DAILY_LIMIT (3) requests a day, then the clinic's phone.
         """
         c.s.handoff_reason, c.s.handoff_context, c.s.handoff_why = reason, context, why
+        await self._booking_left(c)
         if not self.settings.admin_chat_id:
             log.error("ADMIN_CHAT_ID is not set: cannot hand off %r", reason)
             c.s.step = "idle"
@@ -5282,6 +5306,30 @@ class Conversation:
             self._ask_contact(c)
             return
         await self._send_handoff(c)
+
+    async def _booking_left(self, c: Ctx) -> None:
+        """A request to the administrators in the middle of a booking that has come to its
+        day and time: the booking is not made. It is kept for «Продолжить запись», and what
+        was chosen is remembered — for the patient and for the administrators."""
+        stage = STAGE_OF.get(c.s.step, 0)
+        under_way = c.s.wizard and c.s.resume != "handoff" and c.s.reschedule_of is None
+        done = self._dialog_done(c)  # the scenario has ended with a booking, not a route
+        if not under_way or stage < TIME_STAGE or done is None or done.kind != "book":
+            return
+        slot = await self.schedule.get(c.s.slot_id) if c.s.slot_id else None
+        c.s.talk.unbooked, c.s.talk.unbooked_doctor = "", None
+        if slot is not None:
+            start = self._local(slot.start)
+            day = f"{texts.WEEKDAYS_SHORT[start.weekday()].lower()}, {start:%d.%m}"
+            c.s.talk.unbooked, c.s.talk.unbooked_doctor = f"{day}, {start:%H:%M}", slot.doctor
+        self._pause(c)
+
+    def _not_booked(self, c: Ctx) -> str | None:
+        """«Запись на сб, 14.11, 11:30 не оформлена.» — or None: no booking was left."""
+        left = c.s.talk.unbooked
+        if left is None:
+            return None
+        return texts.NOT_BOOKED.format(when=left) if left else texts.NOT_BOOKED_NO_TIME
 
     async def _open_handoff(self, c: Ctx) -> Handoff | None:
         return await c.db.scalar(
@@ -5339,8 +5387,11 @@ class Conversation:
         """What the patient reads once the request is dealt with."""
         if c.s.teen_months is not None:  # 15–17 for himself: his own answer and «родитель»
             self._teen_screen(c, passed)
-        else:
-            c.say(f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
+            return
+        if (left := self._not_booked(c)) is not None:
+            # said first and plainly: the booking is not made; «Продолжить запись» is below
+            text = f"{markup.bold(left)}\n\n{text}"
+        c.say(f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
 
     def _handoff_done(self, c: Ctx) -> None:
         c.s.step = "idle"
@@ -5392,6 +5443,13 @@ class Conversation:
                 label = _answer_label(q, dialog.facts)
                 if label and all(f.name in dialog.facts for f in q.fields if f.default is None):
                     lines.append(f"• {q.ask} — {label}")
+        if c.s.talk.unbooked:  # the day and the time of a booking that was not made
+            doctor = c.s.talk.unbooked_doctor
+            lines.append(
+                texts.ADMIN_NOT_BOOKED.format(
+                    when=c.s.talk.unbooked, doctor=f", врач {short_name(doctor)}" if doctor else ""
+                )
+            )
         if c.s.handoff_context:
             lines.append(f"Сообщение пациента: {c.s.handoff_context}")
         if c.s.patient_id and (patient := await c.db.get(Patient, c.s.patient_id)):

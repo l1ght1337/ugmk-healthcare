@@ -114,6 +114,13 @@ MENU_ICONS = {"book": "📝", "ask": "❓", "my": "📅", "admin": "👤"}  # ma
 MENU = "Меню"  # next to «Назад» on every screen of a booking or a move
 # the booking left for the menu: the first button of the main menu while it is fresh
 RESUME = "Продолжить запись"
+# A request to the administrators made in the middle of a booking: the booking is not made,
+# and the bot says so — with «Продолжить запись» under it
+NOT_BOOKED = "Запись на {when} не оформлена."
+NOT_BOOKED_NO_TIME = "Запись не оформлена."
+ADMIN_NOT_BOOKED = (
+    "Выбранное время: {when}{doctor} — запись не оформлена, пациент обратился к администратору"
+)
 RESUME_GONE = "Начатая запись уже неактуальна. Начнём заново."
 
 ASK_COMPLAINT = "С чем обращаетесь? Что произошло? Опишите своими словами или выберите из списка."
