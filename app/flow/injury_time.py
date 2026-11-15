@@ -57,10 +57,13 @@ def _ago(part: str, config: Config) -> list[tuple[int, int]]:
         if word != config.ago or at == 0:
             continue
         said = words[at - 1]
+        before = words[at - 2] if at >= 2 else ""
         unit = next((u for u in config.units if said in u.forms), None)
+        if unit is None:  # «года три назад», «недели две назад»: the number after the unit
+            said, before = before, said
+            unit = next((u for u in config.units if said in u.forms), None)
         if unit is None:
             continue
-        before = words[at - 2] if at >= 2 else ""
         count = int(before) if before.isdigit() else config.numbers.get(before)
         if count is None and said == unit.forms[0]:
             count = 1

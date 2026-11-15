@@ -541,7 +541,8 @@ def test_the_new_personas_say_what_visits_the_dialog_ends_with() -> None:
         "cancel_and_swap": (("self", "cancelled"), ("other", "new")),
         "two_moves": (("other", "cancelled"), ("self", "moved")),
     }
-    assert {p.key: p.ends for p in PERSONAS if p.ends is not None} == wanted
+    said = {p.key: p.ends for p in PERSONAS if p.ends}  # certificate: no visit is the end
+    assert said == wanted
     for key in wanted:  # the first message is the one the customer wrote on his phone
         assert "первым сообщением пишет ровно: «" in BY_KEY[key].manner
 
@@ -852,3 +853,16 @@ def test_the_patients_words_quoted_to_the_administrator_are_not_advice(env: sim.
     assert sim.ADVICE not in rules(made(BY_KEY["burn_face"], first, quoted), env)
     advice = step(2, Action("say", "да или нет?"), Shown("Примите обезболивающее.", ("Меню",)))
     assert sim.ADVICE in rules(made(BY_KEY["burn_face"], first, advice), env)
+
+
+def test_a_patient_with_an_old_injury_is_not_to_be_booked(env: sim.Env) -> None:
+    """Run 8, certificate: a sprain of three years ago was booked for today."""
+    persona = BY_KEY["certificate"]
+    assert persona.ends == ()
+    booked = ends_with("certificate", [], [], [visit(1, persona.name, "2026-11-12", "13:30")])
+    assert {sim.GOAL, sim.TOUCHED} <= rules(booked, env)
+    assert touched(booked) == [
+        "2: создана запись, о которой не просили: Хасанова Эльвира Наилевна, 12.11, 13:30"
+    ]
+    asked = ends_with("certificate", [], [])
+    assert sim._goal(asked, env.clinic) is None and touched(asked) == []

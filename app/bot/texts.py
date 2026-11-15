@@ -33,6 +33,9 @@ NAMED_LATER = "{whom} запишу следующим — после этой з
 NOT_BOOKING = "Хорошо, {whom} не записываю. Понадобится — напишите."
 # the name and the birth date were in a message before step 5: taken, not asked again
 PATIENT_GIVEN = "Пациент: {name}, {birth}."
+# An injury the patient himself calls old («года три назад») in a scenario of a first visit
+# that does not ask when it happened: the rule of the script 03-1, and the administrator
+OLD_INJURY = "В травмпункте принимаем травмы рук и ног сроком не более {days} дней."
 # an injury the scripts say nothing about (config/clinic.yaml, no_route_words): a tooth
 NO_ROUTE_DATA = "Куда с этим обращаться, в моих данных нет."
 NEXT_PATIENT = "Спасибо! Теперь запишем второго пациента?"

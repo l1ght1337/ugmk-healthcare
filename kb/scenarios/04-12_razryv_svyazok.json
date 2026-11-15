@@ -5,6 +5,7 @@
   "title": "Разрыв связок",
   "menu_label": "Растяжение или разрыв связок",
   "kind": "booking",
+  "injury_days_max": 7,
   "body_areas": ["limb"],
   "router_hint": "Разрыв связок или подозрение на разрыв связок (пункт меню общего блока)",
   "entry": [{"next": "how"}],

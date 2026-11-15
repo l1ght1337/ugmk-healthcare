@@ -428,7 +428,9 @@ PERSONAS: tuple[Persona, ...] = (
       "девушка, которой нужна справка",
       "вежливо, настойчиво",
       "unknown", "нужна справка в бассейн и освобождение от физкультуры после старой травмы "
-      "ноги", phone="+79001110052"),
+      "ноги: подвернула ногу года три назад, было растяжение, при нагрузке побаливает",
+      # an injury of three years ago is not booked for a first visit: no visit is the end
+      phone="+79001110052", ends=()),
 )  # fmt: skip
 
 # the personas of section 5: `--only` with these keys plays every routing scenario

@@ -5,6 +5,7 @@
   "title": "Наложение повязок, перевязка",
   "menu_label": "Повязка, перевязка",
   "kind": "booking",
+  "injury_days_max": 7,
   "body_areas": ["any"],
   "router_hint": "Наложение повязок, перевязки, перевязка ожоговой раны (пункт меню общего блока)",
   "entry": [{"next": "dressing_type"}],

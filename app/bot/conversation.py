@@ -4302,6 +4302,8 @@ class Conversation:
             c.s.talk.other = c.s.talk.same = False
         if done.kind == "book" and await self._too_many_bookings(c):
             return
+        if done.kind == "book" and self._old_injury(c, done):
+            return  # «года три назад»: not booked silently — the rule, and the administrator
         if done.kind == "book":
             summary = self._summary(c)  # the answers and the wish, with «Изменить ответы»
             parts = [p for p in (summary, text) if p]
@@ -4348,6 +4350,33 @@ class Conversation:
             self._final(
                 c, f"{text}\n\n{self.kb.common.more_help.text}", [*more, *self._main_menu(c)]
             )
+
+    def _old_injury(self, c: Ctx, done: Done) -> bool:
+        """The patient himself said the injury is older than the scenario takes («подвернула
+        ногу года три назад»), and the scenario has no question about it (04-12, the first
+        visit of 04-02): it is not booked silently. The rule of the script 03-1 is said, the
+        question may go to the administrator; no route is made up."""
+        limit = done.scenario.injury_days_max
+        booking = done.outcome.booking
+        if limit is None or booking is None or booking.visit != "primary":
+            return False
+        now = self._local(c.now)
+        doctors = self.clinic.schedule.doctors
+
+        def wish(part: str) -> bool:  # «запишите на сегодня» is not about the injury
+            found = parse_wish(part, doctors, now.date(), context="strict", now=now.time())
+            return not found.wish.empty
+
+        said = "\n".join(c.s.told)
+        found = injury_time.hours(said, self.clinic.clinic.injury_time, wish)
+        if not found or any(low < limit * injury_time.DAY for low, _ in found):
+            return False
+        self._reset(c)
+        c.s.step, c.s.ended_at = "offer_admin", c.now
+        c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, said
+        rule = markup.bold(texts.OLD_INJURY.format(days=limit))
+        c.say(f"{rule}\n\n{texts.QUESTIONS_TO_ADMIN}", self._ask_admin_buttons())
+        return True
 
     def _summary(self, c: Ctx) -> str | None:
         """«Ваши ответы: вывих; для себя; бытовая травма; …» and the wish, before the time."""

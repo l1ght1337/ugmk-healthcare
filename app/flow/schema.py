@@ -284,6 +284,13 @@ class Scenario(_Model):
         description="What «Нет» to ``guard_question`` answers in a booking scenario that has "
         "such a field: 05-01 — assault=false, so «Как получена травма?» is not asked twice",
     )
+    injury_days_max: int | None = Field(
+        default=None,
+        gt=0,
+        description="The script 03-1 takes injuries of arms and legs not older than 7 days, "
+        "and this scenario has no question about it: an older injury the patient himself "
+        "names («года три назад») is not booked for a first visit silently",
+    )
     entry: tuple[Branch, ...] = Field(min_length=1)
     questions: tuple[Question, ...] = ()
     outcomes: dict[str, Outcome] = Field(min_length=1)
