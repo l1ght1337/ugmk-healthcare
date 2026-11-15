@@ -1313,8 +1313,11 @@ class Conversation:
                 c.say(line, self._main_menu(c))
         elif action.kind == "move":
             await self._move_by_text(c, wish or Wish())
-        else:
-            await self._cancel_by_text(c, wish or Wish())
+        else:  # «…на завтра и на воскресенье»: two days in the part — which one is asked
+            today = self._local(c.now).date()
+            unclear = len(days_named(action.said, today)) > 1
+            everything = wants_all(action.said)
+            await self._cancel_by_text(c, wish or Wish(), everything=everything, unclear=unclear)
 
     async def _thing_done(self, c: Ctx, said: str | None = None) -> bool:
         """A thing of the queue has ended — done, or with a route: ``said`` is what the
@@ -1894,12 +1897,19 @@ class Conversation:
         request with the administrators (or asks about the call): the answer of the code —
         «Запись действует: сегодня, 13:30. Приходите к этому времени; ответ администратора на
         запись не влияет.» Not a new booking, whatever words of a complaint the message has."""
-        if step not in ("idle", "offer_admin") or c.s.wizard or not asks_where_to_go(text):
+        if step not in ("idle", "offer_admin") or c.s.wizard:
             return False
         if spoken_for(text) or c.for_whom in ("child", "adult"):
             return False  # about somebody else
-        if not mentions_call(text) and await self._open_handoff(c) is None:
-            return False
+        # «запись останется?», «её не снимут?», «так мне приходить?»: about the visit itself
+        holds = "?" in text and find_phrase(text, self.clinic.clinic.booking_holds) is not None
+        if holds and find_command(text) is not None:
+            return False  # «во сколько мне приходить?» asks for the visit itself: its card
+        if not holds:
+            if not asks_where_to_go(text):
+                return False
+            if not mentions_call(text) and await self._open_handoff(c) is None:
+                return False
         booking = await self._next_booking(c)
         if booking is None:
             return False

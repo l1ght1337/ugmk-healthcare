@@ -121,3 +121,42 @@ async def test_with_no_visit_ahead_a_complaint_is_a_booking_as_before(
     await chat.press(texts.MENU)
     await chat.say("мне самой ехать или ждать звонка?")
     assert "Запись действует" not in chat.text
+
+
+# --- «запись останется?» — the same answer (it never came in four runs) --------------------------
+
+STILL_HOLDS = [
+    "а если до 13:30 не позвонит, мне всё равно ехать или запись отменят?",  # run 8, questions
+    "если администратор не позвонит до 13:30, запись останется или её снимут? мне же ехать",
+    "запись останется?",
+    "её не снимут?",
+    "запись в силе?",
+    "так мне приходить?",
+    "приезжать к 13:30?",
+]
+
+
+@pytest.mark.parametrize("asked", STILL_HOLDS)
+async def test_does_the_visit_hold_is_answered_by_the_code(
+    make_chat, kb: KnowledgeBase, asked: str
+) -> None:
+    chat, fake = await booked(make_chat, kb, READINGS["жалоба"])
+    await chat.say(asked)
+    assert chat.replies[0].text == HOLDS, chat.text
+    assert fake.requests == [] and len(await bookings(chat.conversation.db)) == 1
+
+
+@pytest.mark.parametrize("said", ["запись останется, спасибо", "приезжать к 13:30, понял"])
+async def test_not_a_question_is_not_answered_so(make_chat, kb: KnowledgeBase, said: str) -> None:
+    chat, _ = await booked(make_chat, kb, {"type": "offtopic"})
+    await chat.say(said)
+    assert "Запись действует" not in chat.text
+
+
+async def test_with_no_visit_the_words_ask_nothing(make_chat, kb: KnowledgeBase) -> None:
+    chat = make_chat(
+        assistant=FakeDeepSeek({"type": "clinic_question"}, {"found": False}).assistant(kb)
+    )
+    await chat.start()
+    await chat.say("так мне приходить?")
+    assert "Запись действует" not in chat.text

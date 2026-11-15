@@ -298,6 +298,8 @@ class ClinicFlags(_Data):
     no_route_words: tuple[str, ...] = ()
     # «Это возможно?» right after a request: not a question for the reference
     plain_asks: tuple[str, ...] = ()
+    # «запись останется?», «мне приходить?» with a visit ahead: «Запись действует: …»
+    booking_holds: tuple[str, ...] = ()
     # «любое время», «выберите сами» on a step of the time: the button «Ближайшее»
     any_time: tuple[str, ...] = ()
     after_route: AfterRoute = AfterRoute()

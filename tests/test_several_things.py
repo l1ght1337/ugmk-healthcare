@@ -497,3 +497,47 @@ async def test_the_move_begins_with_no_line_about_a_question(make_chat) -> None:
     assert chat.replies[0].text.split("\n")[0].startswith("Перенос записи: Фролова Е. Д.")
     assert texts.ASIDE_UNKNOWN not in chat.text
     assert (await session(chat))["reschedule_of"] == mine.id
+
+
+# --- «Как это сделать?» after a request to cancel one of two visits (run 8, cancel_by_day) ------
+
+ONE_OF_TWO = (
+    "Здравствуйте. Мне нужно отменить только запись на воскресенье 15 ноября в 10:30, а запись "
+    "на 13 ноября в 11:00 оставить. Как это сделать?"
+)
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        ONE_OF_TWO,
+        "Перенесите мою запись на завтра. Что для этого нужно?",
+        "Отмените запись мужа, а мою перенесите на вечер. Как это сделать?",
+    ],
+)
+def test_how_to_do_it_after_a_request_is_not_a_question(clinic, said: str) -> None:
+    plan = split(said, wish_of, clinic.clinic.plain_asks)
+    assert plan is None or plan.question is None
+
+
+async def test_one_of_two_visits_is_asked_about_not_looked_for(make_chat) -> None:
+    """Before: «На этот вопрос у меня нет данных» and «Такой записи не нашлось. Вот все Ваши
+    записи — какую отменить?»."""
+    chat = make_chat()
+    await chat.start()
+    await book(chat, WIFE, "Завтра")
+    await chat.press(texts.MENU_BOOK)  # one more visit of the same patient, on Sunday
+    for label in ("Рука или нога", "Похоже на вывих", texts.AUDIENCE_SELF, "Бытовая травма",
+                  "В течение 7 дней", "Нет, не обращались"):  # fmt: skip
+        await chat.press(label)
+    await chat.pick_slot("Вс")
+    await chat.press("Фролова Екатерина")
+    await chat.press(texts.PAYMENT_SELF)
+    assert len(await bookings(chat.conversation.db)) == 2
+    await chat.say(ONE_OF_TWO)
+    said_now = "\n".join(reply.text for reply in chat.replies)
+    assert texts.ASIDE_UNKNOWN not in said_now and "Такой записи не нашлось" not in said_now
+    assert texts.CANCEL_WHICH in said_now
+    labels = chat.labels()
+    assert any("13.11" in label for label in labels) and any("15.11" in label for label in labels)
+    assert [b.status for b in await bookings(chat.conversation.db)] == ["active", "active"]

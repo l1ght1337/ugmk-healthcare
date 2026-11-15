@@ -199,6 +199,32 @@ async def test_a_route_with_no_address_says_it_has_none(
     assert THERE not in said(chat)  # «уточните в самом учреждении» names no place here
 
 
+NOT_ABOUT_THE_PLACE = [
+    "Сейчас 9 утра, а рука болит уже сутки. Сколько конкретно ждать? Мне к полиции надо сегодня.",
+    "Ты издеваешься? Я тебя про время спрашиваю. Скажи конкретно, когда администратор позвонит.",
+    "а конкретнее можно?",
+]
+
+
+@pytest.mark.parametrize("asked", NOT_ABOUT_THE_PLACE)
+async def test_no_addresses_is_said_only_to_a_question_about_the_place(
+    make_chat, kb: KnowledgeBase, asked: str
+) -> None:
+    """Partial run of 15.11, criminal: «Сколько конкретно ждать?» got «Адресов муниципальных
+    травмпунктов в моих данных нет» three times — «конкретно» was in the list of the words."""
+    fake = FakeDeepSeek(CLINIC, {"found": False})
+    chat = make_chat(assistant=fake.assistant(kb))
+    await criminal_route(chat)
+    await chat.say(asked)
+    assert NO_ADDRESS not in said(chat), said(chat)
+
+
+def test_the_words_of_a_question_about_the_place(clinic) -> None:
+    words = set(clinic.clinic.after_route.address)
+    assert {"куда", "где", "адрес", "какой травмпункт"} <= words
+    assert not {"конкретно", "конкретный", "конкретнее", "хоть один"} & words
+
+
 # --- «Записаться в травмпункт» after a route ---------------------------------------------------
 
 
