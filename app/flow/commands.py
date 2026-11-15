@@ -499,7 +499,8 @@ _WAITS_FOR_CALL = re.compile(
     r"|\b(?:нет|нету)\s+рядом\b|\bрядом\s+(?:никого|нет)\b|\bя\s+(?:один|одна)\b"
 )
 _BYE = re.compile(
-    r"\b(?:до\s+свидания|досвидания|всего\s+(?:доброго|хорошего)|до\s+встречи|прощайте)\b"
+    r"\b(?:до\s+свидания|досвидания|всего\s+(?:вам\s+)?(?:доброго|хорошего)|до\s+встречи|"
+    r"прощайте)\b"
 )
 _THANKS_WORD = re.compile(r"\b(?:спасибо|благодарю|спс)\b")
 _ASKS_FOR = re.compile(
@@ -507,8 +508,20 @@ _ASKS_FOR = re.compile(
     r"перенести|отмен\w+|болит|болят|болело|болела|боль|больно|опух\w*|кров\w+|перелом\w*|"
     r"вывих\w*|травм\w+|упал\w*|ушиб\w*)\b"
 )
-SMALL_TALK_WORDS = 16  # a longer message says more than «спасибо, буду ждать»
+# «Оба записаны», «обоих записали», «обе записи есть»: it is done — not a request to book
+_BOOKED_SAID = re.compile(
+    r"\bзаписа(?:н|на|но|ны|л|ла|ли|лся|лась|лись)\b"
+    r"|\bзапис[ьи]\s+есть\b|\bесть\s+запис[ьи]\b"
+)
+# «хотела узнать про парковку», «подскажите…»: a question with no mark at its end
+_WANTS_TO_KNOW = re.compile(r"\b(?:узнать|подскаж\w+|скажите|уточн\w+|интересу\w+)\b")
+# «спасибо доктору Кузнецову, всё прошло отлично»: a word about the visit — to the administrators
+_THANKS_TO = re.compile(
+    r"\b(?:спасибо|благодар\w+)\s+(?:\w+\s+)?"
+    r"(?:доктор\w*|врач\w*|медсестр\w*|персонал\w*|травматолог\w*)\b"
+)
 NO_MORE_WORDS = 6  # «Нет. Всё, поеду сам»
+SMALL_TALK_WORDS = 16  # a longer message says more than «спасибо, буду ждать»
 LONG_BYE_WORDS = 30  # …unless it ends with the goodbye: «…пойду сама разбираться. До свидания»
 _BYE_AT_END = re.compile(rf"{_BYE.pattern}$")
 # Two patients in one message: «меня и сына», «для себя и для мужа», «обоих», «двоих детей».
@@ -579,7 +592,8 @@ def find_small_talk(text: str) -> SmallTalk | None:
     in a sentence: «спасибо, больше вопросов нет, буду ждать звонка», «всего доброго». A
     longer message is a goodbye when it thanks and ends with one: «Ладно, спасибо хоть за
     это. Пойду сама разбираться, а то с вами до вечера просижу с клещом. До свидания» — or
-    thanks and waits: «Нет, спасибо, больше ничего. Буду ждать звонка администратора…»."""
+    thanks and waits: «Нет, спасибо, больше ничего. Буду ждать звонка администратора…».
+    «Оба записаны» says it is done: «Нет, спасибо. Оба записаны, до свидания» is a goodbye."""
     t = normalize(text)
     exact = next((kind for kind, pattern in SMALL_TALK if pattern.search(t)), None)
     if exact is not None:
@@ -587,7 +601,7 @@ def find_small_talk(text: str) -> SmallTalk | None:
     words = len(t.split())
     if "?" in text or words > LONG_BYE_WORDS:
         return None
-    if _ASKS_FOR.search(t) or _QUESTION_START.search(t):
+    if _ASKS_FOR.search(_BOOKED_SAID.sub(" ", t)) or _QUESTION_START.search(t):
         return None  # something is asked for: the message is not only a goodbye
     waiting = _WAITING.search(t) is not None
     if words > SMALL_TALK_WORDS:  # a long one: «спасибо» with «до свидания» as its last
@@ -600,6 +614,26 @@ def find_small_talk(text: str) -> SmallTalk | None:
     if _BYE.search(t) and (waiting or _THANKS_WORD.search(t)):
         return "bye"
     return "thanks" if waiting else None
+
+
+def says_goodbye(text: str) -> SmallTalk | None:
+    """The rule of 15.11, for a text no other reader of the bot has understood: it thanks or
+    says goodbye and has no question, no complaint and no command — it is small talk, however
+    many words it has. «Спасибо большое, обоих записали. Больше ничего не нужно» — «thanks»;
+    with a goodbye in it — «bye». Read before DeepSeek is asked, so that it is neither «я
+    помогаю только с записью», nor «передать Ваше сообщение администратору?»."""
+    t = normalize(text)
+    if _BYE.search(t) is None and _THANKS_WORD.search(t) is None:
+        return None
+    if "?" in text or _WANTS_TO_KNOW.search(t):
+        return None
+    if any(_QUESTION_START.search(normalize(part)) for part in _SENTENCE_END.split(text)):
+        return None  # «Спасибо, оба записаны. А парковка у вас есть»
+    if _ASKS_FOR.search(_BOOKED_SAID.sub(" ", t)) or _THANKS_TO.search(t):
+        return None  # a complaint, a request, a word about the visit for the administrators
+    if find_command(text) is not None:
+        return None  # «спасибо, покажите мои записи»
+    return "bye" if _BYE.search(t) else "thanks"
 
 
 def wants_handoff(text: str) -> bool | None:

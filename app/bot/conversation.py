@@ -71,6 +71,7 @@ from app.flow.commands import (
     normalize,
     refuses_new_booking,
     same_or_other,
+    says_goodbye,
     says_no_more,
     says_self,
     waits_for_call,
@@ -1404,6 +1405,11 @@ class Conversation:
                 self._start_booking(c, self._wish(c))
             return
         if await self._on_short_text(c, step, text):
+            return
+        if step in FREE_STEPS and (talk := says_goodbye(text)) is not None:
+            # «Спасибо большое, обоих записали. Больше ничего не нужно»: thanks with nothing
+            # asked — a short reply and the menu; DeepSeek is not asked what it is
+            await self._small_talk(c, talk)
             return
         # a question in the middle of booking: answered, the step stays; on a step answered by
         # a button route reads any text before the bot gives a hint
