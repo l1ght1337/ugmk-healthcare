@@ -263,7 +263,7 @@ async def test_two_named_keep_the_words_about_the_second(make_chat) -> None:
 
 # --- «оба» when everybody named is known ---------------------------------------------------------
 
-BOTH = "Мы с мужем в походе подвернули ноги, оба. Запишите нас."
+COUPLE = "Мы с мужем в походе подвернули ноги, оба. Запишите нас."
 BOTH_AGAIN = "Тоже предполагаю, врач его не смотрел. Мы же вместе в походе были, оба и подвернули."
 
 
@@ -273,7 +273,7 @@ async def test_both_said_about_the_named_does_not_start_a_queue(make_chat) -> No
     «Теперь запишем следующего пациента?». Those named are known: «оба» is about them."""
     chat = make_chat()
     await chat.start()
-    await chat.say(BOTH)
+    await chat.say(COUPLE)
     await chat.press("Меня")
     await chat.press("Похоже на вывих")
     await chat.say(BOTH_AGAIN)  # on a question; the husband waits: said already, not once more
