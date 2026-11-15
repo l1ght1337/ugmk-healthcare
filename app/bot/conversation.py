@@ -1606,7 +1606,7 @@ class Conversation:
             return False
         hours = self.clinic.contacts.admin_working_hours
         line = texts.HANDOFF_WHEN.format(start=f"{hours.start:%H:%M}", end=f"{hours.end:%H:%M}")
-        if self._routed(c) is not None:
+        if self._last_route(c) is not None:  # any route: section 5 or a booking scenario's
             line = f"{line}\n{texts.DO_NOT_WAIT}"  # after a route the call is not waited for
         handoff = await self._open_handoff(c)
         if step == "teen":  # one line under the buttons of that screen
@@ -1940,7 +1940,9 @@ class Conversation:
         """«Скорую вызывать?», «это срочно?»: the template of the code, wherever it is asked
         and however many times — and the address of the route under it, if one was given.
         The step and its buttons stay."""
-        if step in MESSAGE_STEPS or not asks_urgency(text, self.clinic.clinic.emergency.asks):
+        emergency = self.clinic.clinic.emergency
+        asked = asks_urgency(text, emergency.asks, emergency.ambulance_was)
+        if step in MESSAGE_STEPS or not asked:
             return False
         said = [texts.URGENCY]
         done = self._last_route(c)
@@ -5583,7 +5585,7 @@ class Conversation:
         if (left := self._not_booked(c)) is not None:
             # said first and plainly: the booking is not made; «Продолжить запись» is below
             text = f"{markup.bold(left)}\n\n{text}"
-        if passed and self._routed(c) is not None:
+        if passed and self._last_route(c) is not None:  # wherever an address was given
             text = f"{text}\n{texts.DO_NOT_WAIT}"  # after a route the call is not waited for
         c.say(f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
 

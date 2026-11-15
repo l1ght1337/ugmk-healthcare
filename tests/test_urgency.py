@@ -42,23 +42,47 @@ ASKS = [  # the patients of run 6, word for word
     "это срочно?",
     "это опасно?",
     "И насколько это срочно, если тошнит до сих пор?",
+    # the customer, 15.11: more words, and no question mark is needed about the ambulance
+    "это серьёзно?",
+    "а это серьезно, как думаете?",
+    "серьёзно ли это",
+    "опасно ли это для ребёнка",
+    "срочно ли нам ехать",
+    "скорую надо или самим ехать",
+    "скорую вызывать или сами доедем",
+    "нужна скорая или нет",
+    "муж уже едет к вам, это опасно?",  # «едет» is not about an ambulance here
 ]
 NOT_ASKED = [
     "поняла, спасибо. вызову скорую тогда, раз вялый",  # she has decided: not a question
     "скорую уже вызвали",
     "мне срочно нужна справка",
     "запишите срочно на сегодня",
+    # the ambulance has been called or has been there: nothing to weigh
+    "скорую вызвали, надо ли нам ехать самим?",
+    "скорая уже едет, что нужно взять?",
+    "скорая приезжала, сказали идти в травмпункт, надо записаться",
+    "скорая увезла мужа, нужно ли отменить запись?",
+    "это серьёзно меняет дело",  # no question in it
 ]
 
 
 @pytest.mark.parametrize("said", ASKS)
 def test_a_question_about_urgency(clinic: ClinicData, said: str) -> None:
-    assert asks_urgency(said, clinic.clinic.emergency.asks)
+    emergency = clinic.clinic.emergency
+    assert asks_urgency(said, emergency.asks, emergency.ambulance_was)
 
 
 @pytest.mark.parametrize("said", NOT_ASKED)
 def test_what_is_not_a_question_about_urgency(clinic: ClinicData, said: str) -> None:
-    assert not asks_urgency(said, clinic.clinic.emergency.asks)
+    emergency = clinic.clinic.emergency
+    assert not asks_urgency(said, emergency.asks, emergency.ambulance_was)
+
+
+def test_the_words_of_the_customer_are_in_the_data(clinic: ClinicData) -> None:
+    emergency = clinic.clinic.emergency
+    assert {"это серьезно", "серьезно ли", "опасно ли", "срочно ли"} <= set(emergency.asks)
+    assert {"вызвали", "едет", "приезжала", "увезла"} <= set(emergency.ambulance_was)
 
 
 async def routed_infant(make_chat, kb: KnowledgeBase, *replies):
@@ -205,3 +229,19 @@ async def test_the_burn_does_not_become_a_head_injury(make_chat, kb: KnowledgeBa
     await chat.say("у неё лицо красное, три года ей, вы нас примете?")
     assert "Травму головы не принимаем" not in chat.text
     assert "ДГКБ № 9" in chat.text  # the route that was given, with its reason
+
+
+async def test_after_the_route_of_a_burn_the_call_is_not_waited_for_either(
+    make_chat, kb: KnowledgeBase
+) -> None:
+    """The customer, 15.11: the line stands after any route — wherever the bot refused to
+    book and gave an address — not only after the routes of section 5."""
+    chat = await routed_burn(make_chat, kb)
+    await chat.press(texts.MENU_ADMIN)
+    await chat.press(texts.CONSENT_YES)
+    await chat.contact()
+    assert "Я передал обращение № 1 администратору" in chat.text
+    assert NO_WAIT in chat.text.split("\n")
+    await chat.say("а долго ждать звонка?")
+    assert "Администраторы отвечают с 08:00 до 20:00" in chat.text
+    assert NO_WAIT in chat.text.split("\n")

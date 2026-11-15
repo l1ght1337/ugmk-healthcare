@@ -193,6 +193,9 @@ class Emergency(_Data):
     # words of a question about urgency («скорую вызывать?», «это срочно?»): the answer is
     # a template of the code with 103 and 112, never DeepSeek's
     asks: tuple[str, ...] = ()
+    # the ambulance has been called or has been there: «вызвали», «едет», «увезла» — the
+    # template about urgency is not said
+    ambulance_was: tuple[str, ...] = ()
     # after any other phrase of the list no words switch the state off: «Меню» or /start
     over: tuple[EmergencyOver, ...] = ()
     routes: tuple[EmergencyRoute, ...] = ()

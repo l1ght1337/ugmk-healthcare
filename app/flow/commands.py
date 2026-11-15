@@ -695,23 +695,30 @@ def danger_question(text: str) -> DangerQuestion:
     return "other"
 
 
-def asks_urgency(text: str, words: Sequence[str]) -> bool:
-    """«Скорую вызывать?», «ехать самой или скорую?», «это срочно?», «это опасно?» — a
+def asks_urgency(text: str, words: Sequence[str], was: Sequence[str] = ()) -> bool:
+    """«Скорую вызывать?», «ехать самой или скорую?», «это срочно?», «опасно ли это» — a
     question about how urgent it is. ``words`` — config/clinic.yaml, ``emergency.asks``, as
-    whole words; the message asks («?») or weighs calling («вызывать»). «Вызову скорую
-    тогда», «мне срочно нужна справка» are not questions about it."""
+    whole words; ``was`` — ``emergency.ambulance_was``: the ambulance has been called or has
+    been there («вызвали», «едет», «увезла»), there is nothing to weigh.
+
+    A phrase («это срочно», «насколько опасно») asks with a question mark or with «ли» in
+    it. A word about the ambulance needs no mark: the message weighs calling it — «скорую
+    надо или самим ехать». «Вызову скорую тогда», «мне срочно нужна справка» are not
+    questions about it."""
     t = f" {normalize(text)} "
-    said = [word for word in words if f" {normalize(word)} " in t]
+    said = [normalize(word) for word in words if f" {normalize(word)} " in t]
     if not said:
         return False
-    if any(" " in word for word in said):  # «это срочно», «насколько опасно»: a question
-        return "?" in text
-    # the ambulance: whether to call it — «скорую вызывать?», «ехать самой или скорую?»; «как
+    phrases = [word for word in said if " " in word]
+    if len(phrases) < len(said) and any(f" {normalize(word)} " in t for word in was):
+        return False  # «скорую вызвали», «скорая уже едет»: said with the ambulance only
+    if phrases:  # «это срочно?», «насколько опасно?» — or «опасно ли это»
+        return "?" in text or any("ли" in phrase.split() for phrase in phrases)
+    # the ambulance: whether to call it — «скорую вызывать», «ехать самой или скорую?»; «как
     # вызвать скорую?» and «у клиники есть своя скорая?» ask about the service, not the state
     if re.search(r"\bкак\s+(?:\w+\s+)?вызв\w+|\bвызв\w+\s+(?:\w+\s+)?как\b", t):
         return False
-    weighs = re.search(r"\b(?:вызывать|вызвать|или|надо|нужно|нужна)\b", t) is not None
-    return weighs and ("?" in text or re.search(r"\bвызывать\b", t) is not None)
+    return re.search(r"\b(?:вызывать|вызвать|или|надо|нужно|нужна)\b", t) is not None
 
 
 def asks_to_be_taken(text: str) -> bool:

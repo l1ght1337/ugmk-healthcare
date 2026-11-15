@@ -292,7 +292,9 @@ async def test_when_will_they_call_gets_the_hours(make_chat, clinic: ClinicData,
     await chat.say(said)
     hours = clinic.contacts.admin_working_hours
     expected = texts.HANDOFF_WHEN.format(start=f"{hours.start:%H:%M}", end=f"{hours.end:%H:%M}")
-    assert chat.replies[0].text == expected and chat.labels() == MENU
+    # the request was made after a route with addresses: the call is not to be waited for
+    assert chat.replies[0].text == f"{expected}\n⚠️ {texts.DO_NOT_WAIT}"
+    assert chat.labels() == MENU
     assert len(chat.admin) == posted  # nothing is added to the request
 
 
