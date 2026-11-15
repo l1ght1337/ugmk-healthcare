@@ -223,6 +223,21 @@ def names_kind(scenario_id: str, text: str) -> bool:
     return stems is None or any(stem in said for stem in stems)
 
 
+def said_item(kb: KnowledgeBase, menu_id: str | None, text: str) -> MenuItem | None:
+    """The button of a menu that the patient's words press: «не знаю, я же не врач», «просто
+    ушиб» on «На что больше похоже?». The words stand with the button (``said``), as whole
+    words. A text that names the injury of another button of the menu («наверное, перелом»,
+    «ни вывиха, ни перелома») presses nothing here."""
+    menu = kb.topics.menus.get(menu_id or "")
+    if menu is None:
+        return None
+    found = next((i for i in menu.items if i.said and find_phrase(text, i.said)), None)
+    if found is None:
+        return None
+    others = {i.scenario for i in menu.items if i is not found and i.scenario in KIND_WORDS}
+    return None if any(names_kind(sid, text) for sid in others if sid) else found
+
+
 def area_facts(kb: KnowledgeBase, scenario_id: str, area: str | None) -> dict[str, FactValue]:
     """Answers the area already gives: a burn on a hand is «другая часть тела», not the face."""
     if area is None:

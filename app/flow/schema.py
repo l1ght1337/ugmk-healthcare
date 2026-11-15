@@ -484,6 +484,15 @@ class MenuItem(_Model):
     facts: dict[str, FactValue] = Field(
         default={}, description="Answers the button already gives (passed to the scenario)"
     )
+    said: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Words that press the button when typed on its menu: «не знаю», «я же не врач», "
+            "«ушиб» on «На что больше похоже?». Whole words, every form written out, lower "
+            "case; read by the code, DeepSeek is not asked. A text that names the injury of "
+            "another button of the menu presses nothing"
+        ),
+    )
 
     @model_validator(mode="after")
     def _one_target(self) -> MenuItem:
@@ -491,6 +500,11 @@ class MenuItem(_Model):
             raise ValueError(f"menu item {self.id!r} needs exactly one of menu/scenario/action")
         if self.facts and self.scenario is None:
             raise ValueError(f"menu item {self.id!r}: facts only with a scenario")
+        if self.said and self.scenario is None:
+            raise ValueError(f"menu item {self.id!r}: said only with a scenario")
+        words = [" ".join(word.lower().split()) for word in self.said]
+        if list(self.said) != words or "" in words or len(set(words)) != len(words):
+            raise ValueError(f"menu item {self.id!r}: said — lower case, no repeats, not empty")
         return self
 
 

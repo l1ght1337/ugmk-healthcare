@@ -377,9 +377,8 @@ async def test_what_is_said_after_the_choice_is_not_about_all(make_chat, kb: Kno
     await chat.start()
     await chat.say(FIRST)
     await chat.press("Машу, 7 лет")
-    await chat.say("Не знаю, она плачет, обоих жалко, мы очень переживаем")
+    await chat.say("Не знаю, она плачет, обоих жалко, мы очень переживаем")  # «Не знаю»
     assert (await session(chat))["shared"] == TOLD
-    await chat.press("Не знаю")
     await chat.press(chat.nearest().label)
     await chat.press(texts.CONSENT_YES)
     await chat.say("Воронина Мария Кирилловна, 03.03.2019")
