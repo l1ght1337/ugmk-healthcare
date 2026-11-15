@@ -283,7 +283,7 @@ async def test_outside_the_hours_the_bot_says_so_at_once(make_chat, clock) -> No
     first = chat.replies[0]
     assert (
         first.text
-        == "Администратор ответит только после 08:00. Не ждите его — звоните 103 или 112."
+        == "Администратор ответит только после 08:00.\n⚠️ Не ждите его — звоните 103 или 112."
     )
     assert texts.CONSENT_YES in chat.labels()  # said before the consent and the phone
     await chat.press(texts.CONSENT_YES)

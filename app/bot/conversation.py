@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot import misses, render, slots_view, texts, typed
+from app.bot import markup, misses, render, slots_view, texts, typed
 from app.bot.layout import DAY_COLUMNS, TIME_COLUMNS, grid, pack
 from app.bot.render import Card, Venue
 from app.config import PROJECT_ROOT, ClinicData, Settings
@@ -222,6 +222,9 @@ class Reply:
     media: Media | None = None  # ``text`` becomes the caption (MEDIA_ENABLED)
     media_only: bool = False  # nothing at all if the media cannot be sent
     pin: int | None = None  # booking id: pin this message silently and remember it
+    # bold, italic, quotes and links over ``text`` (app/bot/markup.py): ``text`` itself is
+    # what the patient reads, with no marks in it
+    spans: tuple[markup.Span, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -475,8 +478,12 @@ class Ctx:
     text: str | None = None  # the message of this turn, if it is a text
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
+        """``text`` may carry the marks of app/bot/markup.py; what did not come from the
+        bot's templates (a name, a complaint, an answer of DeepSeek) is passed through
+        ``markup.esc`` by the caller."""
         rows = tuple(tuple(row) for row in (buttons or []))
-        self.turn.replies.append(Reply(text, rows, **kw))
+        plain, spans = markup.render(text, quoted=texts.QUOTED)
+        self.turn.replies.append(Reply(plain, rows, spans=spans, **kw))
 
     def first(self) -> bool:
         """Nothing sent yet in this turn: the reply may replace the pressed message."""
@@ -825,7 +832,7 @@ class Conversation:
         if not any(b.data == "m:admin" for b in buttons):
             rows = (*rows, (Button(texts.MENU_ADMIN, "m:admin"),))
         at = c.turn.replies.index(missed)
-        c.turn.replies[at] = replace(missed, text=texts.STUCK, buttons=rows)
+        c.turn.replies[at] = replace(missed, text=texts.STUCK, buttons=rows, spans=())
 
     def _remember_screen(self, c: Ctx, before: dict[str, Any], before_key: tuple) -> None:
         """Keep the previous wizard screen for «Назад» when the screen changed."""

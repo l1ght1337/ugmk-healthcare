@@ -91,7 +91,8 @@ async def test_the_bot_answers_as_the_matrix_says(make_chat, kb: KnowledgeBase, 
 async def _check(chat: Chat, faq: Faq) -> None:
     text, labels = chat.text, chat.labels()
     if faq.source in (KB, CONFIG):
-        assert text.startswith(f"{faq.facts[0]}."), text  # the answer is shown, it is grounded
+        shown = text.removeprefix("⚠️ ")  # a line about 103 and 112 stands behind the sign
+        assert shown.startswith(f"{faq.facts[0]}."), text  # the answer is shown, it is grounded
         assert texts.INFO_UNKNOWN not in text
     elif faq.source == SCHEDULE:  # built by code from the schedule: DeepSeek is not asked
         assert faq.expect and faq.expect in text, text

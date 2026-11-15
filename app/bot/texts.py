@@ -4,6 +4,17 @@ Script phrases (questions, routes, booking summary, documents) live in kb/scenar
 All texts address the patient with «Вы» (CLAUDE.md, rule 7).
 """
 
+# The marks of the bot's messages (docs/clinic_requests.md, item 69): an emoji is only the
+# label at the start of a line, one a line at most, never inside a phrase of the scripts.
+MARK_BOOKING = "📝"  # the booking: «Запись для себя», the first line of the greeting
+MARK_DAY = "📅"
+MARK_TIME = "🕒"
+MARK_DOCTOR = "🩺"
+MARK_ADDRESS = "📍"
+MARK_QUESTION = "❓"  # the button «Задать вопрос»
+MARK_ANSWERS = "💬"  # answers about the trauma centre
+MARK_DONE = "✅"
+MARK_AMBULANCE = "⚠️"  # a line with 103 or 112: always its own line, bold (app/bot/markup.py)
 ASK_AUDIENCE = "Подскажите, пожалуйста, для кого запись?"
 AUDIENCE_SELF = "Для себя"
 AUDIENCE_CHILD = "Для ребёнка (до 18 лет)"
@@ -37,31 +48,32 @@ EMERGENCY_ALSO = "Также можно обратиться:"
 # The «угроза жизни» state of a conversation (config/clinic.yaml, emergency; the customer's
 # wording of 14.11.2026, docs/clinic_requests.md item 65). The code picks the line by the
 # words of the question; the same line is never said twice in a row.
-DANGER_FIRST = "С такими жалобами нужна скорая помощь: позвоните 103 или 112 прямо сейчас."
+# Every sentence with 103 or 112 is a line of its own behind ⚠️, bold (markup.ambulance).
+DANGER_FIRST = "⚠️ С такими жалобами нужна скорая помощь: позвоните 103 или 112 прямо сейчас."
 DANGER_NO_BOOKING = (
     "Записать Вас сейчас я не могу: травмпункт принимает по записи на время, а с такими "
-    "жалобами ждать времени приёма нельзя. Скорая — 103 или 112."
+    "жалобами ждать времени приёма нельзя.\n⚠️ Скорая — 103 или 112."
 )
 DANGER_WHERE = (
-    "Адреса больницы для такого случая в моих данных нет. Скорая отвезёт туда, где примут: "
-    "103 или 112."
+    "Адреса больницы для такого случая в моих данных нет.\n⚠️ Скорая отвезёт туда, где "
+    "примут: 103 или 112."
 )
 # … where the scripts have addresses (an open fracture, a bite with the signs): after them
-DANGER_WHERE_KNOWN = "Скорая отвезёт туда, где примут: 103 или 112."
+DANGER_WHERE_KNOWN = "⚠️ Скорая отвезёт туда, где примут: 103 или 112."
 DANGER_ADULTS = "Взрослым:"
 DANGER_CHILDREN = "Детям:"
 DANGER_HOW_LONG = (
-    "Сколько ждать скорую, скажет диспетчер 103. Запись в травмпункт при таких жалобах я не "
-    "оформляю."
+    "⚠️ Сколько ждать скорую, скажет диспетчер 103.\nЗапись в травмпункт при таких жалобах я "
+    "не оформляю."
 )
 DANGER_CALLED = "Хорошо. Когда понадобится запись в травмпункт — напишите."
 DANGER_OTHER = (
-    "Я бот и не могу оценить Ваше состояние, поэтому не записываю. Номера скорой: 103 или 112. "
-    "Могу передать Ваше сообщение администратору."
+    "Я бот и не могу оценить Ваше состояние, поэтому не записываю.\n⚠️ Номера скорой: 103 или "
+    "112.\nМогу передать Ваше сообщение администратору."
 )
 # «Позвать администратора» outside the administrators' hours: before the consent and the phone
 DANGER_ADMIN_LATER = (
-    "Администратор ответит только после {start}. Не ждите его — звоните 103 или 112."
+    "Администратор ответит только после {start}.\n⚠️ Не ждите его — звоните 103 или 112."
 )
 # for the administrators: the first line of a request, and a line with a booking made later
 DANGER_ADMIN_MARK = "⚠️ угроза жизни: {phrase}"
@@ -114,8 +126,8 @@ NOT_OUR_PROFILE = (
     "ожоги и укусы животных."
 )
 CRISIS = (
-    "Мне жаль, что Вам сейчас тяжело. Я бот травмпункта и не могу помочь с этим сам. "
-    "Пожалуйста, позвоните 112 или на телефон доверия {phone} — там помогут."
+    "Мне жаль, что Вам сейчас тяжело. Я бот травмпункта и не могу помочь с этим сам.\n"
+    "⚠️ Пожалуйста, позвоните 112 или на телефон доверия {phone} — там помогут."
 )
 CRISIS_REASON = "Сообщение о риске для жизни"
 CRISIS_ADMIN = (
@@ -132,7 +144,7 @@ CRISIS_NO_FORWARD = (
 # --- answers that are templates, not data (docs/faq_matrix.md) -----------------------------
 MEDICAL = (
     "Я не могу давать медицинские рекомендации — это решит врач на приёме. Записать Вас?\n\n"
-    "При угрозе жизни звоните 103 или 112."
+    "⚠️ При угрозе жизни звоните 103 или 112."
 )
 ABOUT_BOT = (
     "Я виртуальный помощник травмпункта «УГМК-Здоровье», а не человек: помогаю записаться на "
@@ -195,8 +207,8 @@ WELCOME = "Пожалуйста! Могу я ещё чем-нибудь Вам �
 ASK_FEEDBACK = "Напишите, пожалуйста, что случилось — я передам Ваше сообщение администратору."
 ASIDE_UNKNOWN = "На этот вопрос у меня нет данных — его можно задать администратору."
 MEDICAL_ASIDE = (
-    "Я не могу давать медицинские рекомендации — это решит врач на приёме. При угрозе жизни "
-    "звоните 103 или 112."
+    "Я не могу давать медицинские рекомендации — это решит врач на приёме.\n"
+    "⚠️ При угрозе жизни звоните 103 или 112."
 )
 CONFIRMED_WHEN = "Спасибо, ждём Вас {when}!"
 FOR_WHOM = {
@@ -696,6 +708,8 @@ BOT_SHORT_DESCRIPTION = (
     "Запись в травмпункт «УГМК-Здоровье», напоминания о приёме и ответы на вопросы."
 )
 BOT_DEMO_NOTE = "Тестовый режим: записи демонстрационные."
+# service notes: shown as a quote (app/bot/markup.py, rules)
+QUOTED = (BOT_DEMO_NOTE, DEMO_BOOKING, WHY_NAME, WHY_PHONE)
 COMMANDS = (
     ("start", "Начать"),
     ("book", "Записаться в травмпункт"),
