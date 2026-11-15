@@ -144,7 +144,7 @@ async def test_phrase_on_step(
 
                 assert (await s.scalars(select(Booking))).one().status == "active"
     elif must == m.MY_MOVE:
-        assert text.startswith("Переношу запись с пятницы, 13 ноября, 1")
+        assert text.startswith("Перенос записи: Петров И. С., пт 13.11, 1")
         assert now in ("days", "periods", "times") and after.get("reschedule_of")
         assert labels[-2:] == [texts.KEEP_AS_IS, texts.MENU] and texts.MY_ONE not in text
     elif must == m.CONFIRM:

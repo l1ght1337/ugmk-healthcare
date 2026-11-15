@@ -109,7 +109,7 @@ async def test_cancel_while_moving_a_booking_keeps_it(make_chat) -> None:
     await book_dislocation(chat)
     await chat.press(texts.PAYMENT_SELF)
     await chat.say("хочу перенести")  # one booking: its move starts, the day picker
-    assert chat.text.startswith("Переношу запись с четверга, 12 ноября") and chat.days()
+    assert chat.text.startswith("Перенос записи: Петров И. С., чт 12.11") and chat.days()
     (before,) = await bookings(chat.conversation.db)
     await chat.say("отмена")
     assert chat.text == texts.KEPT and texts.MENU_BOOK in chat.labels()

@@ -40,6 +40,8 @@ RELATIVES: tuple[tuple[str, str, Literal["child", "adult"]], ...] = (
     (r"бабушк\w+", "бабушка", "adult"),
     (r"дедушк\w+", "дедушка", "adult"),
 )
+MALE = frozenset({"сын", "внук", "муж", "папа", "дедушка"})  # «запись мужа» is not a woman's
+FEMALE = frozenset({"дочка", "дочь", "внучка", "жена", "мама", "бабушка"})
 ACCUSATIVE = {
     "сын": "сына", "дочка": "дочку", "дочь": "дочь", "ребёнок": "ребёнка", "внучка": "внучку",
     "внук": "внука", "муж": "мужа", "жена": "жену", "мама": "маму", "папа": "папу",
@@ -247,6 +249,8 @@ def find_people(text: str) -> list[Person]:
             current = add(person)
             if age is None and not complaint:
                 ageless = current  # «сын, 12 лет»: the age may stand in the next part
+            if together and "мы" not in together.lower():
+                current = None  # «гуляла с сыном, упала и сломала руку»: not he was hurt
     return found
 
 

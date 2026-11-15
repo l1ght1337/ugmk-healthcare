@@ -108,6 +108,8 @@ from app.flow.identity import (
 )
 from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
 from app.flow.people import (
+    FEMALE,
+    MALE,
     Person,
     agrees_to,
     asked_too,
@@ -430,6 +432,10 @@ class Session(BaseModel):
     control_of: int | None = None
     anchor: date | None = None  # control visit: offer time around this day
     reschedule_of: int | None = None
+    move_line: str | None = None  # «Перенос записи: Серябкина Л. В., вс 15.11, 19:30»
+    # the wish was said with the words of a move («перенеси на завтра»): only then it goes
+    # with «Перенести»; a wish of a new booking never touches a booking that exists
+    wish_moves: bool = False
     booking_id: int | None = None
     visit_booking: int | None = None
     reply_handoff: int | None = None
@@ -1068,6 +1074,8 @@ class Conversation:
         if stage is None or c.s.resume == "handoff" or c.s.step in ("whom", "teen", "first"):
             return None
         lines = []
+        if c.s.reschedule_of is not None and c.s.move_line:
+            lines.append(c.s.move_line)  # every screen of a move says whose booking it is
         if c.s.wizard:
             name = texts.STAGES[stage - 1]
             lines.append(texts.STEP.format(n=stage, total=len(texts.STAGES), name=name))
@@ -1351,6 +1359,14 @@ class Conversation:
         if (other := after_me(text)) is not None and await self._upcoming(c):
             # «мужа после меня»: the writer is booked already
             c.for_whom, c.more, c.alone = other, False, True
+        if people and c.for_whom is None and not c.more:
+            # «Сын 8 лет упал с велосипеда, болит рука»: one person named with his injury —
+            # the booking is his, whoever was spoken about before («гуляла с сыном, упала»
+            # names him with no injury of his own)
+            named = find_people(text)
+            one = named[0] if len(named) == 1 and named[0].name else None
+            if one is not None and one.complaint and one.audience in ("child", "adult"):
+                c.for_whom = one.audience
         if c.for_whom is not None and not c.more:  # kept for the whole conversation
             self._said_who(c, c.for_whom)  # the age is kept once it is confirmed or asked
         elif c.s.talk.who is not None and self._read_wish(c, text).patient_spans:
@@ -2384,6 +2400,17 @@ class Conversation:
             return
         if await self._after_route(c, text, reading):
             return  # the injury a route was given for: the route once more, not step 1
+        injury = self._injury_in(text)
+        other = reading.kind == "schedule_question" or (
+            reading.kind == "menu_action" and reading.action in ("book", "my_bookings")
+        )
+        if other and injury is not None and not (wants_move(text) or wants_cancel(text)):
+            # «сын упал с велосипеда, болит рука, можно сегодня вечером?» read as «свои
+            # записи» or as a question about the schedule: a complaint is a new booking, and
+            # the day and the time it names go with it — never with a booking that exists
+            self._keep_said(c, text)
+            await self._by_words(c, injury[0] or c.s.area, injury[1])
+            return
         if reading.question and reading.kind in ("complaint", "menu_action"):
             await self._answer_too(c, text)  # the question in the message is not lost
         # «что делать, укусила собака?»: the complaint goes on, the advice is the doctor's
@@ -3397,6 +3424,11 @@ class Conversation:
         «Ваши ответы» says so when every question is answered at once. ``fresh`` — the text
         route has just read: its facts are in ``facts``, DeepSeek is not asked about it again.
         """
+        if child_age is None and c.s.person is None:
+            # «сын 8 лет упал…», then the topic by a button: the age said in the complaint
+            # that is kept is confirmed, as an age read from a text always is
+            ages = (find_child_age(said) for said in c.s.told)
+            child_age = next((age for age in ages if age is not None), None)
         if self._same_asked(c, scenario_id, facts, child_age):
             return  # after a route: «Это та же травма, о которой Вы писали, или другая?»
         if self._guard_asked(c, scenario_id, facts, child_age):
@@ -3421,17 +3453,17 @@ class Conversation:
                 # with no screen to show «Запись для ребёнка» on: asked, as before
                 c.s.for_whom, c.s.who_kept, c.s.dialog = None, False, DialogState()
         facts = {**topics.area_facts(self.kb, scenario_id, area), **facts}
-        if child_age is not None:
-            c.s.step = "child_confirm"
-            c.s.pending_scenario, c.s.pending_facts, c.s.child_age = scenario_id, facts, child_age
-            self._child_confirm(c)
-            return
         given = set(facts)
         facts = await self._told_facts(c, scenario_id, facts, fresh)
         # «Ваши ответы» over step 3: answers were taken from what was said before the topic
         # was chosen — not from the message route has just read with it
         kept = c.s.person is not None or any(said != fresh for said in c.s.told)
         c.s.taken = kept and any(name not in given for name in facts)
+        if child_age is not None:  # the age of the text is confirmed first; the answers wait
+            c.s.step = "child_confirm"
+            c.s.pending_scenario, c.s.pending_facts, c.s.child_age = scenario_id, facts, child_age
+            self._child_confirm(c)
+            return
         await self._show(c, self.engine.start(c.s.dialog, scenario_id, facts))
 
     async def _told_facts(
@@ -4320,8 +4352,10 @@ class Conversation:
         if c.text is not None and len(bookings) == 1:
             c.line = "my"
         note = None  # the booking first, then what «Перенести» will do
-        if wish is not None and not wish.empty and not asked:
-            c.s.wish = wish
+        moves = c.text is not None and wants_move(c.text)
+        if wish is not None and not wish.empty and not asked and moves:
+            # only a wish said with the words of a move goes with «Перенести»
+            c.s.wish, c.s.wish_moves = wish, True
             words = render.wish_words(wish, self._local(c.now).date())
             note = texts.WISH_MOVE.format(wish=words)
         title = markup.bold(title)  # what is read first
@@ -4357,7 +4391,11 @@ class Conversation:
         One booking — its move starts here; several — which one is asked first. The old
         time is held until a new one is chosen.
         """
-        bookings = await self._upcoming(c)
+        every = await self._upcoming(c)
+        bookings = await self._whose_bookings(c, every)
+        if every and not bookings:  # «перенесите запись сына»: he has none — nothing is moved
+            await self._my_bookings(c)
+            return
         named = None if wish.empty else wish
         if len(bookings) == 1:
             await self._start_move(c, bookings[0], named)
@@ -4366,7 +4404,7 @@ class Conversation:
         if not bookings:
             c.say(texts.MY_EMPTY, self._main_menu(c))
             return
-        c.s.wish = named
+        c.s.wish, c.s.wish_moves = named, True  # said with the words of a move
         rows = []
         for b in bookings:
             patient = await c.db.get(Patient, b.patient_id)
@@ -4383,15 +4421,52 @@ class Conversation:
         """«Переношу запись с субботы, 14 ноября, 11:30», then the day and the time."""
         self._reset(c)
         c.s.reschedule_of, c.s.wish = booking.id, wish
-        start = self._local(booking.start_at)
-        c.say(
-            texts.MOVING.format(
-                weekday=texts.WEEKDAYS_FROM[start.weekday()],
-                date=render.day_month(start.date()),
-                time=f"{start:%H:%M}",
-            )
+        patient = await c.db.get(Patient, booking.patient_id)
+        c.s.move_line = texts.MOVE_HEADER.format(
+            patient=markup.esc(short_name(patient.full_name)) if patient else "—",
+            day=self._short_day(booking.start_at),
+            time=f"{self._local(booking.start_at):%H:%M}",
         )
         await self._offer_time(c)
+
+    @staticmethod
+    def _whose(patient: Patient | None) -> str:
+        """«Лены Владимировны» in «запись Лены Владимировны перенесена»."""
+        return render.whose(patient.first_name, patient.patronymic) if patient else ""
+
+    def _short_day(self, moment: datetime) -> str:
+        """«вс 15.11» — the day of a booking in the lines about its move."""
+        local = self._local(moment)
+        return f"{texts.WEEKDAYS_SHORT[local.weekday()].lower()} {local:%d.%m}"
+
+    async def _whose_bookings(self, c: Ctx, bookings: Sequence[Booking]) -> list[Booking]:
+        """The bookings a request to move or to cancel may be about: «запись сына» is not the
+        mother's. Nobody is named — all of them; the one named has none — an empty list, and
+        nothing is moved or cancelled."""
+        named = [p for p in find_people(c.text or "") if p.name]
+        if not named:
+            return list(bookings)
+        fitting = []
+        for booking in bookings:
+            patient = await c.db.get(Patient, booking.patient_id)
+            if patient is not None and any(self._is_patient(p, patient) for p in named):
+                fitting.append(booking)
+        return fitting
+
+    @staticmethod
+    def _is_patient(person: Person, patient: Patient) -> bool:
+        """«Сын», «жена», «Ваня» may be this patient: the same age group, a patronymic of the
+        same gender, the same first name."""
+        if person.audience in ("child", "adult") and person.audience != patient.audience:
+            return False
+        word = (patient.patronymic or "").lower()
+        if person.name in MALE and word.endswith(render.FEMALE_PATRONYMIC):
+            return False
+        if person.name in FEMALE and word.endswith(render.MALE_PATRONYMIC):
+            return False
+        if person.name[:1].isupper():  # a first name: the patient's own
+            return named_in(patient.first_name, [person]) is not None
+        return True
 
     async def _on_booking_action(self, c: Ctx, value: str) -> None:
         action, _, booking_ref = value.partition(":")
@@ -4406,7 +4481,8 @@ class Conversation:
             c.say(texts.BOOKING_GONE, self._main_menu(c))
             return
         if action == "move":  # the card or the reminder stays; the day picker comes below
-            await self._start_move(c, booking, self._wish(c))  # «…на завтра» named before
+            # «…на завтра» goes with it only if it was said with the words of a move
+            await self._start_move(c, booking, self._wish(c) if c.s.wish_moves else None)
         elif action == "cancel":
             self._cancel_ask(c, booking)
         elif action == "drop":
@@ -4491,7 +4567,11 @@ class Conversation:
         ``unclear`` — the text names two days («на завтра и на воскресенье… только ту, что на
         воскресенье»): which booking is meant is asked, the bot offers none itself.
         """
-        bookings = list(await self._upcoming(c))
+        every = list(await self._upcoming(c))
+        bookings = await self._whose_bookings(c, every)
+        if every and not bookings:  # «отмените запись жены»: she has none — nothing is cancelled
+            await self._my_bookings(c)
+            return
         self._reset(c)
         if not bookings:
             c.say(texts.MY_EMPTY, self._main_menu(c))
@@ -4610,6 +4690,7 @@ class Conversation:
             c.say(texts.SLOT_TAKEN)
             await self._show_times(c)
             return
+        was = self._local(booking.start_at)
         await self.schedule.release(booking.slot_id)
         await self._cancel_reminders(c, booking)
         booking.slot_id, booking.start_at, booking.end_at = slot.id, slot.start, slot.end
@@ -4620,8 +4701,13 @@ class Conversation:
         self._unpin(c, booking)  # the pinned card shows the old time
         self._reset(c)
         start = self._local(slot.start)
+        same_day = start.date() == was.date()
+        patient = await c.db.get(Patient, booking.patient_id)
         text = texts.MOVED.format(
-            date=render.format_date(start.date()), time=f"{start:%H:%M}", doctor=slot.doctor
+            whose=markup.esc(self._whose(patient)),
+            old=f"{was:%H:%M}" if same_day else f"{self._short_day(was)}, {was:%H:%M}",
+            new=f"{start:%H:%M}" if same_day else f"{self._short_day(slot.start)}, {start:%H:%M}",
+            doctor=slot.doctor,
         )
         if self.settings.is_demo_booking:
             text += "\n\n" + texts.DEMO_BOOKING

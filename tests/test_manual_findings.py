@@ -201,8 +201,8 @@ async def test_cancel_and_book_for_sunday_opens_sunday_at_once(make_chat, kb) ->
     (before,) = await bookings(chat.conversation.db)
     await chat.say("эту запись отмени и давай на воскресенье запиши меня когда можно")
     assert fake.requests == []
-    line, screen = chat.replies
-    assert line.text.startswith("Переношу запись с четверга, 12 ноября, 1") and not line.buttons
+    (screen,) = chat.replies  # whose booking is moved — the first line of the screen
+    assert screen.text.startswith("Перенос записи: Петров И. С., чт 12.11, 1")
     assert "15 ноября (воскресенье)" in screen.text
     labels = [b.label for row in screen.buttons for b in row]
     assert labels[0].startswith("Ближайшее: вс, 15.11, ")
@@ -213,14 +213,15 @@ async def test_cancel_and_book_for_sunday_opens_sunday_at_once(make_chat, kb) ->
     await chat.pick_time()
     (moved,) = await bookings(chat.conversation.db)
     assert moved.start_at.astimezone(TZ).date() == date(2026, 11, 15) and moved.status == "active"
-    assert "Готово, запись перенесена на 15 ноября (воскресенье)" in chat.text
+    assert chat.text.startswith("Готово, запись Ивана Сергеевича перенесена с чт 12.11, 1")
+    assert " на вс 15.11, " in chat.text
 
 
 async def test_move_to_a_day_typed_as_text(make_chat) -> None:
     chat = await one_booking(make_chat)
     await chat.say("перенеси на завтра")
-    line, screen = chat.replies
-    assert line.text.startswith("Переношу запись с четверга, 12 ноября, 1")
+    (screen,) = chat.replies
+    assert screen.text.startswith("Перенос записи: Петров И. С., чт 12.11, 1")
     assert "13 ноября (пятница)" in screen.text and texts.KEEP_AS_IS in chat.labels()
     await chat.press(texts.KEEP_AS_IS)
     assert chat.text == texts.KEPT and texts.MENU_BOOK in chat.labels()
@@ -269,7 +270,7 @@ async def test_with_two_bookings_the_bot_asks_which_one(make_chat) -> None:
     assert [label[:9] for label in chat.labels()[:2]] == ["Чт, 12.11", "Пт, 13.11"]
     assert chat.labels()[-1] == texts.MENU_HOME
     await chat.press(chat.labels()[1])
-    assert "Переношу запись с пятницы, 13 ноября" in chat.text
+    assert "Перенос записи: Петров И. С., пт 13.11" in chat.text
     assert "15 ноября (воскресенье)" in chat.text
 
 
@@ -287,16 +288,16 @@ async def test_cancel_without_a_new_day_shows_the_booking(make_chat) -> None:
 
 
 async def test_explanation_comes_after_the_booking(make_chat, kb: KnowledgeBase) -> None:
-    """A day named without «перенеси»: DeepSeek says «my bookings», the day is kept."""
+    """A day named without «перенеси»: DeepSeek says «my bookings». The booking is shown
+    with its buttons; the day is not kept for it — a wish with no word of a move never
+    touches a booking that exists (15.11, the mother's booking moved by the son's complaint)."""
     fake = FakeDeepSeek({"type": "menu_action", "action": "my_bookings"})
     chat = await one_booking(make_chat, assistant=fake.assistant(kb))
     await chat.say("с записью не получается, можно на воскресенье?")
     (only,) = chat.replies
-    title, item, note = only.text.split("\n", 2)
+    title, item = only.text.split("\n")
     assert title == texts.MY_ONE and item.startswith("12 ноября (четверг) в 1")
-    assert note.strip() == (
-        "При переносе сразу покажу время по пожеланию: в воскресенье, 15 ноября."
-    )
+    assert "При переносе" not in only.text and (await session(chat))["wish"] is None
 
 
 async def test_no_bookings_to_move(make_chat) -> None:

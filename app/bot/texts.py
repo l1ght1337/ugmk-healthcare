@@ -511,11 +511,15 @@ KEPT_WHEN = "Хорошо, запись на {date} в {time} остаётся."
 # «я уже записан, новую запись не надо» in the middle of a new booking
 NO_NEW_BOOKING = "Хорошо, новую запись не оформляю."
 # «Переношу запись с субботы, 14 ноября, 11:30.» — above the day and the time of the move
-MOVING = "Переношу запись {weekday}, {date}, {time}."
+# The first line of every screen of a move: whose booking it is — «Перенос записи:
+# Серябкина Л. В., вс 15.11, 19:30»
+MOVE_HEADER = "Перенос записи: {patient}, {day}, {time}"
 KEEP_AS_IS = "Оставить как есть"
 MOVE_WHICH = "Какую запись переносим?"
 MOVE_ITEM = "{day}, {time} — {patient}"  # «Чт, 12.11, 13:00 — Петров И.»
-MOVED = "Готово, запись перенесена на {date} в {time}. Врач: {doctor}."
+# «Готово, запись Лены Владимировны перенесена с 19:30 на 19:00.»; another day — «с вс 15.11,
+# 19:30 на пн 16.11, 10:00»
+MOVED = "Готово, запись {whose} перенесена с {old} на {new}. Врач: {doctor}."
 BOOKING_GONE = "Эта запись уже неактуальна."
 
 # Reminders name the day explicitly («в пятницу, 13 ноября, в 14:30»), so the text stays

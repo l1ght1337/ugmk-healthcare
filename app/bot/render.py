@@ -143,6 +143,37 @@ def booked_word(patronymic: str | None) -> str:
     return texts.BOOKED[None]
 
 
+_GENITIVE = {"Пётр": "Петра", "Петр": "Петра", "Павел": "Павла", "Лев": "Льва", "Любовь": "Любови"}
+
+
+def _genitive(word: str) -> str:
+    """A first name or a patronymic in the genitive: «Лена» → «Лены», «Иван» → «Ивана»,
+    «Владимировна» → «Владимировны». A name the rules do not cover stays as it is."""
+    if word in _GENITIVE:
+        return _GENITIVE[word]
+    low = word.lower()
+    if low.endswith(("вна", "чна")):
+        return word[:-1] + "ы"
+    if low.endswith(("вич", "ич")):
+        return word + "а"
+    if low.endswith(("ия", "ья")):
+        return word[:-1] + "и"
+    if low.endswith("я"):
+        return word[:-1] + "и"
+    if low.endswith("а"):
+        return word[:-1] + ("и" if low[-2:-1] in "гкхжчшщ" else "ы")
+    if low.endswith(("й", "ь")):
+        return word[:-1] + "я"
+    if low[-1:] in "бвгджзклмнпрстфхцчшщ":
+        return word + "а"
+    return word
+
+
+def whose(first_name: str, patronymic: str | None = None) -> str:
+    """«Лены Владимировны» — whose booking was moved («запись Лены Владимировны перенесена»)."""
+    return " ".join(_genitive(word) for word in (first_name, patronymic) if word)
+
+
 def patient_display(first_name: str, patronymic: str | None) -> str:
     """Script: «(Имя или Имя Отчество) записан…»."""
     return f"{first_name} {patronymic}".strip() if patronymic else first_name

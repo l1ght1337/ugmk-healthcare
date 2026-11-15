@@ -176,11 +176,11 @@ async def test_day_before_reminder_lists_documents(make_chat, schedule: MockSche
     await chat.press(texts.PAYMENT_SELF)
     await chat.press(texts.MENU_MY)
     await chat.press(texts.MOVE)
-    assert "Переношу запись с четверга, 12 ноября" in chat.text and "Шаг" not in chat.text
+    assert "Перенос записи: Петров И. С., чт 12.11" in chat.text and "Шаг" not in chat.text
     assert chat.labels()[-2:] == [texts.KEEP_AS_IS, texts.MENU]  # the first screen: no «Назад»
     await chat.pick_day("Завтра")
     await chat.data(f"s:{tomorrow.id}")
-    assert chat.text.startswith("Готово, запись перенесена на 13 ноября (пятница)")
+    assert chat.text.startswith("Готово, запись Ивана Сергеевича перенесена с чт 12.11, ")
     await chat.demo_next()
     assert chat.text.startswith("Напоминаем: в пятницу, 13 ноября, в ")
     assert " — приём травматолога-ортопеда в травмпункте.\n🩺 Врач: " in chat.text

@@ -206,7 +206,7 @@ async def test_8_reschedule_to_tomorrow(make_chat) -> None:
     await book_dislocation(chat)
     await chat.press(texts.PAYMENT_SELF)
     await chat.say("перенеси запись на завтра")
-    assert chat.text.startswith("Переношу запись с четверга, 12 ноября")
+    assert chat.text.startswith("Перенос записи: Петров И. С., чт 12.11")
     assert "Пожелание: завтра, 13 ноября" in chat.text
     assert FRIDAY in chat.text and not chat.days()  # tomorrow at once
     assert chat.nearest().label.startswith("Ближайшее: завтра, ")
