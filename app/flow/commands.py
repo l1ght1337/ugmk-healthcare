@@ -23,6 +23,7 @@ MenuAction = Literal[
 Navigation = Literal["back", "home", "cancel"]
 SmallTalk = Literal["greeting", "thanks", "ack", "bye"]
 Audience = Literal["adult", "child", "self"]
+ActionKind = Literal["book", "move", "cancel"]  # what a part of a message asks to do
 
 _BOOKING = r"(?:запис\w*|при[её]м\w*|визит\w*)"
 # Requests, not stories: «отмени запись», not «приём у врача отменили».
@@ -587,6 +588,30 @@ def find_command(text: str) -> MenuAction | None:
             return action
     if _BOOK_MARK.search(t) and all(_BOOK_FILLER.match(word) for word in t.split()):
         return "book"  # «хочу к врачу», «запишыте пожалуста», «можно к вам на приём?»
+    return None
+
+
+def negates(part: str) -> bool:
+    """«Мужа не записывайте», «отменять не надо», «переносить не буду»: said not to do."""
+    t = normalize(part)
+    plain = rf"\bне\s+(?:(?:пока|больше|уже|еще)\s+)?{_COMMAND_VERB}\b"
+    return _NEGATED.search(t) is not None or re.search(plain, t) is not None
+
+
+def request_in(part: str) -> ActionKind | None:
+    """What a part of a message asks to do with a booking, by the words of the commands
+    above: «отмените», «надо отменить» — to cancel; «перенесите», «перезапишите», «хочу
+    перенести» — to move; «запишите», «нужно записать» — to book. A story («приём
+    отменили») and a part with a negation ask for nothing."""
+    t = normalize(part)
+    if negates(part):
+        return None
+    if re.search(rf"\b{_CANCEL}\b", t):
+        return "cancel"
+    if re.search(rf"\b(?:{_MOVE}|перезапи[сш]\w+)\b", t):
+        return "move"
+    if re.search(rf"\b{_BOOK_ORDER}\b", t):
+        return "book"
     return None
 
 

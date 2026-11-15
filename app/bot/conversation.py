@@ -43,6 +43,8 @@ from app.db.models import (
 )
 from app.db.session import Database
 from app.flow import injury_time, topics
+from app.flow.actions import QUEUE_MAX, Action
+from app.flow.actions import split as split_things
 from app.flow.age import find_child_age, parse_age_months
 from app.flow.commands import (
     NO,
@@ -110,11 +112,13 @@ from app.flow.identity import (
 from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
 from app.flow.people import (
     FEMALE,
+    GENITIVE,
     MALE,
     Person,
     agrees_to,
     asked_too,
     find_people,
+    hurt,
     merge,
     named_in,
     refused,
@@ -413,6 +417,11 @@ class Talk(BaseModel):
     danger: Danger | None = None  # on: by a phrase or an «emergency» outcome; off: «Меню»
     danger_said: str | None = None  # it was on: a booking made later tells the administrators
     line: str | None = None  # the template said last turn: not the same one twice in a row
+    # Several things asked for in one message (app/flow/actions.py): those that wait, the
+    # one under way, and whether the patient says which is next (unclear, or more than three)
+    todo: list[Action] = []
+    doing: Action | None = None
+    pick: bool = False
 
 
 class Session(BaseModel):
@@ -529,6 +538,8 @@ class Ctx:
     teen_line: str | None = None  # this turn's one-line answer on the screen of 15–17
     line: str | None = None  # this turn's template after a route (Talk.line)
     text: str | None = None  # the message of this turn, if it is a text
+    # «а мою перенесите»: not the booking of those the message names for other things
+    not_of: tuple[Person, ...] = ()
 
     def say(self, text: str, buttons: Sequence[Sequence[Button]] | None = None, **kw: Any) -> None:
         """``text`` may carry the marks of app/bot/markup.py; what did not come from the
@@ -1084,7 +1095,171 @@ class Conversation:
         self._danger_off(c)  # «Меню» is the way out of the «угроза жизни» state
         self._pause(c)
         self._reset(c)
+        if (left := self._things_left(c, current=True)) is not None:
+            c.say(left)  # the menu in the middle of several things: what is not done
         c.say(self.kb.common.more_help.text, self._main_menu(c), edit=c.first())
+
+    # --- several things in one message (app/flow/actions.py) ---------------------------------
+
+    async def _several_things(self, c: Ctx, text: str) -> bool:
+        """«Перенесите мою запись на завтра и запишите сына, он руку ушиб»: the things of the
+        message, each with its own «кто» and «когда», one at a time — «Сначала перенесу Вашу
+        запись, потом запишу сына.» What cannot be told apart, and more than three things,
+        are asked about: «Понял два дела: … С чего начать?» — nothing is done until a button.
+        One thing, or bookings only: False, the message goes the way it went."""
+        local = self._local(c.now)
+        doctors = self.clinic.schedule.doctors
+
+        def read(part: str) -> Parsed:
+            return parse_wish(part, doctors, local.date(), context="free", now=local.time())
+
+        plan = split_things(text, read)
+        if plan is None:
+            return False
+        talk = c.s.talk
+        talk.todo, talk.doing, talk.pick = [], None, False
+        for person in plan.refused:  # «мужа не записывайте»: he does not wait
+            c.s.people = [p for p in c.s.people if not p.same(person)]
+            c.say(texts.NOT_BOOKING.format(whom=person.whom))
+        if plan.question:
+            await self._answer_too(c, plan.question)
+        things = plan.actions
+        if len(things) == 1:
+            await self._start_thing(c, things[0])
+            return True
+        talk.todo = things
+        several = len(await self._upcoming(c)) > 1
+        nobodys = any(a.kind != "book" and a.who is None and not a.mine for a in things)
+        if plan.unclear or (nobodys and several) or len(things) > QUEUE_MAX:
+            talk.pick = True
+            self._reset(c, named=True)
+            self._pick_thing(c, first=True)
+            return True
+        will = [self._thing(a, "will") for a in things]
+        c.say(texts.ACTIONS_FIRST.format(first=will[0], then=texts.ACTIONS_THEN.join(will[1:])))
+        await self._start_thing(c, talk.todo.pop(0))
+        return True
+
+    def _thing(self, action: Action, form: Literal["will", "noun", "button"]) -> str:
+        """«перенесу Вашу запись» / «перенос Вашей записи» / «Перенести Вашу запись»."""
+        who = action.who if action.who is not None and action.who.name else None
+        whose = (GENITIVE.get(who.name) or render.whose(who.name)) if who else ""
+        if action.kind == "book":
+            if who is None and action.who is None and not action.mine:  # nobody is named
+                new = {"will": texts.ACTION_NEW_WILL, "noun": texts.ACTION_NEW}
+                return new.get(form, texts.ACTION_NEW_BUTTON)
+            if who is None and form == "noun":
+                return texts.ACTION_NEW_YOURS
+            whom = who.whom if who else texts.ACTION_ME if form == "button" else texts.ACTION_YOU
+            words = {"will": texts.ACTION_WILL, "noun": texts.ACTION_NOUN}
+            return words.get(form, texts.ACTION_BUTTON)["book"].format(whom=whom, whose=whose)
+        if who is not None:
+            booking = texts.ACTION_BOOKING.format(whose=whose)
+            of = texts.ACTION_BOOKING_OF.format(whose=whose)
+        elif action.mine:
+            booking, of = texts.ACTION_YOURS, texts.ACTION_YOURS_OF
+        else:
+            booking, of = texts.ACTION_ANY, texts.ACTION_ANY_OF
+        words = {"will": texts.ACTION_WILL, "noun": texts.ACTION_NOUN}
+        return words.get(form, texts.ACTION_BUTTON)[action.kind].format(booking=booking, of=of)
+
+    def _pick_thing(self, c: Ctx, *, first: bool) -> None:
+        """«Понял два дела: … и …. С чего начать?» — a button for each thing that waits."""
+        todo = c.s.talk.todo
+        names = [self._thing(a, "noun") for a in todo]
+        if not first:
+            text = texts.ACTIONS_REST.format(things=", ".join(names))
+        elif len(todo) == 2:
+            text = texts.ACTIONS_TWO.format(first=names[0], second=names[1])
+        else:
+            text = texts.ACTIONS_MANY.format(things=", ".join(names))
+        rows = [
+            [Button(self._thing(a, "button")[:LABEL_MAX], f"act:{n}")] for n, a in enumerate(todo)
+        ]
+        c.say(text, [*rows, _home()])
+
+    async def _on_thing(self, c: Ctx, value: str) -> None:
+        """A button of «С чего начать?»: that thing is begun, the others wait."""
+        todo = c.s.talk.todo
+        at = int(value) if value.isdigit() else -1
+        if not 0 <= at < len(todo):
+            c.say(texts.STALE, [_home()])
+            return
+        await self._start_thing(c, todo.pop(at))
+
+    async def _start_thing(self, c: Ctx, action: Action) -> None:
+        """One thing of a message: a booking by its usual scenario, a move, a cancellation
+        with its «да». The booking it is about is found by the «кто» of its own part."""
+        c.s.talk.doing = action
+        wish = action.wish.model_copy(update={"noted": c.now}) if action.wish else None
+        if action.kind == "book":
+            self._reset(c, named=True)
+            if action.who is not None:
+                await self._take_person(c, action.who.model_copy(update={"wish": wish}))
+            elif hurt(action.said):  # what happened is said, for whom is asked as usual
+                c.s.wizard, c.s.step, c.s.wish = True, "complaint", wish
+                await self._on_free_text(c, action.said)
+            else:
+                self._start_booking(c, wish)
+            return
+        c.text = action.said  # «запись мужа» is looked for by the words of this part only
+        named = action.who is not None and bool(action.who.name)
+        c.not_of = () if named else tuple(action.not_of)
+        every = await self._upcoming(c)
+        if not await self._whose_bookings(c, every):
+            line = texts.NO_SUCH_BOOKING if every else texts.MY_EMPTY
+            if not await self._thing_done(c, line):
+                self._reset(c)
+                c.say(line, self._main_menu(c))
+        elif action.kind == "move":
+            await self._move_by_text(c, wish or Wish())
+        else:
+            await self._cancel_by_text(c, wish or Wish())
+
+    async def _thing_done(self, c: Ctx, said: str | None = None) -> bool:
+        """A thing of the queue has ended — done, or with a route: ``said`` is what the
+        patient reads about it, then the next one is announced and begun («Теперь запишу
+        сына.»). False — no queue, or nothing waits: the caller says its line with the menu."""
+        talk = c.s.talk
+        if talk.doing is None or not talk.todo:
+            talk.doing, talk.pick = None, False
+            return False
+        if said:
+            c.say(said)
+        if talk.pick and len(talk.todo) > 1:
+            talk.doing = None
+            self._pick_thing(c, first=False)
+            return True
+        following = talk.todo.pop(0)
+        c.say(texts.ACTION_NEXT.format(what=self._thing(following, "will")))
+        await self._start_thing(c, following)
+        return True
+
+    def _things_left(self, c: Ctx, *, current: bool) -> str | None:
+        """The patient left the queue of things (the menu, «Оставить как есть»): one line
+        about what is not done — «Не сделано: запись сына.» ``current`` — the thing under
+        way is not done either. Those who were to be booked wait as named patients do."""
+        talk = c.s.talk
+        left = [*([talk.doing] if current and talk.doing else []), *talk.todo]
+        talk.todo, talk.doing, talk.pick = [], None, False
+        if not left:
+            return None
+        for action in left:
+            who = action.who
+            waits = any(who is not None and p.same(who) for p in c.s.people)
+            if action.kind == "book" and who and who.name and not waits:
+                c.s.people.append(who)
+        things = ", ".join(self._thing(a, "noun") for a in left)
+        return texts.ACTIONS_UNDONE.format(things=things)
+
+    def _stopped(self, c: Ctx, text: str, *, current: bool) -> None:
+        """A line and the menu — with what is left of a queue of things, if there was one."""
+        left = self._things_left(c, current=current)
+        if left is None:
+            c.say(text, self._main_menu(c))
+        else:
+            c.say(text)
+            c.say(left, self._main_menu(c))
 
     # --- screens -----------------------------------------------------------------------
 
@@ -1374,6 +1549,9 @@ class Conversation:
         if await self._urgency(c, step, text):
             return  # «скорую вызывать?», «это срочно?»: the same answer everywhere
         people = step not in PATIENT_DATA_STEPS  # on the steps of the data nobody is read
+        reads = people and step not in MESSAGE_STEPS and step != "consent"
+        if reads and await self._several_things(c, text):
+            return  # «отмените запись мужа, а мою перенесите на вечер»: one thing at a time
         if people and step not in MESSAGE_STEPS and await self._not_this_one(c, step, text):
             return  # «пока не записывай мужа, ещё посмотрим»: one line, he does not wait
         if people and await self._leaves_move(c, step, text):
@@ -2219,10 +2397,10 @@ class Conversation:
             await self._show_menu(c)
         elif c.s.reschedule_of is not None:  # moving a booking: it stays as it was
             self._reset(c)
-            c.say(texts.KEPT, self._main_menu(c))
+            self._stopped(c, texts.KEPT, current=False)
         elif c.s.wizard and c.s.step in WIZARD_STEPS:
             self._reset(c)
-            c.say(texts.FLOW_STOPPED, self._main_menu(c))
+            self._stopped(c, texts.FLOW_STOPPED, current=True)
         elif c.s.step in ("idle", "payment") and await self._next_booking(c) is not None:
             await self._cancel_by_text(c, Wish())  # «отмена» with a booking: which one, or «да»
         else:
@@ -3110,6 +3288,7 @@ class Conversation:
             "sm": self._on_same,
             "who": self._on_who,
             "gd": self._on_guard,
+            "act": self._on_thing,
         }.get(head)
         if handler is None:
             c.say(texts.STALE, [_home()])
@@ -3301,6 +3480,8 @@ class Conversation:
                 c.turn.admin.append(AdminPost(text, edit_message=booking.admin_message_id))
         people, more = c.s.people, c.s.more  # patients named before: now is their time
         self._reset(c, named=True)
+        if await self._thing_done(c, texts.THANKS):
+            return  # the next thing of the message: «Теперь перенесу Вашу запись.»
         waits = bool(people) or more
         if not waits:
             text = f"{texts.THANKS} {self.kb.common.more_help.text}"
@@ -3603,7 +3784,7 @@ class Conversation:
     async def _on_offer_admin(self, c: Ctx, value: str) -> None:
         if value == "yes" and c.s.handoff_reason:
             await self._handoff(c, c.s.handoff_reason, c.s.handoff_context, c.s.handoff_why)
-        else:
+        elif not await self._thing_done(c):  # the route is read: the next thing, if any
             await self._show_menu(c)
 
     # --- scenario steps ----------------------------------------------------------------
@@ -3892,9 +4073,16 @@ class Conversation:
                 number=done.scenario.number, title=done.scenario.title
             )
             self._danger_set(c, answers, done.scenario.id, {"any": done.outcome_id})
+            c.s.talk.todo, c.s.talk.doing, c.s.talk.pick = [], None, False  # nothing goes on
             self._final(c, text, [*more, *self._danger_buttons()])
+        elif c.s.talk.doing is not None and c.s.talk.todo:
+            # a patient of a queue of things is due a route: he gets it, the queue goes on
+            c.s.step = "idle"
+            self._final(c, text, more)
+            await self._thing_done(c)
         else:
             c.s.step = "idle"
+            c.s.talk.doing = None
             self._final(
                 c, f"{text}\n\n{self.kb.common.more_help.text}", [*more, *self._main_menu(c)]
             )
@@ -4661,6 +4849,14 @@ class Conversation:
         mother's. Nobody is named — all of them; the one named has none — an empty list, and
         nothing is moved or cancelled."""
         named = spoken_for(c.text or "")  # «жена отвезёт» names nobody's booking
+        if not named and c.not_of:
+            # «…а мою перенесите»: not the booking of those named for the other things
+            mine = []
+            for booking in bookings:
+                patient = await c.db.get(Patient, booking.patient_id)
+                if patient is None or not any(self._is_patient(p, patient) for p in c.not_of):
+                    mine.append(booking)
+            return mine
         if not named:
             return list(bookings)
         fitting = []
@@ -4701,25 +4897,36 @@ class Conversation:
             # «…на завтра» goes with it only if it was said with the words of a move
             await self._start_move(c, booking, self._wish(c) if c.s.wish_moves else None)
         elif action == "cancel":
-            self._cancel_ask(c, booking)
+            await self._cancel_ask(c, booking)
         elif action == "drop":
             await self._drop(c, booking)
             self._reset(c)
-            c.say(texts.CANCELLED, self._main_menu(c))
+            if not await self._thing_done(c, texts.CANCELLED):
+                c.say(texts.CANCELLED, self._main_menu(c))
         else:  # «Нет, оставить», «Оставить как есть»
             c.s.cancel_ids = []  # «Отменить все записи?» is answered: its «да» is void
             if c.s.reschedule_of is not None:
                 self._reset(c)
-            c.say(texts.KEPT, self._main_menu(c))
+            self._stopped(c, texts.KEPT, current=False)  # and what is left of a queue of things
 
     # --- cancelling in words: «отмени запись на воскресенье», «отмени все» -------------------
 
-    def _cancel_ask(self, c: Ctx, booking: Booking) -> None:
-        """«Отменить запись на … в …?» — nothing is cancelled without a «да»."""
+    async def _cancel_ask(self, c: Ctx, booking: Booking) -> None:
+        """«Отменить запись на … в …?» — nothing is cancelled without a «да». In a queue of
+        things the first line says whose booking it is."""
         start = self._local(booking.start_at)
         text = texts.CANCEL_ASK.format(date=render.format_date(start.date()), time=f"{start:%H:%M}")
+        text = markup.bold(text)
+        if c.s.talk.doing is not None:
+            patient = await c.db.get(Patient, booking.patient_id)
+            header = texts.CANCEL_HEADER.format(
+                patient=markup.esc(short_name(patient.full_name)) if patient else "—",
+                day=self._short_day(booking.start_at),
+                time=f"{start:%H:%M}",
+            )
+            text = f"{header}\n{text}"
         c.say(
-            markup.bold(text),
+            text,
             [
                 [Button(texts.CANCEL_YES, f"b:drop:{booking.id}", "danger")],
                 [Button(texts.CANCEL_KEEP, f"b:keep:{booking.id}")],
@@ -4801,7 +5008,7 @@ class Conversation:
         if not found:
             await self._cancel_choice(c, bookings, texts.CANCEL_NOT_FOUND, with_all=True)
         elif len(found) == 1:
-            self._cancel_ask(c, found[0])
+            await self._cancel_ask(c, found[0])
         elif everything:
             lines = await self._booking_lines(c, found)
             c.s.cancel_ids = [b.id for b in found]
@@ -4928,7 +5135,8 @@ class Conversation:
         )
         if self.settings.is_demo_booking:
             text += "\n\n" + texts.DEMO_BOOKING
-        c.say(text, self._main_menu(c))
+        if not await self._thing_done(c, text):
+            c.say(text, self._main_menu(c))
 
     # --- notifications ---------------------------------------------------------------------
 
@@ -5489,7 +5697,7 @@ class Conversation:
                     phone=self.clinic.contacts.call_center_phone
                 )
             self._handoff_done(c)
-            self._handoff_said(c, text, passed=False)
+            await self._handoff_said(c, text, passed=False)
             return
         if self._needs_consent(c):
             c.s.resume = "handoff"
@@ -5564,7 +5772,7 @@ class Conversation:
         note = self._handoff_note(c)
         if note in (handoff.last_note, f"{handoff.reason}|"):
             self._handoff_done(c)
-            self._handoff_said(c, self._already(c, handoff, why))
+            await self._handoff_said(c, self._already(c, handoff, why))
             return
         else:
             handoff.last_note, handoff.updated_at = note, c.now
@@ -5575,9 +5783,9 @@ class Conversation:
             template = texts.HANDOFF_ADDED
         text = render.handoff_message(self.clinic, now, handoff.id, why, template)
         self._handoff_done(c)
-        self._handoff_said(c, text)
+        await self._handoff_said(c, text)
 
-    def _handoff_said(self, c: Ctx, text: str, *, passed: bool = True) -> None:
+    async def _handoff_said(self, c: Ctx, text: str, *, passed: bool = True) -> None:
         """What the patient reads once the request is dealt with."""
         if c.s.teen_months is not None:  # 15–17 for himself: his own answer and «родитель»
             self._teen_screen(c, passed)
@@ -5587,6 +5795,8 @@ class Conversation:
             text = f"{markup.bold(left)}\n\n{text}"
         if passed and self._last_route(c) is not None:  # wherever an address was given
             text = f"{text}\n{texts.DO_NOT_WAIT}"  # after a route the call is not waited for
+        if await self._thing_done(c, text):
+            return  # the request is made: the next thing of the message goes on
         c.say(f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
 
     def _handoff_done(self, c: Ctx) -> None:
@@ -5614,7 +5824,7 @@ class Conversation:
         why = c.s.handoff_why
         text = render.handoff_message(self.clinic, self._local(c.now), handoff.id, why)
         self._handoff_done(c)
-        self._handoff_said(c, text)
+        await self._handoff_said(c, text)
 
     async def _admin_text(self, c: Ctx, handoff: Handoff, *, addendum: bool = False) -> str:
         reason = c.s.handoff_reason or handoff.reason

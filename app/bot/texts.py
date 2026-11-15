@@ -534,6 +534,40 @@ NO_NEW_BOOKING = "Хорошо, новую запись не оформляю."
 # The first line of every screen of a move: whose booking it is — «Перенос записи:
 # Серябкина Л. В., вс 15.11, 19:30»
 MOVE_HEADER = "Перенос записи: {patient}, {day}, {time}"
+# Several things in one message (app/flow/actions.py): one at a time, the next is announced.
+# «Сначала перенесу Вашу запись, потом запишу сына.» — «Теперь запишу сына.»
+ACTIONS_FIRST = "Сначала {first}, потом {then}."
+ACTIONS_THEN = ", потом "
+ACTION_NEXT = "Теперь {what}."
+# what cannot be told apart, or more than three things: nothing is done until a button
+ACTIONS_TWO = "Понял два дела: {first} и {second}. С чего начать?"
+ACTIONS_MANY = "Понял несколько дел: {things}. С чего начать?"
+ACTIONS_REST = "Осталось: {things}. С чего продолжить?"
+# the menu or «Оставить как есть» in the middle: what is left undone, in one line
+ACTIONS_UNDONE = "Не сделано: {things}."
+# the words for a thing: what the bot will do, what it is called, the button for it
+ACTION_WILL = {"move": "перенесу {booking}", "cancel": "отменю {booking}", "book": "запишу {whom}"}
+ACTION_NOUN = {"move": "перенос {of}", "cancel": "отмена {of}", "book": "запись {whose}"}
+ACTION_BUTTON = {
+    "move": "Перенести {booking}",
+    "cancel": "Отменить {booking}",
+    "book": "Записать {whom}",
+}
+ACTION_BOOKING = "запись {whose}"  # «перенесу запись мужа»
+ACTION_BOOKING_OF = "записи {whose}"  # «отмена записи мужа»
+ACTION_YOURS = "Вашу запись"
+ACTION_YOURS_OF = "Вашей записи"
+ACTION_ANY = "запись"  # nobody is named: «перенесу запись»
+ACTION_ANY_OF = "записи"
+ACTION_YOU = "Вас"  # «запишу Вас»
+ACTION_ME = "меня"  # the button: «Записать меня»
+ACTION_NEW_WILL = "оформлю новую запись"
+ACTION_NEW = "новая запись"
+ACTION_NEW_YOURS = "Ваша новая запись"
+ACTION_NEW_BUTTON = "Новая запись"
+NO_SUCH_BOOKING = "Такой записи не нашлось."
+# the first line of «Отменить запись на … в …?» in a queue of things: whose booking it is
+CANCEL_HEADER = "Отмена записи: {patient}, {day}, {time}"
 # A complaint, or somebody who is not the patient of the booking, on a screen of its move:
 # the move is closed — «Запись Лены Владимировны оставил как есть: вс 15.11, 19:30.»
 MOVE_LEFT = "Запись {whose} оставил как есть: {day}, {time}."

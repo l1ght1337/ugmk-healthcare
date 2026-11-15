@@ -49,6 +49,11 @@ ACCUSATIVE = {
     "бабушка": "бабушку", "дедушка": "дедушку", "Лев": "Льва", "Павел": "Павла", "Пётр": "Петра",
     "Любовь": "Любовь",
 }  # fmt: skip
+GENITIVE = {
+    "сын": "сына", "дочка": "дочки", "дочь": "дочери", "ребёнок": "ребёнка", "внучка": "внучки",
+    "внук": "внука", "муж": "мужа", "жена": "жены", "мама": "мамы", "папа": "папы",
+    "бабушка": "бабушки", "дедушка": "дедушки",
+}  # fmt: skip  # «запись мужа», «отмена записи дочки»
 # The word as the one who does something: «муж отвезёт», «жена заберёт». Any other form
 # says the thing is for the person or theirs: «мужу лучше вечером», «запись жены».
 NOMINATIVE = {
@@ -349,12 +354,17 @@ def spoken_for(text: str) -> list[Person]:
     for person in find_people(text):
         if not person.name:
             continue
-        if person.complaint or person.age_months is not None or _for_them(low, person.name):
+        if person.complaint or person.age_months is not None or for_them(low, person.name):
             found.append(person)
     return found
 
 
-def _for_them(low: str, name: str) -> bool:
+def hurt(text: str) -> bool:
+    """A part of a message is about an injury: «руку ушиб», «нога болит»."""
+    return _about_injury(text)
+
+
+def for_them(low: str, name: str) -> bool:
     """The relative stands in a form other than «муж отвезёт» — or next to a request to book
     («дочь запишите»: the word is the same in both forms)."""
     for pattern, relative, _ in _RELATIVES:
