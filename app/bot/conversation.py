@@ -842,7 +842,11 @@ class Conversation:
             ctx.had_history = bool(session.history)
             ctx.came_from = before_key if session.step in WIZARD_STEPS else None
             await handler(ctx)
-            if ctx.more and not before["more"] and ctx.s.wizard and ctx.s.step in WIZARD_STEPS:
+            # those named are known — the one being booked, those who wait, those booked:
+            # «оба и подвернули» is about them, not about one more patient
+            known = ctx.s.person is not None or bool(ctx.s.people) or bool(ctx.s.booked)
+            several = ctx.more and not before["more"] and not known
+            if several and ctx.s.wizard and ctx.s.step in WIZARD_STEPS:
                 ctx.s.more = True  # never chosen silently: one now, the other after the card
                 ctx.turn.replies.insert(0, Reply(texts.ONE_BY_ONE))
             if not ctx.deleted:

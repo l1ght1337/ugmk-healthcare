@@ -259,3 +259,51 @@ async def test_two_named_keep_the_words_about_the_second(make_chat) -> None:
     await chat.start()
     await chat.say(KIDS)
     assert chat.text == f"{texts.ONE_BY_ONE} {texts.WHO_FIRST}"  # «потом второго»: two of them
+
+
+# --- «оба» when everybody named is known ---------------------------------------------------------
+
+BOTH = "Мы с мужем в походе подвернули ноги, оба. Запишите нас."
+BOTH_AGAIN = "Тоже предполагаю, врач его не смотрел. Мы же вместе в походе были, оба и подвернули."
+
+
+async def test_both_said_about_the_named_does_not_start_a_queue(make_chat) -> None:
+    """The final live run of couple: in the booking of the husband, the last of the two, «оба
+    и подвернули» was answered with «Запишу по очереди…», and after his card the bot asked
+    «Теперь запишем следующего пациента?». Those named are known: «оба» is about them."""
+    chat = make_chat()
+    await chat.start()
+    await chat.say(BOTH)
+    await chat.press("Меня")
+    await chat.press("Похоже на вывих")
+    await chat.say(BOTH_AGAIN)  # on a question; the husband waits: said already, not once more
+    assert texts.ONE_BY_ONE not in chat.text and not (await session(chat))["more"]
+    for label in ANSWERS:
+        await chat.press(label)
+    await chat.pick_slot("Завтра")
+    await chat.press(texts.CONSENT_YES)
+    await chat.say("Захарова Любовь Тимофеевна, 18.11.1979")
+    await chat.contact()
+    await chat.press(texts.PAYMENT_SELF)
+    assert chat.text == texts.NEXT_PATIENT and chat.labels()[0] == "Записать мужа"
+
+    await chat.press("Записать мужа")
+    await chat.press("Похоже на вывих")
+    await chat.say(BOTH_AGAIN)  # the last of those named is being booked
+    assert texts.ONE_BY_ONE not in chat.text and not (await session(chat))["more"]
+    for label in ANSWERS:
+        await chat.press(label)
+    await chat.pick_slot("Завтра")
+    await chat.say("Захаров Игорь Семёнович, 05.05.1977")
+    await chat.press(texts.PAYMENT_SELF)
+    # nobody waits: the usual end, not the next of a queue
+    assert chat.text == f"{texts.THANKS} Могу я ещё чем-нибудь Вам помочь?"
+    assert chat.labels() == [texts.BOOK_MORE, *MENU]
+
+
+async def test_both_with_nobody_named_still_starts_one(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await chat.say("нас двое, обоих надо записать, упали вчера")
+    assert texts.ONE_BY_ONE in chat.text and (await session(chat))["more"]
