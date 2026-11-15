@@ -20,7 +20,7 @@ the queue of patients (app/flow/people.py), one thing goes the way it went befor
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -63,6 +63,15 @@ def _norm(text: str) -> str:
     return text.lower().replace("ё", "е")
 
 
+def _plain(sentence: str) -> str:
+    """A sentence as its words, without «а», «и», «ну», «так» in front: «А это возможно?» →
+    «это возможно»."""
+    words = re.sub(r"[^\w\s]", " ", _norm(sentence)).split()
+    while words and words[0] in ("а", "и", "ну", "так"):
+        words = words[1:]
+    return " ".join(words)
+
+
 def _book(actions: list[Action], who: Person, clause: str, *, mine: bool = False) -> None:
     """A booking for this person: one for all the parts about him."""
     same = next((a for a in actions if a.kind == "book" and a.who and a.who.same(who)), None)
@@ -72,11 +81,13 @@ def _book(actions: list[Action], who: Person, clause: str, *, mine: bool = False
         same.said = f"{same.said}, {clause}"
 
 
-def split(text: str, read: Callable[[str], Parsed]) -> Plan | None:
+def split(text: str, read: Callable[[str], Parsed], plain_asks: Sequence[str] = ()) -> Plan | None:
     """The things a message asks for, in its order — or None: one thing, or bookings only.
 
     ``read`` reads the day, the time and the doctor of a part (app/flow/wishes.py with the
-    clinic's doctors and clock)."""
+    clinic's doctors and clock). ``plain_asks`` — config/clinic.yaml: «Это возможно?»,
+    «можно?» right after a request are a part of it, not a question of their own."""
+    plain_asks = {_plain(ask) for ask in plain_asks}
     known = {p.name: p for p in find_people(text) if p.name}
     actions: list[Action] = []
     refusals: list[Person] = []
@@ -124,6 +135,8 @@ def split(text: str, read: Callable[[str], Parsed]) -> Plan | None:
             else:
                 plain.append(clause)
         asks = len(plain) == len(clauses) and sentence.strip().endswith("?")
+        if asks and _plain(sentence) in plain_asks:
+            continue  # «…перенести на сегодня. Это возможно?»: the request itself
         if asks and not (whens and only):
             # a sentence of its own that asks for nothing to be done: answered, and its
             # «ночью» is not a time for a booking

@@ -65,7 +65,7 @@ async def test_the_topic_the_patient_pressed_is_his_answer(make_chat) -> None:
         ("кажется, вывихнул плечо", "dislocation", "вывих"),
         ("упала на руку, опухло запястье", "fracture", texts.SUMMARY_BY_WORDS),
         ("похоже, сломала руку", "fracture", "перелом"),
-        ("потянул связки на ноге", "ligament_rupture", "разрыв связок"),
+        ("потянул связки на ноге", "ligament_rupture", "растяжение или разрыв связок"),
     ],
 )
 async def test_a_scenario_chosen_by_route_is_named_only_in_the_patients_words(

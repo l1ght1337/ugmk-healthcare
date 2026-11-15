@@ -578,3 +578,53 @@ async def test_requests_never_get_no_information(make_chat, kb, phrase: str) -> 
     await chat.say(phrase)
     assert texts.INFO_UNKNOWN not in chat.text and fake.requests == []
     assert chat.buttons(), "every answer has a button that leads on"
+
+
+# --- «любое время», «выберите сами» on a step of the time: the nearest (run 7) ------------------
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "Любое время подойдёт, выберите сами",
+        "мне всё равно, когда",
+        "да любое время, какое есть",
+        "выберите сами",
+    ],
+)
+async def test_any_time_on_a_time_step_is_the_nearest(make_chat, said: str) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    for label in ("Рука или нога", "Похоже на вывих", texts.AUDIENCE_SELF, "Бытовая травма",
+                  "В течение 7 дней", "Нет, не обращались"):  # fmt: skip
+        await chat.press(label)
+    nearest = chat.nearest().label  # «Ближайшее: сегодня, 13:30»
+    await chat.say(said)
+    assert "Не понял сообщение" not in chat.text
+    assert (await session(chat))["step"] == "consent"  # the time is chosen: the next step
+    assert nearest.rsplit(", ", 1)[1] in nearest
+
+
+async def test_any_time_with_a_day_is_a_wish_for_that_day(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    for label in ("Рука или нога", "Похоже на вывих", texts.AUDIENCE_SELF, "Бытовая травма",
+                  "В течение 7 дней", "Нет, не обращались"):  # fmt: skip
+        await chat.press(label)
+    await chat.say("мне всё равно к какому врачу, но только завтра вечером")
+    state = await session(chat)
+    assert state["step"] in ("days", "periods", "times") and state["wish"]["period"] == "evening"
+
+
+async def test_the_summary_names_the_topic_as_its_button_does(make_chat) -> None:
+    """Run 7: «похоже на растяжение» — and «Ваши ответы: разрыв связок»."""
+    chat = make_chat()
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    for label in ("Рука или нога", "Растяжение или разрыв связок", texts.AUDIENCE_SELF,
+                  "Бытовая травма", "Я предполагаю"):  # fmt: skip
+        await chat.press(label)
+    said = "\n".join(reply.text for reply in chat.replies)
+    assert "Ваши ответы: растяжение или разрыв связок; для себя" in said

@@ -1173,7 +1173,7 @@ class Conversation:
         def read(part: str) -> Parsed:
             return parse_wish(part, doctors, local.date(), context="free", now=local.time())
 
-        plan = split_things(text, read)
+        plan = split_things(text, read, self.clinic.clinic.plain_asks)
         if plan is None:
             return False
         talk = c.s.talk
@@ -2654,7 +2654,10 @@ class Conversation:
             self._menu_screen(c, menu)
             return True
         if step in TIME_STEPS:
-            if wants_nearest(text):
+            # «любое время подойдёт, выберите сами»: the nearest — unless a day, a time or a
+            # doctor is named with it («всё равно, но только завтра вечером» is a wish)
+            anyhow = find_phrase(text, self.clinic.clinic.any_time) is not None
+            if wants_nearest(text) or (anyhow and self._read_wish(c, text).wish.empty):
                 free = await self._free(c)
                 if free is not None and free[1]:
                     await self._on_slot(c, free[1][0].id)

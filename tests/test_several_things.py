@@ -460,3 +460,40 @@ async def test_the_words_of_section_5_are_read_over_the_whole_message(make_chat)
     if "Порез, рана" in chat.labels():
         await chat.press("Порез, рана")
     assert "это укол чужой иглой?" in chat.text
+
+
+# --- «Это возможно?» right after a request is not one more question (run 7, move_time) ----------
+
+MOVE_TODAY = (
+    "Здравствуйте! Я записана на завтра на одиннадцать утра, хотела бы перенести на сегодня, "
+    "но после шести вечера. Это возможно?"
+)
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        MOVE_TODAY,
+        "Перенесите мою запись на завтра. Можно?",
+        "Перенесите мою запись на завтра. Так получится?",
+        "Отмените запись мужа, а мою перенесите на вечер. Это возможно?",
+    ],
+)
+def test_is_it_possible_after_a_request_is_not_a_question(clinic, said: str) -> None:
+    plan = split(said, wish_of, clinic.clinic.plain_asks)
+    assert plan is None or plan.question is None
+
+
+def test_a_real_question_after_a_request_still_is(clinic) -> None:
+    plan = split(
+        "Перенесите мою запись на завтра. А парковка у вас есть?", wish_of, clinic.clinic.plain_asks
+    )
+    assert plan.question == "А парковка у вас есть?"
+
+
+async def test_the_move_begins_with_no_line_about_a_question(make_chat) -> None:
+    chat, (mine,) = await couple(make_chat, husband=False)
+    await chat.say(MOVE_TODAY)
+    assert chat.replies[0].text.split("\n")[0].startswith("Перенос записи: Фролова Е. Д.")
+    assert texts.ASIDE_UNKNOWN not in chat.text
+    assert (await session(chat))["reschedule_of"] == mine.id

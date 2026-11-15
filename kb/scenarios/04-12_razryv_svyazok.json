@@ -3,7 +3,7 @@
   "script": "04-12_razryv_svyazok",
   "number": "4.12",
   "title": "Разрыв связок",
-  "menu_label": "Разрыв связок",
+  "menu_label": "Растяжение или разрыв связок",
   "kind": "booking",
   "body_areas": ["limb"],
   "router_hint": "Разрыв связок или подозрение на разрыв связок (пункт меню общего блока)",
