@@ -262,18 +262,39 @@ async def test_a_wish_for_the_move_stays_a_wish(
     assert wish["period"] == "evening" or wish["start"] == "18:00:00"
 
 
-async def test_a_complaint_of_the_patient_himself_closes_the_move_too(
+@pytest.mark.parametrize(
+    "said",
+    [
+        "Нога болит сильнее, можно сегодня вечером?",  # the customer, word for word
+        "ещё и руку сегодня ушиб, можно сегодня вечером?",
+        "очень болит, давайте вечером",
+    ],
+)
+async def test_a_complaint_of_the_patient_himself_is_a_wish_for_the_move(
+    make_chat, kb: KnowledgeBase, clock, said: str
+) -> None:
+    """The patient of this booking, nobody else named, no new booking asked for: why he
+    moves it — the move stays open, and «сегодня вечером» is its wish (15.11.2026)."""
+    chat, mother = await with_a_booking(make_chat, kb, clock)
+    await to_the_move(chat, "days")
+    await chat.say(said)
+    state = await session(chat)
+    assert state["reschedule_of"] == mother.id and not state["wizard"], chat.text
+    assert LEFT not in chat.text and chat.replies[-1].text.split("\n")[0] == HEADER
+    assert state["wish"]["period"] == "evening"
+    (still,) = await bookings(chat.conversation.db)
+    assert (still.start_at, still.status) == (mother.start_at, "active")
+
+
+async def test_a_new_booking_asked_for_on_a_screen_of_a_move_closes_it(
     make_chat, kb: KnowledgeBase, clock
 ) -> None:
     chat, mother = await with_a_booking(make_chat, kb, clock)
     await to_the_move(chat, "days")
-    await chat.say("ещё и руку сегодня ушиб, можно сегодня вечером?")
+    await chat.say("ещё и руку сегодня ушиб, запишите меня с этим отдельно")
     assert chat.replies[0].text == LEFT
     state = await session(chat)
-    # … and no new booking is opened: he has a visit ahead and did not ask for one more
-    # (15.11.2026, tests/test_no_booking_unasked.py) — the visit is shown, with its buttons
-    assert state["reschedule_of"] is None and not state["wizard"], chat.text
-    assert texts.MY_ONE in chat.text and texts.MOVE in chat.labels()
+    assert state["reschedule_of"] is None and state["wizard"], chat.text
     (still,) = await bookings(chat.conversation.db)
     assert (still.start_at, still.status) == (mother.start_at, "active")
 

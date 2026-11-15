@@ -3799,11 +3799,13 @@ class Conversation:
         return True
 
     async def _leaves_move(self, c: Ctx, step: str, text: str) -> bool:
-        """A complaint, or somebody who is not the patient of the booking, on a screen of its
-        move: not a wish for the move — «Сын 8 лет упал с велосипеда, можно сегодня вечером?»
-        never moves the mother. The move is closed with a line that says whose booking stays
-        and when it is; then the one the message is about is booked, with the day and the
-        time it names. A complaint with nobody else in it is read as on the menu."""
+        """Somebody who is not the patient of the booking, or a new booking asked for with a
+        complaint, on a screen of its move: not a wish for the move — «Сын 8 лет упал с
+        велосипеда, можно сегодня вечером?» never moves the mother. The move is closed with
+        a line that says whose booking stays and when it is; then the one the message is
+        about is booked, with the day and the time it names. The patient's own complaint
+        with no new booking asked for («нога болит сильнее, можно сегодня вечером?») is why
+        he moves the visit: a wish, and the move stays open."""
         if c.s.reschedule_of is None or step not in TIME_STEPS:
             return False
         if wants_move(text) or wants_cancel(text):
@@ -3815,7 +3817,12 @@ class Conversation:
         others = [
             p for p in spoken_for(text) if patient is None or not self._is_patient(p, patient)
         ]
-        if not others and self._injury_in(text) is None:
+        # the patient's own complaint with no new booking asked for is why he moves the
+        # visit: «нога болит сильнее, можно сегодня вечером?» stays a wish for this move
+        asks_new = self._injury_in(text) is not None and (
+            is_booking_order(text) or request_in(text) == "book"
+        )
+        if not others and not asks_new:
             return False
         wish = self._read_wish(c, text).wish
         start = self._local(booking.start_at)
