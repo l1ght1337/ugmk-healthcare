@@ -500,8 +500,9 @@ class _Pressed:
     chat: _Chat = field(default_factory=lambda: _Chat(1))
     message_id: int = 7
     edits: list[tuple[str, Any]] = field(default_factory=list)
+    entities: list[Any] | None = None  # of the message as Telegram keeps it
 
-    async def edit_text(self, text: str, reply_markup: Any = None) -> None:
+    async def edit_text(self, text: str, reply_markup: Any = None, entities: Any = None) -> None:
         self.edits.append((text, reply_markup))
 
     async def edit_reply_markup(self, reply_markup: Any = None) -> None:

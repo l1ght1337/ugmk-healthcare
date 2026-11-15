@@ -9,6 +9,10 @@ Newer Bot API features, each with a plain fallback:
   the message goes again without colours;
 * the booking card as a rich message (``sendRichMessage``, 10.x) — on any API error, and
   with ``RICH_MESSAGES=false``, the same content as plain text;
+* bold, italic, quotes and links of every other message as entities (``Reply.spans``): the
+  text itself is plain, so nothing a patient wrote can break it; a rich message cannot be
+  edited, and every wizard screen replaces the pressed one, so the screens stay texts. If
+  the API refuses the entities, the same text goes without them;
 * answers streamed as a draft (``sendMessageDraft``, 9.3) — if the API refuses once, drafts
   are switched off and only «печатает…» (``sendChatAction``) is shown;
 * the trauma centre on a map (``sendVenue``) — only when its point is in config/contacts.yaml;
@@ -48,17 +52,20 @@ from aiogram.types import (
     InputRichMessage,
     KeyboardButton,
     Message,
+    MessageEntity,
     ReactionTypeEmoji,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     RichTextBold,
     TelegramObject,
 )
+from aiogram.utils import formatting
 from aiogram.utils.chat_action import ChatActionSender
 
 from app.bot import texts
 from app.bot.access import ALLOW_PREFIX, APPROVED_NOTE, Access
 from app.bot.conversation import Button, Conversation, DraftSink, Reply, Turn, UserRef
+from app.bot.markup import Span
 from app.bot.render import Card
 from app.config import PROJECT_ROOT, ClinicData, Settings
 
@@ -99,6 +106,47 @@ def markup(reply: Reply, *, styles: bool = True) -> Markup:
     if reply.remove_keyboard:
         return ReplyKeyboardRemove()
     return None
+
+
+_NODES = {
+    "bold": formatting.Bold,
+    "italic": formatting.Italic,
+    "quote": formatting.BlockQuote,
+}
+
+
+def _nodes(text: str, spans: list[Span], start: int, end: int) -> list[Any]:
+    """The pieces of ``text[start:end]``: plain strings and formatting nodes, spans inside
+    a span as its children."""
+    parts: list[Any] = []
+    at, i = start, 0
+    while i < len(spans):
+        span = spans[i]
+        inner = [s for s in spans[i + 1 :] if s.start >= span.start and s.end <= span.end]
+        if span.start > at:
+            parts.append(text[at : span.start])
+        children = _nodes(text, inner, span.start, span.end)
+        if span.kind == "link":
+            parts.append(formatting.TextLink(*children, url=span.url or ""))
+        else:
+            parts.append(_NODES[span.kind](*children))
+        at, i = span.end, i + 1 + len(inner)
+    if end > at:
+        parts.append(text[at:end])
+    return parts
+
+
+def entities(reply: Reply) -> list[MessageEntity] | None:
+    """``Reply.spans`` as Telegram entities. The offsets are in UTF-16 units — an emoji is
+    two — and are counted by aiogram.utils.formatting, not here."""
+    if not reply.spans:
+        return None
+    spans = sorted(reply.spans, key=lambda s: (s.start, -s.end))
+    text, found = formatting.Text(*_nodes(reply.text, spans, 0, len(reply.text))).render()
+    if text != reply.text:  # never: the spans are cut out of this very text
+        log.error("entities do not fit the text: %.40s", reply.text)
+        return None
+    return found or None
 
 
 def rich_card(card: Card) -> InputRichMessage:
@@ -293,19 +341,21 @@ class Delivery:
         assert reply.media is not None
         name, caption = reply.media.name, reply.text or None
         if caption and len(caption) > CAPTION_MAX:
-            caption = None
+            caption = None  # the media alone, the whole text follows as a message
         keyboard = markup(reply) if caption or not reply.text else None
+        marks = entities(reply) if caption else None
         try:
             if reply.media.kind == "animation":
                 sent = await self.bot.send_animation(
                     chat_id, animation=self.media.file(name), caption=caption,
-                    reply_markup=keyboard,
+                    caption_entities=marks, reply_markup=keyboard,
                 )  # fmt: skip
                 file_id = sent.animation.file_id if sent.animation else None
             else:
                 sent = await self.bot.send_photo(
-                    chat_id, photo=self.media.file(name), caption=caption, reply_markup=keyboard
-                )
+                    chat_id, photo=self.media.file(name), caption=caption,
+                    caption_entities=marks, reply_markup=keyboard,
+                )  # fmt: skip
                 file_id = sent.photo[-1].file_id if sent.photo else None
         except TelegramAPIError:
             log.warning("could not send %s, sending the text alone", name, exc_info=True)
@@ -313,8 +363,23 @@ class Delivery:
         if file_id:
             self.media.remember(name, file_id)
         if reply.text and caption is None:  # too long for a caption: the text follows
-            return await self.bot.send_message(chat_id, reply.text, reply_markup=markup(reply))
+            return await self._send_text(chat_id, reply)
         return sent
+
+    async def _send_text(self, chat_id: int, reply: Reply) -> Message | None:
+        """The text with its entities and button colours; if the API refuses either, the
+        same text plain."""
+        marks = entities(reply)
+        try:
+            return await self.bot.send_message(
+                chat_id, reply.text, entities=marks, reply_markup=markup(reply)
+            )
+        except TelegramBadRequest:
+            if not marks and not any(b.style for row in reply.buttons for b in row):
+                raise
+            log.warning("entities or button colours refused, sending plain", exc_info=True)
+            plain = markup(reply, styles=False)
+            return await self.bot.send_message(chat_id, reply.text, reply_markup=plain)
 
     async def _send(self, chat_id: int, reply: Reply) -> Message | None:
         if reply.media is not None and self.media.available(reply.media.name):
@@ -339,23 +404,18 @@ class Delivery:
                 )
             except TelegramAPIError:
                 log.warning("rich message refused, sending the card as text", exc_info=True)
-        try:
-            return await self.bot.send_message(chat_id, reply.text, reply_markup=markup(reply))
-        except TelegramBadRequest:
-            if not any(b.style for row in reply.buttons for b in row):
-                raise
-            log.warning("buttons with colours refused, sending plain ones", exc_info=True)
-            plain = markup(reply, styles=False)
-            return await self.bot.send_message(chat_id, reply.text, reply_markup=plain)
+        return await self._send_text(chat_id, reply)
 
     async def _replace(self, message: Message, reply: Reply) -> bool:
         """The wizard's next screen in place of the pressed message."""
         if message.text is None:  # a card or a venue cannot become a text screen
             return False
         try:
-            await message.edit_text(reply.text, reply_markup=markup(reply))
+            await message.edit_text(
+                reply.text, entities=entities(reply), reply_markup=markup(reply)
+            )
         except TelegramBadRequest:
-            try:
+            try:  # without the entities and the button colours
                 await message.edit_text(reply.text, reply_markup=markup(reply, styles=False))
             except TelegramBadRequest:
                 log.debug("could not replace the pressed message", exc_info=True)
@@ -367,7 +427,9 @@ class Delivery:
         try:
             if message.text is not None:
                 suffix = f"\n\n— {label}" if label else ""
-                await message.edit_text(message.text + suffix, reply_markup=None)
+                await message.edit_text(  # the offsets stay: the label goes after the text
+                    message.text + suffix, entities=message.entities, reply_markup=None
+                )
             else:  # a rich card: keep it, only remove the buttons
                 await message.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:  # editing is cosmetic (old or unchanged message)
