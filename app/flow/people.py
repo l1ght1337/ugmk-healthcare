@@ -58,6 +58,11 @@ _RELATIVES = tuple(
 # The writer as a patient: «у меня…», «для себя», «сначала меня», «мне 44».
 _SELF = re.compile(r"\bу\s+меня\b|\bдля\s+себя\b|\bсебя\b|(?<!у\s)\bменя\b|\bмне\s+\d{1,2}\b")
 _ME_TOO = re.compile(r"(?<!у\s)\bменя\b|\bсебя\b")  # next to a relative, in the same words
+# «у меня двое детей упали», «у меня дети с горки упали»: whose they are, not who is hurt
+_MINE = re.compile(
+    r"\bу\s+меня\s+(?:двое|трое|оба|обе|дети|детей|ребята|ребят|близнец\w*|мальчик\w*|девочк\w*)\b"
+)
+_BOOKING_WORD = re.compile(r"\bзапи[сш]\w*")  # «надо записать», «запишите», «на запись»
 _SENTENCE = re.compile(r"[.!?;\n]+")
 _CLAUSE = re.compile(r"[,:]|\s—\s|\s(?:а|и|но|потом|затем)\s")
 _AGE = re.compile(r"\b\d{1,2}(?:\s*(?:лет|года|год|годика|месяц\w*|мес))?\b")
@@ -119,7 +124,7 @@ def _marker(clause: str) -> tuple[str, str | None, tuple[int, int], str | None] 
     for name, pattern in _NAMES:
         if found := pattern.search(clause):
             return name, None, found.span(), found["with"]
-    if found := _SELF.search(low):
+    if (found := _SELF.search(low)) and not _MINE.search(low):
         return "", "self", found.span(), None
     return None
 
@@ -234,12 +239,17 @@ def find_people(text: str) -> list[Person]:
 
 
 def _aside(clause: str) -> bool:
-    """A part that says nothing about the injuries: a greeting, a count of the patients, a
-    request to book («здравствуйте», «двое детей», «надо обоих записать»)."""
+    """A part that says nothing about the injuries: a greeting, a word or two, a request to
+    book, a count of the patients («здравствуйте», «пожалуйста», «надо обоих записать»,
+    «двое детей», «обоих надо к врачу»). «У меня двое детей сегодня с горки упали» says how
+    and when: it stays."""
+    low = _norm(clause)
     return (
-        names_several(clause)
+        len(low.split()) < 2
         or find_small_talk(clause) is not None
         or find_command(clause) == "book"
+        or _BOOKING_WORD.search(low) is not None
+        or (names_several(clause) and not _about_injury(clause))
     )
 
 
@@ -256,6 +266,8 @@ def shared(text: str) -> list[str]:
         if not clauses:
             continue
         first = next((n for n, clause in enumerate(clauses) if _marker(clause)), None)
+        if first is None and _BOOKING_WORD.search(_norm(sentence)):
+            continue  # «хотели бы записаться на сегодня, если можно»: a request, all of it
         before = clauses if first is None else clauses[:first]
         kept = [clause.strip(" —-") for clause in before if not _aside(clause)]
         kept = [clause for clause in kept if clause]

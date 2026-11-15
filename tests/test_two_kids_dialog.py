@@ -61,6 +61,23 @@ ANSWERED = {
     "clarify": None,
     "crisis": False,
 }
+RUN_1 = (  # the first message of the live run after the change
+    "Здравствуйте! У меня двое детей сегодня с горки упали, обоих надо к врачу. Маша 7 лет руку "
+    "ушибла, Ваня 10 лет ногу подвернул. Запишите обоих, пожалуйста"
+)
+COUPLE = "Добрый день. Мы с мужем в походе подвернули ногу, оба. Хотим прийти завтра утром."
+ME_FIRST = (
+    "Давайте сначала меня, Любовь Тимофеевна Захарова, 18.11.1979 года рождения. А потом мужа, "
+    "Захарова Игоря Семёновича, 05.05.1977 года рождения."
+)
+
+
+def own_field(asked: dict[str, Any]) -> dict[str, Any]:
+    """DeepSeek as it answered in the live run: the field of the question asked, no other."""
+    facts = {k: v for k, v in ANSWERED["facts"].items() if k in asked["fields"]}
+    return {**ANSWERED, "facts": facts}
+
+
 SUMMARY = (
     "Ваши ответы: не знаю, на что похоже; для ребёнка, {age}; бытовая травма; в течение 7 "
     "дней; к врачу не обращались."
@@ -75,7 +92,9 @@ class ByTask(FakeDeepSeek):
         self.by_task = by_task
 
     async def _handle(self, request: httpx2.Request) -> httpx2.Response:
-        self.replies.insert(0, self.by_task[sent(json.loads(request.content))["task"]])
+        asked = sent(json.loads(request.content))
+        reply = self.by_task[asked["task"]]
+        self.replies.insert(0, reply(asked) if callable(reply) else reply)
         return await super()._handle(request)
 
     def texts_of(self, task: str) -> list[str]:
@@ -138,6 +157,23 @@ def test_a_name_an_age_and_an_injury_between_commas() -> None:
 )  # fmt: skip
 def test_who_is_named_in_parts_of_a_sentence(text: str, found: list) -> None:
     assert people(text) == found
+
+
+def test_my_two_children_are_not_me() -> None:
+    assert people(RUN_1) == [
+        ("Маша", "child", 84, "руку ушибла"),
+        ("Ваня", "child", 120, "ногу подвернул"),
+    ]
+    # how and when is said with the count of the children; «обоих надо к врачу» says nothing
+    assert shared(RUN_1) == ["У меня двое детей сегодня с горки упали"]
+    assert people("У меня запястье болит, у сына колено")[0][:2] == ("", "self")
+
+
+def test_a_request_to_book_is_not_about_the_injury() -> None:
+    assert shared("Хотели бы записаться к вам на сегодня или на завтра, если можно.") == []
+    assert shared("Упали сегодня на катке, я и сын 12 лет. Нужно записать обоих.") == [
+        "Упали сегодня на катке"
+    ]
 
 
 def test_what_is_said_about_all_of_them() -> None:
@@ -208,9 +244,10 @@ async def test_both_children_are_booked_in_nine_and_six_turns(
     for label in menus:
         await one.press(label)
     # what was said about both answers the three questions: the answers, not the questions
-    assert fake.texts_of("extract") == [
-        "руку ушибла. Мы сегодня с горки упали. К врачу ещё не обращались"
-    ]
+    assert (
+        fake.texts_of("extract")
+        == ["руку ушибла. Мы сегодня с горки упали. К врачу ещё не обращались"] * 3
+    )  # «Как получена травма?», «Когда?», «Обращались ли к врачу?»: a call for each
     summary, days = chat.replies
     assert summary.text.startswith(SUMMARY.format(age="7 лет"))
     assert texts.SUMMARY_EDIT in [b.label for row in summary.buttons for b in row]
@@ -231,8 +268,9 @@ async def test_both_children_are_booked_in_nine_and_six_turns(
     assert "📝 Записываю Ваню, 10 лет: ногу подвернул" in chat.text
     for label in menus:
         await two.press(label)
-    assert fake.texts_of("extract")[1] == (
-        "ногу подвернул. Мы сегодня с горки упали. К врачу ещё не обращались"
+    assert (
+        fake.texts_of("extract")[3:]
+        == ["ногу подвернул. Мы сегодня с горки упали. К врачу ещё не обращались"] * 3
     )
     assert chat.replies[0].text.startswith(SUMMARY.format(age="10 лет"))
     await two.press(chat.nearest().label)
@@ -255,8 +293,9 @@ async def test_change_the_answers_asks_the_questions(make_chat, kb: KnowledgeBas
     await chat.press("Ваню, 10 лет")
     await chat.press("Похоже на перелом")
     assert chat.replies[0].text.startswith("Ваши ответы: ")
+    read = len(fake.texts_of("extract"))
     await chat.press(texts.SUMMARY_EDIT)
-    assert len(fake.texts_of("extract")) == 1  # read once; now the patient answers himself
+    assert len(fake.texts_of("extract")) == read  # read once; now the patient answers himself
     assert (await session(chat))["step"] in ("audience", "question")
 
 
@@ -270,6 +309,59 @@ async def test_an_answer_that_was_not_said_is_asked(make_chat, kb: KnowledgeBase
     await chat.press("Не знаю")
     assert "Обращались ли к врачу по данному случаю?" in chat.text  # the only question left
     assert "Как получена травма" not in chat.text
+
+
+async def test_each_question_is_read_by_its_own_call(make_chat, kb: KnowledgeBase) -> None:
+    """In the live run DeepSeek returned the field of the question asked and no other: «Как
+    получена травма?» was answered, «Когда?» and «Обращались ли к врачу?» were asked."""
+    fake = ByTask(route=UNCLEAR, extract=own_field)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say(FIRST)
+    await chat.press("Машу, 7 лет")
+    await chat.press("Не знаю")
+    assert chat.replies[0].text.startswith(SUMMARY.format(age="7 лет"))
+    assert [s["question"] for s in map(sent, fake.requests) if s["task"] == "extract"] == [
+        "how",
+        "when",
+        "seen_doctor",
+    ]
+
+
+async def test_the_first_message_of_the_live_run(make_chat, kb: KnowledgeBase) -> None:
+    fake = ByTask(route=UNCLEAR, extract=own_field)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say(RUN_1)
+    assert chat.labels() == ["Машу, 7 лет", "Ваню, 10 лет", texts.MENU]  # no «Меня»
+    await chat.press("Машу, 7 лет")
+    await chat.press("Не знаю")
+    await chat.press(chat.nearest().label)
+    await chat.press(texts.CONSENT_YES)
+    await chat.say("Воронина Мария Кирилловна, 03.03.2019")
+    await chat.contact()
+    await chat.press(texts.PAYMENT_SELF)
+    assert "Записать Ваню" in chat.labels()  # one waits: by name, not «Записать ещё одного»
+
+
+async def test_a_wish_for_the_visit_is_not_when_it_happened(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say(COUPLE)
+    assert chat.labels()[:2] == ["Меня", "Мужа"]
+    assert (await session(chat))["shared"] == []  # «завтра утром» is the wish, kept as a wish
+
+
+async def test_the_order_said_on_who_is_first_is_a_choice(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say(COUPLE)
+    await chat.say(ME_FIRST)
+    state = await session(chat)
+    assert state["person"]["name"] == "" and state["step"] != "first"
+    assert [p["name"] for p in state["people"]] == ["муж"]
+    assert texts.ONE_BY_ONE not in chat.text  # said with the question, not once more
+    assert "Записываю Вас" in chat.text
 
 
 async def test_without_deepseek_the_questions_are_asked_as_before(make_chat) -> None:

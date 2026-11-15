@@ -3107,7 +3107,15 @@ class Conversation:
         waits = asked or (c.s.more and c.s.person is None and step in START_STEPS)
         told = bool(named) or len(text.split()) > FEW_WORDS  # not «да всё равно»
         if c.more or len(named) > 1 or (waits and told):
-            c.s.shared += [part for part in shared(text) if part not in c.s.shared]
+            today = self._local(c.now)
+            doctors = self.clinic.schedule.doctors
+            for part in shared(text):
+                # «хотим прийти завтра утром» is a wish for the visit, not when it happened
+                wish = parse_wish(part, doctors, today.date(), context="strict", now=today.time())
+                if wish.wish.empty and part not in c.s.shared:
+                    c.s.shared.append(part)
+        if asked:
+            c.more = False  # «Запишу по очереди» is on the screen already
         if len(named) < 2 or step not in SEVERAL_STEPS or c.alone:
             return False
         c.more = False  # said here, with the names
@@ -3146,8 +3154,12 @@ class Conversation:
     async def _on_first_text(self, c: Ctx, text: str) -> None:
         """«Сначала Ваню», «второго», «с Маши» on «Кого записать первым?»."""
         low = text.lower().replace("ё", "е")
-        if len(find_people(text)) > 1:
-            # «у Маши ушиб руки, а у Вани нога подвернулась»: more about both, not a choice
+        order = c.for_whom is not None or re.search(
+            r"\b(?:сначала|сперва|перв\w+|втор\w+|начн\w+|потом|затем)\b", low
+        )
+        if len(find_people(text)) > 1 and not order:
+            # «у Маши ушиб руки, а у Вани нога подвернулась»: more about both, not a choice;
+            # «сначала меня, потом мужа» is one
             self._first_screen(c)
             return
         at = named_in(text, c.s.people)
@@ -3295,23 +3307,45 @@ class Conversation:
         """What was said about all the patients named answers the questions of each.
 
         «Мы сегодня с горки упали… К врачу ещё не обращались»: with this patient's own part
-        it is read once, as the answer to the first question the scenario would ask; DeepSeek
-        returns the other fields it names too. The patient sees «Ваши ответы: …» with
-        «Изменить ответы» instead of the questions; what was not said is asked as usual.
+        it is read as the answer to each question of the scenario that the complaint may
+        answer (at once, one DeepSeek call per question). The answers are taken in the order
+        the scenario asks; the first question the text does not answer is asked as usual,
+        and so are those after it. The patient sees «Ваши ответы: …» with «Изменить ответы»
+        instead of the questions answered.
         """
         person = c.s.person
         if person is None or not c.s.shared:
             return facts
-        probe = c.s.dialog.model_copy(deep=True)
-        step = self.engine.start(probe, scenario_id, dict(facts))
-        if not isinstance(step, AskQuestion):
+        scenario = self.kb.scenario(scenario_id)
+        # the questions the complaint may answer beforehand and has not answered yet
+        asked = [
+            q
+            for q in scenario.questions
+            if any(f.upfront and f.name not in facts for f in q.fields)
+        ]
+        if not asked:
             return facts
         text = ". ".join(part for part in (person.complaint, *c.s.shared) if part)
-        known = await self._known(c)
-        reading = await read_answer(self._llm(c), step.scenario, step.question, text, known)
-        if reading.unavailable or reading.crisis:
-            return facts
-        return {**reading.facts, **facts}
+        llm, known = self._llm(c), await self._known(c)
+        readings = await asyncio.gather(
+            *(read_answer(llm, scenario, question, text, known) for question in asked)
+        )
+        told: dict[str, dict[str, FactValue]] = {}
+        for question, reading in zip(asked, readings, strict=True):
+            own = {f.name for f in question.fields}  # each question answers its own fields
+            if not (reading.unavailable or reading.crisis):
+                told[question.id] = {k: v for k, v in reading.facts.items() if k in own}
+        found = dict(facts)
+        for _ in asked:  # in the order the scenario asks: what is not said stops it
+            probe = c.s.dialog.model_copy(deep=True)
+            step = self.engine.start(probe, scenario_id, dict(found))
+            if not isinstance(step, AskQuestion) or step.scenario.id != scenario_id:
+                break
+            answer = told.get(step.question.id)
+            if not answer or all(k in found for k in answer):
+                break
+            found = {**answer, **found}
+        return found
 
     def _ends_at_once(self, c: Ctx, scenario_id: str, facts: dict[str, FactValue]) -> bool:
         """The scenario would end at once with a route or a request to the administrators.
