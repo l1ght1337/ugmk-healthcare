@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from app.flow import topics
 from app.flow.age import parse_age_months
-from app.flow.commands import find_command, find_small_talk, names_several
+from app.flow.commands import YES, find_command, find_small_talk, names_several
 from app.flow.names import FIRST_NAMES, stem_pattern
 
 ADULT_FROM_MONTHS = 18 * 12
@@ -353,6 +353,23 @@ def named_in(text: str, people: list[Person]) -> int | None:
         if starts:
             places.append((min(starts), at))
     return min(places)[1] if places else None
+
+
+_AGREES = re.compile(
+    rf"^(?:{'|'.join(sorted(YES))}|хорошо|давайте|давай|записывайте|запишите)\b", re.IGNORECASE
+)
+_NOT_NOW = re.compile(r"\b(?:не|нет|потом|позже)\b")
+
+
+def agrees_to(text: str, person: Person) -> bool:
+    """«Да, давайте мужа» to «Теперь запишем второго пациента?»: «да» and the name or the
+    relation of the one offered, in the first sentence — the button «Записать мужа». What
+    follows («…только сначала уточните») does not take the answer back."""
+    first = next((part for part in _SENTENCE.split(text) if part.strip()), "")
+    low = _norm(first).strip(" ,")
+    if not _AGREES.match(low) or _NOT_NOW.search(low):
+        return False
+    return named_in(first, [person]) is not None
 
 
 def merge(known: list[Person], named: list[Person]) -> list[Person]:

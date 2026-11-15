@@ -324,3 +324,51 @@ async def test_i_hurt_my_wrist_and_my_son_his_knee(make_chat) -> None:
     assert chat.labels()[:2] == ["Меня", "Сына, 12 лет"]
     state = await session(chat)
     assert state["shared"] == ["Сегодня упали на катке"]
+
+
+# --- «Да, давайте мужа» after the card -----------------------------------------------------------
+
+
+async def to_the_offer_of_the_husband(chat) -> None:
+    await chat.start()
+    await chat.say(COUPLE)
+    await chat.press("Меня")
+    await chat.press("Похоже на вывих")
+    for label in ANSWERS:
+        await chat.press(label)
+    await chat.pick_slot("Завтра")
+    await chat.press(texts.CONSENT_YES)
+    await chat.say("Захарова Любовь Тимофеевна, 18.11.1979")
+    await chat.contact()
+    await chat.press(texts.PAYMENT_SELF)
+    assert chat.text == texts.NEXT_PATIENT and chat.labels()[0] == "Записать мужа"
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # the final live run of couple, word for word
+        "Да, давайте мужа. Только сначала уточните, пожалуйста: почему запись на 12 ноября, "
+        "если нам нужно сегодня или завтра? Мы же только что ноги подвернули, ждать до "
+        "четверга никак нельзя.",
+        "Да, давайте мужа",
+        "да, мужа",
+        "Давайте мужа",
+        "да, записывайте мужа",
+    ],
+)
+async def test_yes_with_the_next_one_named_is_his_button(make_chat, said: str) -> None:
+    chat = make_chat()
+    await to_the_offer_of_the_husband(chat)
+    await chat.say(said)
+    state = await session(chat)
+    assert state["person"] is not None and state["person"]["name"] == "муж"
+    assert "📝 Записываю мужа" in chat.text and state["people"] == []
+
+
+@pytest.mark.parametrize("said", ["да", "мужа потом, спасибо", "нет, мужа не надо", "а мужа?"])
+async def test_what_is_not_yes_with_his_name(make_chat, said: str) -> None:
+    chat = make_chat()
+    await to_the_offer_of_the_husband(chat)
+    await chat.say(said)
+    assert (await session(chat))["person"] is None

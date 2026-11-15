@@ -107,7 +107,15 @@ from app.flow.identity import (
     parse_birth_date,
 )
 from app.flow.loader import KnowledgeBase, care_lines, doctor_posts
-from app.flow.people import Person, asked_too, find_people, merge, named_in, shared
+from app.flow.people import (
+    Person,
+    agrees_to,
+    asked_too,
+    find_people,
+    merge,
+    named_in,
+    shared,
+)
 from app.flow.safety import find_phrase, sign_passed
 from app.flow.schema import Booking as BookingSpec
 from app.flow.schema import Choice, FactValue, Question, Scenario
@@ -1351,6 +1359,9 @@ class Conversation:
                 c.s.for_whom, c.s.who_kept = None, False
         if step not in MESSAGE_STEPS and await self._press_typed(c, text, shown):
             return  # a button's label typed as text: «бытовая», «вечер», «14:30», «да»
+        if step == "idle" and c.s.people and agrees_to(text, c.s.people[0]):
+            await self._on_button(c, "m:next")  # «Да, давайте мужа»: the button «Записать мужа»
+            return
         if (move := find_navigation(text)) is not None:  # «назад», «в меню», «отмена»
             await self._navigate(c, move)
             return
