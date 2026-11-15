@@ -207,3 +207,52 @@ async def test_one_patient_or_a_doctor_is_not_two(make_chat, said: str) -> None:
     await chat.start()
     await chat.say(said)
     assert (await session(chat))["step"] != "first" and texts.WHO_FIRST not in chat.text
+
+
+# --- more than two: a queue by the names --------------------------------------------------------
+
+THREE = (
+    "Дети сегодня с горки упали. Маша, 7 лет, руку ушибла, Ваня, 10 лет, ногу подвернул, "
+    "и Петя, 5 лет, ногу ушиб."
+)
+
+
+async def test_three_named_children_are_booked_one_after_another(make_chat) -> None:
+    """After each card the button names the next one: «Записать Машу», then «Записать Петю» —
+    not «Записать ещё одного» with «для кого» and the age asked again."""
+    chat = make_chat()
+    await chat.start()
+    await chat.say(THREE)
+    assert chat.text == f"{texts.ONE_BY_ONE_MANY} {texts.WHO_FIRST}"
+    assert chat.labels() == ["Машу, 7 лет", "Ваню, 10 лет", "Петю, 5 лет", texts.MENU]
+
+    await chat.press("Ваню, 10 лет")
+    assert "Записываю Ваню, 10 лет: ногу подвернул" in chat.text
+    await through(chat, "Воронин Иван Кириллович", "05.05.2016", first=True)
+    await chat.press(texts.PAYMENT_SELF)
+    assert chat.text == texts.NEXT_PATIENT and chat.labels() == ["Записать Машу", *MENU]
+    assert [p["name"] for p in (await session(chat))["people"]] == ["Маша", "Петя"]
+
+    await chat.press("Записать Машу")
+    assert "Записываю Машу, 7 лет: руку ушибла" in chat.text
+    assert texts.ASK_AUDIENCE not in chat.text
+    await through(chat, "Воронина Мария Кирилловна", "03.03.2019", first=False)
+    await chat.press(texts.PAYMENT_SELF)
+    # the third, not «второго»
+    assert chat.text == texts.NEXT_PATIENT_MORE and chat.labels() == ["Записать Петю", *MENU]
+
+    await chat.press("Записать Петю")
+    assert "Записываю Петю, 5 лет: ногу ушиб" in chat.text
+    assert (await session(chat))["dialog"]["age_months"] is None  # the topic is not chosen yet
+    await through(chat, "Воронин Пётр Кириллович", "01.02.2021", first=False)
+    assert len(await bookings(chat.conversation.db)) == 3
+    await chat.press(texts.PAYMENT_SELF)  # nobody waits: the usual «Записать ещё одного»
+    assert chat.labels() == [texts.BOOK_MORE, *MENU]
+    assert chat.text.startswith(texts.THANKS)
+
+
+async def test_two_named_keep_the_words_about_the_second(make_chat) -> None:
+    chat = make_chat()
+    await chat.start()
+    await chat.say(KIDS)
+    assert chat.text == f"{texts.ONE_BY_ONE} {texts.WHO_FIRST}"  # «потом второго»: two of them

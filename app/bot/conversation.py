@@ -2950,10 +2950,8 @@ class Conversation:
             await self._my_bookings(c)
         elif item == "admin":  # keep the scenario answers: the administrator sees the context
             await self._handoff(c, texts.ASK_ADMIN_REASON)
-        elif item == "next" and len(c.s.people) == 1:  # «Записать Ваню»: he was named before
-            person = c.s.people[0]
-            c.s.people = []
-            await self._take_person(c, person)
+        elif item == "next" and c.s.people:  # «Записать Ваню»: the next of those named
+            await self._take_person(c, c.s.people[0])  # the others go on waiting
         elif item in ("more", "next"):  # «Записать ещё одного»
             self._reset(c)
             c.s.talk.who = None  # another patient: asked
@@ -3119,8 +3117,11 @@ class Conversation:
         people, more = c.s.people, c.s.more  # patients named before: now is their time
         self._reset(c, named=True)
         waits = bool(people) or more
-        text = texts.NEXT_PATIENT if waits else f"{texts.THANKS} {self.kb.common.more_help.text}"
-        if len(people) == 1:  # exactly one named and not booked: by name, «для кого» is not asked
+        if not waits:
+            text = f"{texts.THANKS} {self.kb.common.more_help.text}"
+        else:  # «второго» after the first card, «следующего» after the second and later
+            text = texts.NEXT_PATIENT_MORE if len(c.s.booked) > 1 else texts.NEXT_PATIENT
+        if people:  # a queue by the names: the next one named, «для кого» is not asked
             label = texts.BOOK_PERSON.format(whom=people[0].whom)
             one_more = Button(label, "m:next", "primary")
         else:
@@ -3175,7 +3176,7 @@ class Conversation:
                 c.s.wizard = True
             self._first_screen(c)
             return True
-        c.say(texts.ONE_BY_ONE)
+        c.say(texts.ONE_BY_ONE_MANY if len(named) > 2 else texts.ONE_BY_ONE)
         c.s.people = [p for p in named if p is not first]
         await self._take_person(c, first)
         return True
@@ -3188,7 +3189,8 @@ class Conversation:
             if person.age_months is not None:
                 label += f", {format_age(person.age_months)}"
             buttons.append(Button(label, f"pf:{at}"))
-        self._screen(c, f"{texts.ONE_BY_ONE} {texts.WHO_FIRST}", buttons)
+        one_by_one = texts.ONE_BY_ONE_MANY if len(c.s.people) > 2 else texts.ONE_BY_ONE
+        self._screen(c, f"{one_by_one} {texts.WHO_FIRST}", buttons)
 
     async def _on_first(self, c: Ctx, value: str) -> None:
         at = int(value) if value.isdigit() else -1

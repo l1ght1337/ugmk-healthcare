@@ -20,6 +20,7 @@ AUDIENCE_SELF = "Для себя"
 AUDIENCE_CHILD = "Для ребёнка (до 18 лет)"
 # two patients in one message («меня и сына», «двоих детей»): one booking at a time
 ONE_BY_ONE = "Запишу по очереди: сначала одного пациента, потом второго."
+ONE_BY_ONE_MANY = "Запишу по очереди: сначала одного пациента, потом остальных."  # three, more
 WHO_FIRST = "Кого записать первым?"  # a button for each patient the message named
 # the patient the bot is booking, when he was named in the conversation — above the step
 PERSON_LINE = "Записываю {whom}"  # «Записываю Ваню: ногу подвернул», «Записываю Вас: …»
@@ -27,6 +28,7 @@ PERSON_EDIT = "Изменить"
 BOOK_PERSON = "Записать {whom}"  # after the card, instead of «Записать ещё одного»
 BOOK_MORE = "Записать ещё одного"  # under «Спасибо!» after the booking card
 NEXT_PATIENT = "Спасибо! Теперь запишем второго пациента?"
+NEXT_PATIENT_MORE = "Спасибо! Теперь запишем следующего пациента?"  # the third and those after
 WHOM_ADULT = "Для взрослого"  # «для кого» of one more booking: «Для себя» would not fit
 ASK_CHILD_AGE = "Сколько лет ребёнку? Если меньше года — сколько месяцев?"
 ASK_CHILD_AGE_AGAIN = "Напишите, пожалуйста, возраст ребёнка цифрами, например: 7 лет или 4 месяца."
