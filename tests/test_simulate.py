@@ -64,12 +64,14 @@ def step(n: int, action: Action, *replies: Shown, **changes: object) -> Step:
 # --- the personas -------------------------------------------------------------------------------
 
 
-def test_personas_are_forty_to_sixty_and_made_up() -> None:
-    assert 40 <= len(PERSONAS) <= 60
+def test_personas_are_forty_to_seventy_and_made_up() -> None:
+    assert 40 <= len(PERSONAS) <= 70
     assert len(BY_KEY) == len(PERSONAS) == len({p.name for p in PERSONAS})
     assert all(p.phone.startswith("+7900") for p in PERSONAS)  # a range no operator uses
     goals = {p.goal for p in PERSONAS}
-    assert goals == {"book", "move", "keep", "cancel", "price", "ask", "two", "unknown"}
+    assert goals == {
+        "book", "move", "keep", "cancel", "price", "ask", "two", "several", "unknown"
+    }  # fmt: skip
     assert sum(p.booked > 0 for p in PERSONAS) >= 6 and any(p.clock != "12:00" for p in PERSONAS)
     for persona in PERSONAS:
         assert persona.goal in sim.GOALS and persona.manner and persona.story
@@ -132,7 +134,8 @@ async def test_moving_and_cancelling_a_visit_booked_before(env: sim.Env) -> None
 
     wrong = ScriptedPatient("отмени запись на завтра", ("press", "Да, отменить"))
     dialog = await play(BY_KEY["cancel_by_day"], wrong, env)
-    assert rules(dialog, env) == {sim.GOAL}  # the Sunday one was to be cancelled
+    # the Sunday one was to be cancelled: the visit of tomorrow is gone though nobody asked
+    assert rules(dialog, env) == {sim.GOAL, sim.TOUCHED}
 
 
 async def test_keeping_the_visit_after_starting_a_move(env: sim.Env) -> None:
@@ -492,3 +495,217 @@ async def test_the_dialogs_are_saved_while_the_run_goes_on(env: sim.Env, tmp_pat
     assert sim.run_file("unfinished", tmp_path) == path
     results, meta = await sim.recheck(path, env)
     assert [d.persona.key for d, _ in results] == ["elder"] and meta["unfinished"]
+
+
+# --- whose visit is touched and who is booked (the round «кого и куда записать») ----------------
+
+MOTHER, SON = "Корнилова Елена Викторовна", "Корнилов Тимур Денисович"
+
+
+def visit(n: int, patient: str, day: str = "2026-11-13", at: str = "11:00", **changes) -> dict:
+    """A booking as the simulator keeps it; ``patient`` — the full name it is made for."""
+    base = {"id": n, "status": "active", "date": f"{day[8:]}.{day[5:7]}", "day": day, "time": at,
+            "doctor": "Ярунин Андрей Александрович", "visit": "primary", "patient_id": n,
+            "audience": "adult", "patient": patient}  # fmt: skip
+    return {**base, **changes}
+
+
+def ends_with(key: str, before: list[dict], *after: list[dict]) -> Dialog:
+    """A dialog of the persona: the visits before it and after each of its turns."""
+    steps = [
+        Step(n, Action("say", "…"), [Shown("Готово.", ("Меню",))], state(), list(now), 0)
+        for n, now in enumerate(after, 1)
+    ]
+    dialog = made(BY_KEY[key], *steps)
+    dialog.before = before
+    return dialog
+
+
+def touched(dialog: Dialog) -> list[str]:
+    return [f"{v.turn}: {v.detail}" for v in sim._touched(dialog)]
+
+
+def test_the_new_rule_stands_next_to_the_gravest_one() -> None:
+    assert sim.TOUCHED == "изменена или отменена запись, о которой пациент не просил"
+    assert sim.RULES.index(sim.TOUCHED) == sim.RULES.index(sim.ROUTED_BOOKED) + 1
+    assert "several" in sim.GOALS
+
+
+def test_the_new_personas_say_what_visits_the_dialog_ends_with() -> None:
+    wanted = {
+        "book_then_son": (("self", "kept"), ("child", "new")),
+        "not_husband": (("self", "kept"),),
+        "all_in_one_dob": (("self", "new"),),
+        "move_and_book": (("self", "moved"), ("child", "new")),
+        "cancel_and_swap": (("self", "cancelled"), ("other", "new")),
+        "two_moves": (("other", "cancelled"), ("self", "moved")),
+    }
+    assert {p.key: p.ends for p in PERSONAS if p.ends is not None} == wanted
+    for key in wanted:  # the first message is the one the customer wrote on his phone
+        assert "первым сообщением пишет ровно: «" in BY_KEY[key].manner
+
+
+def test_the_mothers_visit_moved_for_the_sons_complaint(env: sim.Env) -> None:
+    """The customer's phone, 15.11: «Сын 8 лет упал с велосипеда…» moved the mother's visit to
+    19:00, and the son was not booked."""
+    before = [visit(1, MOTHER)]
+    dialog = ends_with("book_then_son", before, [visit(1, MOTHER, "2026-11-12", "19:00")])
+    assert touched(dialog) == ["1: своя запись перенесена: с 13.11, 11:00 на 12.11, 19:00"]
+    assert sim._goal(dialog, env.clinic) == (
+        "итог не тот. Нужно: своя запись — без изменений; запись ребёнка — новая. "
+        "Получилось: своя запись — перенесена"
+    )
+    assert {sim.GOAL, sim.TOUCHED} <= rules(dialog, env)
+
+
+def test_the_son_is_booked_and_the_mothers_visit_stays(env: sim.Env) -> None:
+    before = [visit(1, MOTHER)]
+    son = visit(2, SON, "2026-11-12", "19:00", audience="child")
+    dialog = ends_with("book_then_son", before, before, [*before, son])
+    assert touched(dialog) == [] and sim._goal(dialog, env.clinic) is None
+
+
+def test_a_son_who_is_not_booked_is_a_goal_missed_and_nothing_graver(env: sim.Env) -> None:
+    before = [visit(1, MOTHER)]
+    dialog = ends_with("book_then_son", before, before)
+    assert touched(dialog) == []
+    assert "Получилось: своя запись — без изменений" in (sim._goal(dialog, env.clinic) or "")
+
+
+def test_a_visit_moved_and_moved_back_was_touched_all_the_same() -> None:
+    before = [visit(1, MOTHER)]
+    moved = [visit(1, MOTHER, "2026-11-12", "19:00")]
+    dialog = ends_with("book_then_son", before, before, moved, before)
+    assert touched(dialog) == ["2: своя запись перенесена: с 13.11, 11:00 на 12.11, 19:00"]
+
+
+def test_a_husband_nobody_asked_to_book(env: sim.Env) -> None:
+    before = [visit(1, "Белоусова Марина Андреевна")]
+    husband = visit(2, "Белоусов Олег Петрович", "2026-11-14", "10:00")
+    dialog = ends_with("not_husband", before, before, [*before, husband])
+    assert touched(dialog) == [
+        "2: создана запись, о которой не просили: Белоусов Олег Петрович, 14.11, 10:00"
+    ]
+    assert sim.TOUCHED in rules(dialog, env)
+    kept = ends_with("not_husband", before, before)
+    assert touched(kept) == [] and sim._goal(kept, env.clinic) is None
+
+
+def test_the_wifes_visit_cancelled_instead_of_the_husbands(env: sim.Env) -> None:
+    wife, husband = "Фролова Екатерина Дмитриевна", "Фролов Дмитрий Олегович"
+    before = [visit(1, wife), visit(2, husband, "2026-11-15", "11:00")]
+    wrong = [visit(1, wife, status="cancelled"), visit(2, husband, "2026-11-15", "11:00")]
+    dialog = ends_with("two_moves", before, wrong)
+    assert touched(dialog) == ["0: своя запись отменена: 13.11, 11:00 (просили перенести)"]
+    right = [visit(1, wife, at="19:00"), visit(2, husband, "2026-11-15", "11:00",
+                                              status="cancelled")]  # fmt: skip
+    done = ends_with("two_moves", before, right)
+    assert touched(done) == [] and sim._goal(done, env.clinic) is None
+
+
+def test_a_visit_given_to_the_husband(env: sim.Env) -> None:
+    wife, husband = "Мельникова Светлана Юрьевна", "Мельников Андрей Павлович"
+    before = [visit(1, wife)]
+    right = [visit(1, wife, status="cancelled"), visit(2, husband)]
+    done = ends_with("cancel_and_swap", before, right)
+    assert touched(done) == [] and sim._goal(done, env.clinic) is None
+    # the husband is booked twice: one visit too many
+    twice = ends_with("cancel_and_swap", before, [*right, visit(3, husband, at="11:30")])
+    assert touched(twice) == ["0: лишняя запись: Мельников Андрей Павлович, 13.11, 11:30"]
+    # a name that is nobody's in the story
+    stranger = ends_with("cancel_and_swap", before, [before[0], visit(2, "Иванов Пётр Ильич")])
+    assert touched(stranger) == [
+        "1: создана запись, о которой не просили: Иванов Пётр Ильич, 13.11, 11:00"
+    ]
+
+
+def test_the_old_personas_are_under_the_rule_too(env: sim.Env) -> None:
+    """Whose visit may change follows from the goal; a saved run has no patient's name."""
+    cancelled = with_a_booking("move_then_keep", Step(
+        1, Action("say", "…"), [MENU_SHOWN], state(), [{**BOOKED, "status": "cancelled"}], 0
+    ))  # fmt: skip
+    assert touched(cancelled) == ["1: своя запись отменена: 13.11, 11:00"]
+    moved = with_a_booking("cancel_plain", Step(
+        1, Action("say", "…"), [MENU_SHOWN], state(), [{**BOOKED, "time": "12:00"}], 0
+    ))  # fmt: skip
+    assert touched(moved) == [
+        "0: своя запись перенесена: с 13.11, 11:00 на 13.11, 12:00 (просили отменить)"
+    ]
+    asked = with_a_booking("move_day", Step(
+        1, Action("say", "…"), [MENU_SHOWN], state(), [{**BOOKED, "day": "2026-11-15"}], 0
+    ))  # fmt: skip
+    assert touched(asked) == []  # the move he came for
+
+
+async def test_the_visits_before_the_dialog_are_whose_the_story_says(env: sim.Env) -> None:
+    dialog = await play(BY_KEY["two_moves"], ScriptedPatient(("press", "Мои записи")), env)
+    assert [(b["patient"], b["date"]) for b in dialog.before] == [
+        ("Фролова Екатерина Дмитриевна", "13.11"),
+        ("Фролов Дмитрий Олегович", "15.11"),
+    ]
+    prompt = sim.persona_prompt(BY_KEY["two_moves"], dialog.before)
+    assert "13.11 в " in prompt and "(Ваша)" in prompt
+    assert "(пациент — Фролов Дмитрий Олегович)" in prompt
+    assert "Взрослый, которого записываете" not in prompt
+    own = await play(BY_KEY["move_and_book"], ScriptedPatient(("press", "Мои записи")), env)
+    assert [(b["patient"], b["date"]) for b in own.before] == [
+        ("Тарасова Ольга Николаевна", "15.11")
+    ]
+    assert touched(dialog) == [] == touched(own)
+
+
+async def test_the_son_booked_by_buttons_passes_every_rule(env: sim.Env) -> None:
+    patient = ScriptedPatient(
+        ("press", "Записаться в травмпункт"),
+        ("press", "Рука или нога"),
+        ("press", "Похоже на вывих"),
+        ("press", "Для ребёнка (до 18 лет)"),
+        "8 лет",
+        ("press", "Бытовая травма"),
+        ("press", "В течение 7 дней"),
+        ("press", "Нет, не обращались"),
+        ("press", "Сегодня, 12.11"),
+        ("press", "Вечер 18–23"),
+        ("press", "19:00"),
+        ("press", "Согласен"),
+        SON,
+        "21.04.2018",
+        ("press", "Самостоятельно"),
+    )
+    dialog = await play(BY_KEY["book_then_son"], patient, env)
+    assert [(b["patient"], b["status"]) for b in dialog.steps[-1].bookings] == [
+        (MOTHER, "active"),
+        (SON, "active"),
+    ]
+    assert check(dialog, env.kb, env.clinic) == []
+
+
+def test_a_name_and_a_birth_date_given_at_once_and_asked_again(env: sim.Env) -> None:
+    persona = BY_KEY["all_in_one_dob"]
+    first = "Запишите на завтра утром, порезал палец. Родионов Иван Сергеевич, 12.03.1985"
+    told = step(1, Action("say", first), Shown("Шаг 3 из 5", ("Да", "Меню")), wizard=True)
+    whom = Shown(f"Шаг 2 из 5\n\n{texts.ASK_AUDIENCE}", ("Для себя",))
+    asked = step(2, Action("press", "Да"), whom, wizard=True)
+    found = [v.detail for v in check(made(persona, told, asked), env.kb, env.clinic)
+             if v.rule == sim.LOST]  # fmt: skip
+    assert found == ["бот спросил «для кого», хотя ФИО и дата рождения названы"]
+    name = step(2, Action("press", "Да"), Shown(f"Шаг 5 из 5\n\n{texts.ASK_NAME}", ("Меню",)),
+                wizard=True)  # fmt: skip
+    found = [v.detail for v in check(made(persona, told, name), env.kb, env.clinic)
+             if v.rule == sim.LOST]  # fmt: skip
+    assert found == ["бот спросил ФИО, хотя ФИО и дата рождения названы"]
+    fine = step(2, Action("press", "Да"), Shown("Пациент: Родионов Иван Сергеевич", ("Меню",)),
+                wizard=True)  # fmt: skip
+    assert sim.LOST not in rules(made(persona, told, fine), env)
+    # on the consent screen the bot waits for the button: the data typed there is another story
+    consent = step(1, Action("press", "19:00"), Shown("Согласие…", ("Согласен",)), wizard=True,
+                   step="consent")  # fmt: skip
+    typed = step(2, Action("say", "Родионов Иван Сергеевич, 12.03.1985"),
+                 Shown("Чтобы продолжить, нажмите «Согласен»", ("Согласен",)), wizard=True,
+                 step="consent")  # fmt: skip
+    name = step(3, Action("press", "Согласен"), Shown(texts.ASK_NAME, ("Меню",)), wizard=True)
+    assert sim.LOST not in rules(made(persona, consent, typed, name), env)
+    # the mother's own name does not answer the question about the child's
+    mother = replace(persona, child=("Родионова Анна Ивановна", "01.02.2019"))
+    name = step(2, Action("press", "Да"), Shown(texts.ASK_NAME, ("Меню",)), wizard=True)
+    assert sim.LOST not in rules(made(mother, told, name), env)

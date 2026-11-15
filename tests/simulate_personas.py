@@ -7,7 +7,14 @@ Every name, birth date and phone number here is made up. ``goal``:
 * move / keep / cancel — about a visit booked before the dialog (``booked``);
 * price / ask — to get an answer to a question, no booking needed;
 * two — to book two people;
+* several — several things at once (to move one visit and to book somebody else…): what
+  counts is the set of visits the dialog ends with (``ends``);
 * unknown — an injury or a request the clinic's scripts do not have.
+
+``ends`` — the visits the dialog must end with: whose each one is (``self``, ``child``,
+``other``) and what became of it — ``kept``, ``moved``, ``cancelled`` (a visit booked before
+the dialog) or ``new``. A visit that was moved or cancelled though nobody asked, and a visit
+booked for somebody nobody asked to book, is the gravest finding of the simulator.
 """
 
 from __future__ import annotations
@@ -15,7 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-Goal = Literal["book", "move", "keep", "cancel", "price", "ask", "two", "unknown"]
+Goal = Literal["book", "move", "keep", "cancel", "price", "ask", "two", "several", "unknown"]
+Who = Literal["self", "child", "other"]
+Fate = Literal["kept", "moved", "cancelled", "new"]
 
 
 @dataclass(frozen=True)
@@ -30,7 +39,11 @@ class Persona:
     child: tuple[str, str] | None = None  # (full name, birth date): the visit is for a child
     other: tuple[str, str] | None = None  # the visit is for another adult
     clock: str = "12:00"  # the clinic's clock when the dialog starts (Thursday, 12.11.2026)
-    booked: int = 0  # visits booked before the dialog
+    booked: int = 0  # visits booked before the dialog: the persona's own
+    booked_other: int = 0  # visits of ``other`` booked before the dialog, after the own ones
+    booked_on: tuple[str, ...] = ()  # the days of those visits, if not «Завтра», «Вс»
+    # the visits the dialog must end with: whose and what became of each (see above)
+    ends: tuple[tuple[Who, Fate], ...] | None = None
     doctor: str | None = None  # the doctor's surname the patient asks for
     day: int | None = None  # the day the patient asks for: days from today
     phone: str = "+79000000000"
@@ -296,6 +309,61 @@ PERSONAS: tuple[Persona, ...] = (
       "точно называет, какую запись отменить",
       "cancel", "у неё две записи: на завтра и на воскресенье; отменить нужно только ту, что "
       "на воскресенье, вторую оставить", booked=2, day=3, phone="+79001110040"),
+    # --- several things at once: who is booked and whose visit is touched -----------------------
+    P("book_then_son", "Корнилова Елена Викторовна", "09.06.1987",
+      "мать, у которой уже есть своя запись на завтра; сын упал с велосипеда",
+      "коротко; первым сообщением пишет ровно: «пока не записывай мужа еще посмотрим», вторым "
+      "— ровно: «Сын 8 лет упал с велосипеда сегодня, болит рука, можно сегодня вечером?»; "
+      "дальше отвечает на вопросы бота",
+      "book", "её собственная запись на завтра остаётся как есть: её не переносить и не "
+      "отменять; мужа записывать не нужно. Записать нужно сына: 8 лет, сегодня упал с "
+      "велосипеда, болит рука, к врачу не обращались, травма бытовая; хочет попасть сегодня "
+      "вечером",
+      child=("Корнилов Тимур Денисович", "21.04.2018"), booked=1, phone="+79001110065",
+      ends=(("self", "kept"), ("child", "new"))),
+    P("not_husband", "Белоусова Марина Андреевна", "17.02.1984",
+      "женщина со своей записью на завтра; думала записать и мужа, но передумала",
+      "одной-двумя фразами; первым сообщением пишет ровно: «Пока не записывай мужа, ещё "
+      "посмотрим»",
+      "keep", "её запись на завтра остаётся как есть; мужа записывать не нужно — он решил "
+      "подождать. Если бот ответил, что мужа не записывает, — попрощаться. Если бот предлагает "
+      "перенести или отменить её запись — отказаться",
+      booked=1, phone="+79001110066", ends=(("self", "kept"),)),
+    P("all_in_one_dob", "Родионов Иван Сергеевич", "12.03.1985",
+      "мужчина, который пишет всё одним сообщением",
+      "первым сообщением пишет ровно: «Запишите на завтра утром, сегодня порезал палец на "
+      "кухне, к врачу не ходил. Родионов Иван Сергеевич, 12.03.1985»; дальше — коротко",
+      "book", "сегодня порезал палец ножом на кухне, порез неглубокий, кровь остановилась "
+      "сразу, шов, скорее всего, не нужен, но пусть посмотрит врач; к врачу не ходил; хочет "
+      "на завтра утром; запись для себя",
+      day=1, phone="+79001110067", ends=(("self", "new"),)),
+    P("move_and_book", "Тарасова Ольга Николаевна", "03.10.1986",
+      "мать со своей записью на воскресенье и сыном, который ушиб руку",
+      "два дела одним сообщением; первым сообщением пишет ровно: «Перенесите мою запись на "
+      "завтра и запишите сына, он руку ушиб»",
+      "several", "у неё запись на воскресенье — её нужно перенести на завтра, время любое. И "
+      "записать сына: 11 лет, сегодня на физкультуре ушиб руку, рука опухла, к врачу не "
+      "обращались, травма бытовая; сына — на ближайшее время",
+      child=("Тарасов Кирилл Андреевич", "15.01.2015"), booked=1, booked_on=("Вс",),
+      phone="+79001110068", ends=(("self", "moved"), ("child", "new"))),
+    P("cancel_and_swap", "Мельникова Светлана Юрьевна", "26.08.1979",
+      "жена, которая отдаёт своё время мужу",
+      "по делу; первым сообщением пишет ровно: «Отмените мою запись, запишите вместо меня "
+      "мужа, он ногу подвернул»",
+      "several", "у неё запись на завтра — её нужно отменить. Вместо неё записать мужа: он "
+      "сегодня подвернул ногу на лестнице, голеностоп опух, похоже на растяжение, к врачу не "
+      "обращался, травма бытовая; мужа — на завтра или на ближайшее время",
+      other=("Мельников Андрей Павлович", "11.11.1976"), booked=1, phone="+79001110069",
+      ends=(("self", "cancelled"), ("other", "new"))),
+    P("two_moves", "Фролова Екатерина Дмитриевна", "08.12.1983",
+      "жена: записаны и она, и муж",
+      "по делу; первым сообщением пишет ровно: «Отмените запись мужа, а мою перенесите на "
+      "вечер»",
+      "several", "записаны двое: она сама — на завтра, муж — на воскресенье. Запись мужа "
+      "нужно отменить: он не придёт. Свою — перенести на тот же день, на вечер (после 18:00). "
+      "Новых записей не нужно",
+      other=("Фролов Дмитрий Олегович", "30.04.1981"), booked=1, booked_other=1,
+      phone="+79001110070", ends=(("other", "cancelled"), ("self", "moved"))),
     # --- a question, no booking -----------------------------------------------------------------
     P("price_first", "Чернов Борис Ефимович", "21.06.1964",
       "мужчина, который только узнаёт цену",

@@ -46,7 +46,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 from app.bot import texts
-from app.bot.conversation import Conversation, Reply, UserRef
+from app.bot.conversation import PATIENT_DATA_STEPS, Conversation, Reply, UserRef
 from app.config import PROJECT_ROOT, ClinicData, get_settings, load_clinic_data
 from app.db.models import Booking, Handoff, Patient, User
 from app.db.session import Database
@@ -77,13 +77,16 @@ BOOKED_DAYS = ("Завтра", "Вс")  # the days of the visits booked before t
 # --- the rules, as the report names them ---------------------------------------------------
 GOAL = "цель не достигнута, и понятного отказа с выходом нет"
 ROUTED_BOOKED = "записан пациент, которому положен маршрут"  # Persona.route (rule 5)
+# A visit booked before the dialog moved or cancelled though nobody asked, and a visit booked
+# for somebody nobody asked to book: what the base ends with is not what the patient wanted
+TOUCHED = "изменена или отменена запись, о которой пациент не просил"
 REPEAT = "один и тот же экран показан дважды подряд без новой строки"
 UNANSWERED = "вопрос пациента остался без ответа"
 LOST = "названные врач, день или «для кого» потерялись"
 NO_BUTTON = "у ответа нет кнопки, которая ведёт дальше"
 ADVICE = "диагноз или медицинский совет"
 CRASH = "ошибка в боте"
-RULES = (GOAL, ROUTED_BOOKED, REPEAT, UNANSWERED, LOST, NO_BUTTON, ADVICE, CRASH)
+RULES = (GOAL, ROUTED_BOOKED, TOUCHED, REPEAT, UNANSWERED, LOST, NO_BUTTON, ADVICE, CRASH)
 
 GOALS = {
     "book": "записаться на приём (или получить ясный ответ, почему нельзя и куда обратиться)",
@@ -93,6 +96,8 @@ GOALS = {
     "price": "узнать цену; записываться не нужно",
     "ask": "получить ответ на свой вопрос; записываться не нужно",
     "two": "записать обоих пациентов из истории: сначала одного, потом второго",
+    "several": "сделать все дела из истории: в конце записи должны быть ровно такими, как там "
+    "сказано, — ни одной лишней и ни одной изменённой без просьбы",
     "unknown": "узнать, помогут ли в травмпункте, и записаться, если это возможно",
 }
 
@@ -223,10 +228,24 @@ def persona_prompt(persona: Persona, before: Sequence[dict[str, Any]]) -> str:
     if persona.child:
         lines.append(f"Ребёнок, которого записываете: {persona.child[0]}, {persona.child[1]}.")
     if persona.other:
-        lines.append(f"Взрослый, которого записываете: {persona.other[0]}, {persona.other[1]}.")
+        label = "Взрослый, которого записываете"
+        if not any(who == "other" and fate == "new" for who, fate in persona.ends or ()):
+            label = "Второй взрослый из Вашей истории" if persona.ends else label
+        lines.append(f"{label}: {persona.other[0]}, {persona.other[1]}.")
     if before:
-        booked = "; ".join(f"{b['date']} в {b['time']}" for b in before)
-        lines.append(f"У Вас уже есть запись в травмпункт: {booked}. Сегодня 12 ноября, четверг.")
+        whose = [_who(persona, b) for b in before]
+        several = any(who != "self" for who in whose)
+
+        def one(booking: dict[str, Any], who: str) -> str:
+            when = f"{booking['date']} в {booking['time']}"
+            if not several:
+                return when
+            return f"{when} (Ваша)" if who == "self" else f"{when} (пациент — {booking['patient']})"
+
+        booked = "; ".join(one(b, who) for b, who in zip(before, whose, strict=True))
+        head = "Записи в травмпункт, которые уже есть" if several else "У Вас уже есть запись"
+        head += "" if several else " в травмпункт"
+        lines.append(f"{head}: {booked}. Сегодня 12 ноября, четверг.")
     return "\n".join(lines)
 
 
@@ -364,25 +383,39 @@ async def _bookings(chat: Chat) -> tuple[list[dict[str, Any]], int]:
                     "visit": b.visit,
                     "patient_id": b.patient_id,
                     "audience": patient.audience if patient else None,
+                    # made-up names of the personas: whose visit it is (rule TOUCHED)
+                    "patient": _full_name(patient) if patient else None,
                 }
             )
         handoffs = await s.scalar(select(func.count()).select_from(Handoff)) or 0
     return found, handoffs
 
 
-async def _book_before(chat: Chat, persona: Persona, index: int) -> None:
-    """A first visit for the persona, by buttons — the setup of «перенести» and «отменить»."""
+def _full_name(patient: Patient) -> str:
+    parts = (patient.last_name, patient.first_name, patient.patronymic)
+    return " ".join(part for part in parts if part)
+
+
+async def _book_before(chat: Chat, persona: Persona, index: int, *, other: bool = False) -> None:
+    """A first visit by buttons — the setup of «перенести» and «отменить»: for the persona,
+    or (``other``) for the second adult of the story. ``index`` — which visit of all it is."""
+    days = persona.booked_on or BOOKED_DAYS
     await chat.press(texts.MENU_BOOK)
     for label in ("Рука или нога", "Похоже на вывих", texts.AUDIENCE_SELF, "Бытовая травма"):
         await chat.press(label)
     await chat.press("В течение 7 дней")
     await chat.press("Нет, не обращались")
-    await chat.pick_slot(BOOKED_DAYS[index])
+    await chat.pick_slot(days[index])
     if index == 0:
         await chat.press(texts.CONSENT_YES)
         await chat.say(persona.name)
         await chat.say(persona.born)
         await chat.contact(persona.phone)
+    elif other:
+        assert persona.other is not None, persona.key
+        await chat.press(texts.PATIENT_NEW)
+        await chat.say(persona.other[0])
+        await chat.say(persona.other[1])
     else:
         await chat.press(" ".join(persona.name.split()[:2]))
     await chat.press(texts.PAYMENT_SELF)
@@ -416,6 +449,8 @@ async def play(
         await chat.start()
         for index in range(persona.booked):
             await _book_before(chat, persona, index)
+        for index in range(persona.booked, persona.booked + persona.booked_other):
+            await _book_before(chat, persona, index, other=True)
         if persona.booked:
             await chat.start()
         before, _ = await _bookings(chat)
@@ -534,11 +569,146 @@ def _key(state: dict[str, Any]) -> tuple[Any, ...]:
     return (state["step"], state["scenario"], state["question"], state["outcome"])
 
 
+def _words(name: str) -> set[str]:
+    return set(name.lower().replace("ё", "е").split())
+
+
+def _who(persona: Persona, booking: dict[str, Any]) -> str:
+    """Whose visit it is: ``self``, ``child``, ``other`` — or ``?``: nobody of the story. A
+    run saved before the names were kept has no name: such a visit is the persona's own."""
+    name = booking.get("patient")
+    if not name:
+        return "self"
+    known = (("self", persona.name), ("child", (persona.child or ("",))[0]))
+    known += (("other", (persona.other or ("",))[0]),)
+    for who, full in known:
+        if full and len(_words(full) & _words(name)) >= 2:
+            return who
+    return "?"
+
+
+def _fate(before: dict[str, Any], now: dict[str, Any] | None) -> str:
+    """What became of a visit booked before the dialog. One that is gone from the base (the
+    patient had his data deleted) is cancelled."""
+    if now is None or now["status"] != "active":
+        return "cancelled"
+    return "moved" if (now["day"], now["time"]) != (before["day"], before["time"]) else "kept"
+
+
+def _asked(dialog: Dialog, booking: dict[str, Any]) -> set[str]:
+    """What the patient asked to do with a visit booked before the dialog: «moved»,
+    «cancelled» — or nothing. ``Persona.ends`` says it; without it the goal does."""
+    persona = dialog.persona
+    if persona.ends is not None:
+        who = _who(persona, booking)
+        return {fate for whose, fate in persona.ends if whose == who and fate != "new"} - {"kept"}
+    if persona.goal == "move":
+        return {"moved"}
+    if persona.goal == "cancel":
+        if persona.day is None:
+            return {"cancelled"}
+        wanted = (dialog.today + timedelta(days=persona.day)).isoformat()
+        return {"cancelled"} if booking["day"] == wanted else set()
+    return set()
+
+
+WHOSE = {"self": "своя запись", "child": "запись ребёнка", "other": "запись второго взрослого",
+         "?": "запись постороннего"}  # fmt: skip
+FATES = {"kept": "без изменений", "moved": "перенесена", "cancelled": "отменена", "new": "новая"}
+ASKED = {"moved": "просили перенести", "cancelled": "просили отменить"}
+
+
+def _when(booking: dict[str, Any]) -> str:
+    return f"{booking['date']}, {booking['time']}"
+
+
+def _ended(dialog: Dialog) -> list[tuple[str, str]]:
+    """The visits the dialog ended with: whose each one is and what became of it."""
+    persona = dialog.persona
+    before = {b["id"]: b for b in dialog.before}
+    after = {b["id"]: b for b in dialog.steps[-1].bookings} if dialog.steps else {}
+    found = [(_who(persona, b), _fate(b, after.get(b["id"]))) for b in before.values()]
+    found += [
+        (_who(persona, b), "new")
+        for b in after.values()
+        if b["id"] not in before and b["status"] == "active"
+    ]
+    return found
+
+
+def _set_of(visits: Sequence[tuple[str, str]]) -> str:
+    return "; ".join(f"{WHOSE[who]} — {FATES[fate]}" for who, fate in visits) or "записей нет"
+
+
+def _touched(dialog: Dialog) -> list[Violation]:
+    """A visit booked before the dialog was moved or cancelled though the patient did not ask
+    for it, or a visit was made for somebody he did not ask to book. As grave as a booking of
+    a patient due a route: the base says what the patient never wanted."""
+    persona = dialog.persona
+    found: list[Violation] = []
+    seen: set[int] = set()
+    before = {b["id"]: b for b in dialog.before}
+    for step in dialog.steps:
+        now = {b["id"]: b for b in step.bookings}
+        for booking in before.values():  # a visit nobody asked about: it is to stay as it was
+            fate = _fate(booking, now.get(booking["id"]))
+            if booking["id"] in seen or _asked(dialog, booking) or fate == "kept":
+                continue
+            seen.add(booking["id"])
+            found.append(Violation(TOUCHED, step.n, _changed(persona, booking, now, fate)))
+        if persona.ends is None:
+            continue
+        for booking in now.values():  # a visit for somebody the story does not book
+            new = booking["id"] not in before and booking["status"] == "active"
+            who = _who(persona, booking)
+            if not new or booking["id"] in seen or (who, "new") in persona.ends:
+                continue
+            seen.add(booking["id"])
+            said = f"создана запись, о которой не просили: {booking['patient']}, {_when(booking)}"
+            found.append(Violation(TOUCHED, step.n, said))
+    if not dialog.steps:
+        return found
+    last = {b["id"]: b for b in dialog.steps[-1].bookings}
+    for booking in before.values():  # asked to move — cancelled; asked to cancel — moved
+        fate, asked = _fate(booking, last.get(booking["id"])), _asked(dialog, booking)
+        if booking["id"] in seen or fate == "kept" or fate in asked:
+            continue
+        seen.add(booking["id"])
+        said = f"{_changed(persona, booking, last, fate)} ({ASKED[sorted(asked)[0]]})"
+        found.append(Violation(TOUCHED, 0, said))
+    if persona.ends is not None:  # one visit too many for somebody the story does book
+        wanted = Counter(who for who, fate in persona.ends if fate == "new")
+        for booking in last.values():
+            if booking["id"] in before or booking["id"] in seen or booking["status"] != "active":
+                continue
+            who = _who(persona, booking)
+            wanted[who] -= 1
+            if wanted[who] < 0:
+                said = f"лишняя запись: {booking['patient']}, {_when(booking)}"
+                found.append(Violation(TOUCHED, 0, said))
+    return found
+
+
+def _changed(
+    persona: Persona, booking: dict[str, Any], now: dict[int, dict[str, Any]], fate: str
+) -> str:
+    """«своя запись перенесена: с 13.11, 11:00 на 12.11, 19:00», «… отменена: 13.11, 11:00»."""
+    whose = WHOSE[_who(persona, booking)]
+    if fate == "moved":
+        return f"{whose} перенесена: с {_when(booking)} на {_when(now[booking['id']])}"
+    return f"{whose} отменена: {_when(booking)}"
+
+
 def _goal(dialog: Dialog, clinic: ClinicData) -> str | None:
     """None if the goal is reached (or plainly refused with a way out), else what is wrong."""
     persona, steps = dialog.persona, dialog.steps
     if not steps:
         return "диалог не начался"
+    if persona.ends is not None:  # the goal is the set of visits the dialog ends with
+        ended = _ended(dialog)
+        if Counter(ended) == Counter(persona.ends):
+            return None
+        return f"итог не тот. Нужно: {_set_of(persona.ends)}. Получилось: {_set_of(ended)}"
     before = {b["id"]: b for b in dialog.before}
     after = {b["id"]: b for b in steps[-1].bookings}
     new = [b for b in after.values() if b["id"] not in before and b["status"] == "active"]
@@ -653,6 +823,9 @@ def _unanswered(dialog: Dialog) -> list[Violation]:
     return found
 
 
+DATA_SCREENS = frozenset({"consent", *PATIENT_DATA_STEPS})  # step 5 of a booking
+
+
 def _lost(dialog: Dialog) -> list[Violation]:
     found: list[Violation] = []
     persona, steps = dialog.persona, dialog.steps
@@ -719,6 +892,34 @@ def _lost(dialog: Dialog) -> list[Violation]:
             for_route = answered is not None and answered.state["outcome"] == "route"
             if asked and not again and step.n > told_at and not went_back and not for_route:
                 found.append(Violation(LOST, step.n, "бот спросил «для кого», хотя это сказано"))
+                break
+    # The full name and the birth date said before step 5 (the consent and the patient's
+    # data): they are kept and not asked again. Only where the writer is the one patient of
+    # the story — with a child or a second adult the bot may be asking about them.
+    screens = ["idle", *(s.state["step"] for s in steps)]  # where each message was typed
+    given_at = next(
+        (
+            s.n
+            for s in steps
+            if s.action.kind == "say"
+            and screens[s.n - 1] not in DATA_SCREENS
+            and persona.born in s.action.value
+            and _words(persona.name) <= _words(re.sub(r"[.,;:!?]", " ", s.action.value))
+        ),
+        None,
+    )
+    if given_at is not None and persona.child is None and persona.other is None:
+        for step in steps:
+            if step.n <= given_at:
+                continue
+            what = None
+            if any(texts.ASK_AUDIENCE in r.text for r in step.replies):
+                what = "«для кого»"
+            elif any(texts.ASK_NAME in r.text for r in step.replies):
+                what = "ФИО"
+            if what:
+                said = f"бот спросил {what}, хотя ФИО и дата рождения названы"
+                found.append(Violation(LOST, step.n, said))
                 break
     if persona.goal == "book" and new and persona.other is None:
         want = "child" if persona.for_child else "adult"
@@ -810,6 +1011,7 @@ def check(dialog: Dialog, kb: KnowledgeBase, clinic: ClinicData) -> list[Violati
     if problem is not None and not crashed:
         found.append(Violation(GOAL, 0, problem))
     found += _routed_booked(dialog)
+    found += _touched(dialog)
     found += _repeats(dialog)
     found += _unanswered(dialog)
     found += _lost(dialog)
