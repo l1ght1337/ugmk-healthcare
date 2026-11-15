@@ -324,6 +324,9 @@ WHO_SHOWN_UNTIL = 3  # «Запись для себя» and «Изменить»
 # The text is an age, a name, a birth date, a phone number — unless it is a command or a
 # question: «позови администратора» on the name step is not the patient's name.
 INPUT_STEPS = frozenset({"age", "name", "birth", "contact"})
+# the full name, the birth date and the phone: a name typed here is the patient's own, so
+# nobody else is read from the text — not «и мужа тоже», not «оба», not an age
+PATIENT_DATA_STEPS = frozenset({"patient", "name", "name_ok", "birth", "contact"})
 # The text goes to an administrator as it is: «отмените мою запись» there is the message.
 MESSAGE_STEPS = frozenset({"admin_reply", "visit_question", "feedback_text"})
 DATA_STEPS = INPUT_STEPS | MESSAGE_STEPS
@@ -1322,9 +1325,11 @@ class Conversation:
             found = topics.guard_scenarios(self.kb, text)
             if new := [g for g in found if g not in c.s.talk.guard_no]:
                 c.s.talk.guards = new
-        if self._named_later(c, step, text):
+        people = step not in PATIENT_DATA_STEPS  # on the steps of the data nobody is read
+        if people and self._named_later(c, step, text):
             return  # «и сына тоже запишите» in the middle of a booking: his turn is next
-        c.for_whom, c.more = find_audience(text), names_several(text)
+        if people:
+            c.for_whom, c.more = find_audience(text), names_several(text)
         if (other := after_me(text)) is not None and await self._upcoming(c):
             # «мужа после меня»: the writer is booked already
             c.for_whom, c.more, c.alone = other, False, True
@@ -1379,7 +1384,7 @@ class Conversation:
                 unclear = len(days_named(text, today)) > 1  # «на завтра и на воскресенье»
                 await self._cancel_by_text(c, wish, everything=wants_all(text), unclear=unclear)
             return
-        if await self._several(c, step, text):
+        if people and await self._several(c, step, text):
             return  # «Маша 7 лет руку ушибла, Ваня 10 лет ногу подвернул»: who is first
         if step in INPUT_STEPS:
             await self._on_input_text(c, step, text, action)

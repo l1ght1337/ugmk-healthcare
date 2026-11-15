@@ -65,6 +65,11 @@ _MINE = re.compile(
 _BOOKING_WORD = re.compile(r"\bзапи[сш]\w*")  # «надо записать», «запишите», «на запись»
 # «и сына тоже запишите», «ещё мужа запишите потом»: one more patient, not another one instead
 _ALSO = re.compile(r"\b(?:тоже|еще|также|заодно|следом|потом)\b")
+# what may stand around a first name in a request to book him: «запишите ещё Ваню на 14»
+_REQUEST_WORD = re.compile(
+    r"\b(?:запи[сш]\w*|тоже|еще|также|заодно|следом|потом|пожалуйста|надо|нужно|можно|"
+    r"и|а|бы|ли|на|в|к|\d+)\b"
+)
 _SENTENCE = re.compile(r"[.!?;\n]+")
 _CLAUSE = re.compile(r"[,:]|\s—\s|\s(?:а|и|но|потом|затем)\s")
 # An age is a number with its word: «7 лет», «3 года», «4 мес». A bare number is not one —
@@ -288,6 +293,20 @@ def shared(text: str) -> list[str]:
     return parts
 
 
+def _asked_for(clause: str) -> bool:
+    """The part names somebody a request may be about: a relative, the writer — or a first
+    name with nothing but the request around it. «Захарова Игоря Семёновича» is the full
+    name of the one named before («и мужа, Захарова Игоря Семёновича, тоже запишите»)."""
+    marker = _marker(clause)
+    if marker is None:
+        return False
+    _, audience, span, _ = marker
+    if audience is not None:
+        return True
+    around = _norm(clause[: span[0]] + " " + clause[span[1] :])
+    return not _REQUEST_WORD.sub(" ", around).strip(" ,.:—-?!")
+
+
 def asked_too(text: str) -> list[Person]:
     """Who else is asked to be booked: «и сына тоже запишите», «ещё Ваню запишите, ему 10
     лет, ногу подвернул», «и меня тоже». A sentence with a request to book, «тоже» or «ещё»
@@ -299,9 +318,10 @@ def asked_too(text: str) -> list[Person]:
         if not (_BOOKING_WORD.search(low) and _ALSO.search(low)):
             continue
         clauses = _clauses(sentence)
-        # the part with the request, or the nearest part before it that names somebody
+        # the part with the request, or the nearest part before it that names somebody; a
+        # first name next to a surname or a patronymic is a full name, not one more person
         asks = [n for n, c in enumerate(clauses) if _BOOKING_WORD.search(_norm(c))]
-        at = next((n for n in range(asks[-1], -1, -1) if _marker(clauses[n])), None)
+        at = next((n for n in range(asks[-1], -1, -1) if _asked_for(clauses[n])), None)
         if at is None:
             continue
         name, audience, span, _ = _marker(clauses[at])  # type: ignore[misc]
