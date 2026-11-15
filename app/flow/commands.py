@@ -102,6 +102,17 @@ COMMANDS: tuple[tuple[MenuAction, re.Pattern[str]], ...] = (
     # «Позови администратора», «соедините с оператором», «нужен живой человек»
     ("admin", re.compile(rf"\b{_CALL}\b.*\b{_PERSON}")),
     ("admin", re.compile(rf"^{_PERSON}$")),
+    # «передайте администратору», «да, передайте», «пусть администратор запишет»: typed, it
+    # is the button — on any step
+    ("admin", re.compile(rf"\b(?:передай|передайте|передать)\b.*\b{_PERSON}")),
+    ("admin", re.compile(r"^(?:да\s+)?(?:передай|передайте)(?:\s+пожалуйста)?$")),
+    (
+        "admin",
+        re.compile(
+            rf"\bпусть\s+{_PERSON}\s+(?:\w+\s+){{0,2}}?(?:запишет|запишут|позвонит|перезвонит|"
+            r"свяжется|решит|ответит)\b"
+        ),
+    ),
     (
         "admin",
         re.compile(

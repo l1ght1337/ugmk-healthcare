@@ -150,14 +150,16 @@ async def test_misses_command_shows_the_last_twenty_and_a_day_of_counters(
     head, _, tail = report.partition("\n\n")
     assert head.splitlines() == [
         texts.MISSES_DAY.format(count=23),
-        f"• {misses.HINT} — 15",
-        f"• {misses.PICK} — 7",  # every third «не понял» in a row is «Похоже, я Вас не понимаю…»
+        # on a step of a booking the third «не понял» in a row and every one after it is «Не
+        # могу разобрать ответ…» over the same screen (15.11.2026)
+        f"• {misses.PICK} — 20",
+        f"• {misses.HINT} — 2",
         f"• {misses.NOT_TEXT} — 1",
     ]
     rows = tail.splitlines()
     assert rows[0] == texts.MISSES_LAST.format(count=20) and len(rows) == 21
     assert rows[-1] == f"13.11 13:00 · days · {misses.NOT_TEXT}"
-    assert rows[-2] == f"13.11 13:00 · days · {misses.HINT} · «что-то непонятное 21»"
+    assert rows[-2] == f"13.11 13:00 · days · {misses.PICK} · «что-то непонятное 21»"
     assert "ну и погода" not in report and "что-то непонятное 1»" not in report
     assert len(report) < 4000  # one Telegram message
 

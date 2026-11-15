@@ -42,7 +42,7 @@ from app.db.models import (
     utcnow,
 )
 from app.db.session import Database
-from app.flow import injury_time, topics
+from app.flow import injury_time, spoken, topics
 from app.flow.actions import QUEUE_MAX, Action
 from app.flow.actions import split as split_things
 from app.flow.age import find_child_age, parse_age_months
@@ -921,7 +921,11 @@ class Conversation:
 
     def _not_stuck(self, c: Ctx, earlier: int) -> None:
         """Never three «не понял» in a row: the third time the bot says so plainly and offers
-        an administrator; then the count starts anew."""
+        an administrator; then the count starts anew.
+
+        On a step of a booking the screen stays: «Не могу разобрать ответ. Нажмите кнопку под
+        сообщением или позовите администратора» stands over it, and «Позвать администратора»
+        is among its buttons — the third time and every time after it."""
         missed = next(
             (
                 r
@@ -933,6 +937,14 @@ class Conversation:
         c.s.unclear = earlier + 1 if missed is not None else 0
         if missed is None or c.s.unclear < STUCK_AFTER:
             return
+        if self._on_booking_step(c):
+            # a screen under the line: it stays, and the count goes on — the same line the
+            # next time too. A step with no screen (a name, a date typed): the line stands
+            # in for the hint, and the count starts anew, as before
+            screen = c.turn.replies[-1] is not missed
+            self._cannot_read(c, missed)
+            c.s.unclear = c.s.unclear if screen else 0
+            return
         c.s.unclear = 0
         buttons = [b for r in c.turn.replies for row in r.buttons for b in row]
         rows = missed.buttons
@@ -940,6 +952,31 @@ class Conversation:
             rows = (*rows, (Button(texts.MENU_ADMIN, "m:admin"),))
         at = c.turn.replies.index(missed)
         c.turn.replies[at] = replace(missed, text=texts.STUCK, buttons=rows, spans=())
+
+    @staticmethod
+    def _on_booking_step(c: Ctx) -> bool:
+        """A step of a booking or of a move past «Что случилось?»: its screen has the
+        buttons that lead on."""
+        if c.s.reschedule_of is not None and c.s.step in TIME_STEPS:
+            return True
+        return c.s.wizard and c.s.step in WIZARD_STEPS and c.s.step not in START_STEPS
+
+    def _cannot_read(self, c: Ctx, hint: Reply | None = None) -> None:
+        """The screen of the step under «Не могу разобрать ответ…», with «Позвать
+        администратора» among its buttons. Nothing is taken away from the patient. ``hint``
+        — the «не понял» of this turn: the line stands in for it."""
+        replies = c.turn.replies
+        if not replies:
+            return
+        screen = replies[-1]
+        rows = screen.buttons
+        if not any(b.data == "m:admin" for row in rows for b in row):
+            rows = (*rows, (Button(texts.MENU_ADMIN, "m:admin"),))
+        line, spans = markup.render(texts.CANNOT_READ, quoted=texts.QUOTED)
+        if screen is hint:  # no screen of its own: the line, with the buttons of the hint
+            replies[:] = [replace(screen, text=line, buttons=rows, spans=spans)]
+        else:
+            replies[:] = [Reply(line, spans=spans), replace(screen, buttons=rows)]
 
     def _no_circle(self, c: Ctx, said: str | None) -> None:
         """The same answer or screen is not sent a third time in a row: one line instead —
@@ -984,6 +1021,9 @@ class Conversation:
             return
         if len(produced) > 1 and fresh(produced[0]) and is_question(said):
             return  # another question on the same step, and it has its answer
+        if self._on_booking_step(c):
+            self._cannot_read(c)  # the screen of a booking is not taken away
+            return
         line = texts.STUCK_ASK
         if self._last_route(c) is not None:
             line = f"{line}\n{texts.DO_NOT_WAIT}"
@@ -1786,8 +1826,9 @@ class Conversation:
         не на 13:30»), a question about the schedule («13:30 свободно?») or another day
         («завтра в 13:30» on today's grid) leave the text to the wish parser.
         """
-        named = typed.clock_times(text)
-        if not named or found.question is not None or typed.refuses_time(text):
+        said = spoken.digits(text)  # «тринадцать тридцать», «полвторого»
+        named = typed.clock_times(said)
+        if not named or found.question is not None or typed.refuses_time(said):
             return False
         tz = self.settings.tz
         on_screen: dict[time, set[str]] = defaultdict(set)
@@ -1798,6 +1839,11 @@ class Conversation:
                 on_screen[slots_view.local(slot, tz).time()].add(slot.id)
         wanted = {moment for moment, _ in named if moment in on_screen}
         with_colon = {moment for moment, colon in named if colon}
+        if not wanted and len(named) == 1 and named[0][0].hour < 12:
+            # «на час тридцать», «1:30» when the screen has 13:30 and no 1:30: that one
+            later = named[0][0].replace(hour=named[0][0].hour + 12)
+            if later in on_screen:
+                wanted, with_colon = {later}, {later}
         if len(wanted) != 1 or not with_colon <= wanted:
             return False  # none, «13:30 или 14:30», or a time that is not on this screen
         slots = on_screen[wanted.pop()]
@@ -5569,6 +5615,18 @@ class Conversation:
             context=context,  # type: ignore[arg-type]
             now=local.time(),
         )
+        said = spoken.digits(text)
+        if said != text and not found.wish.has_time:
+            # «на тринадцать тридцать», «в два», «полвторого»: the time said in words
+            heard = parse_wish(
+                said,
+                self.clinic.schedule.doctors,
+                local.date(),
+                context=context,  # type: ignore[arg-type]
+                now=local.time(),
+            )
+            if heard.wish.has_time:
+                found = replace(found, wish=found.wish.merge(heard.wish), pure=heard.pure)
         if not found.wish.empty:
             found.wish.noted = c.now
         return found

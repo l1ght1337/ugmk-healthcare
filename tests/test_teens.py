@@ -186,6 +186,7 @@ async def test_the_third_time_the_bot_says_so_and_offers_an_administrator(make_c
         await chat.say("ну и ну")
         assert chat.replies[0].text == texts.ASK_BIRTH_AGAIN
     await chat.say("ну и ну")
-    assert chat.replies[0].text == texts.STUCK and texts.MENU_ADMIN in chat.labels()
+    # a step of a booking (15.11.2026): «Не могу разобрать ответ…», not «Похоже, я Вас не…»
+    assert chat.replies[0].text == texts.CANNOT_READ and texts.MENU_ADMIN in chat.labels()
     await chat.say("ну и ну")  # the count starts anew
     assert chat.replies[0].text == texts.ASK_BIRTH_AGAIN

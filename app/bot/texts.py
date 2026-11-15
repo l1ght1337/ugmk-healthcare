@@ -382,6 +382,10 @@ TEEN_WAIT = "Хорошо, ждите звонка."
 STUCK = (
     "Похоже, я Вас не понимаю. Выберите, пожалуйста, вариант кнопкой — или позовите администратора."
 )
+# The third answer in a row that is not understood on a step of a booking: the same screen
+# under this line, with «Позвать администратора» among its buttons — the screen is not
+# taken away from a patient who is one press from his booking
+CANNOT_READ = "Не могу разобрать ответ. Нажмите кнопку под сообщением или позовите администратора."
 # The same answer or screen is due for the third time in a row: one line instead of it,
 # with «Передать вопрос администратору»; after a route — with DO_NOT_WAIT
 STUCK_ASK = "Похоже, я не могу ответить на этот вопрос. Передать его администратору?"

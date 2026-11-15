@@ -57,10 +57,10 @@ async def test_a_question_about_the_administrator_is_not_a_request(
         state = await session(chat)
         assert state["step"] == "consent" and state["resume"] == "identify", chat.text
         assert "Чтобы администратор мог с Вами связаться" not in chat.text
-        if n < 2:
-            assert texts.CONSENT_YES in chat.labels()
-        else:  # the same answer a third time in a row: one line that offers the administrator
-            assert [r.text for r in chat.replies] == [texts.STUCK_ASK]  # tests/test_circles.py
+        assert texts.CONSENT_YES in chat.labels()  # the screen of the step stays
+        if n == 2:  # the third time in a row on a step of a booking: said so, over the screen
+            assert chat.replies[0].text == texts.CANNOT_READ
+            assert chat.labels()[-1] == texts.MENU_ADMIN  # tests/test_simple_patient.py
     assert chat.admin == [] and await bookings(chat.conversation.db) == []
 
 

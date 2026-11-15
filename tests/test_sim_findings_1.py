@@ -140,7 +140,7 @@ async def test_the_second_unread_name_gets_another_line_and_the_administrator(ma
     assert chat.text == texts.NAME_HELP
     assert chat.labels() == [texts.MENU_ADMIN, texts.BACK, texts.MENU]
     await chat.say("милая, я не понимаю")  # the third in a row: said plainly, the way out stays
-    assert chat.text == texts.STUCK and texts.MENU_ADMIN in chat.labels()
+    assert chat.text == texts.CANNOT_READ and texts.MENU_ADMIN in chat.labels()
     await chat.say("Громова Нина Васильевна")
     assert (await session(chat))["step"] == "birth"
     await chat.press(texts.BACK)  # the name again: the count starts anew

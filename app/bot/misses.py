@@ -57,6 +57,7 @@ PHRASES: tuple[tuple[str, str], ...] = (
     (texts.PICK_BUTTON, PICK),
     (texts.SAME_STEP, PICK),
     (texts.STUCK, PICK),
+    (texts.CANNOT_READ, PICK),  # the same on a step of a booking: the screen stays
     (texts.CONSENT_HINT, PICK),
 )
 LAST = 20  # /misses lists this many lines
