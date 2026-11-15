@@ -176,6 +176,23 @@ def test_a_request_to_book_is_not_about_the_injury() -> None:
     ]
 
 
+def test_fell_with_the_son_is_about_both() -> None:
+    said = (
+        "Здравствуйте. Сегодня на катке упали с сыном. У меня болит запястье, похоже перелом. "
+        "У сына 12 лет ушиб колена. Нужно записать обоих."
+    )
+    assert people(said) == [
+        ("сын", "child", 144, "ушиб колена"),
+        ("", "self", None, "болит запястье, похоже перелом"),
+    ]
+    assert shared(said) == ["Сегодня на катке упали"]  # without «с сыном»: who it was with
+    assert shared("Вчера упали с Ваней на катке. У меня запястье болит, у Вани колено.") == [
+        "Вчера упали на катке"
+    ]
+    # «мы с мужем подвернули ногу» is what happened to each of the two, not about all
+    assert shared("Мы с мужем в походе подвернули ногу, оба.") == []
+
+
 def test_what_is_said_about_all_of_them() -> None:
     assert shared(FIRST) == TOLD  # not the greeting, not «двое детей», not «надо обоих записать»
     assert shared(KIDS) == ["дети сегодня с горки упали"]
@@ -350,6 +367,25 @@ async def test_a_wish_for_the_visit_is_not_when_it_happened(make_chat) -> None:
     await chat.say(COUPLE)
     assert chat.labels()[:2] == ["Меня", "Мужа"]
     assert (await session(chat))["shared"] == []  # «завтра утром» is the wish, kept as a wish
+
+
+async def test_what_is_said_after_the_choice_is_not_about_all(make_chat, kb: KnowledgeBase) -> None:
+    """In the live run «Самостоятельно, оплатим сами… нам с мужем обоим нужно» on the payment
+    question was kept as said about both and went to DeepSeek with the husband's complaint."""
+    fake = ByTask(route=UNCLEAR, extract=own_field)
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.say(FIRST)
+    await chat.press("Машу, 7 лет")
+    await chat.say("Не знаю, она плачет, обоих жалко, мы очень переживаем")
+    assert (await session(chat))["shared"] == TOLD
+    await chat.press("Не знаю")
+    await chat.press(chat.nearest().label)
+    await chat.press(texts.CONSENT_YES)
+    await chat.say("Воронина Мария Кирилловна, 03.03.2019")
+    await chat.contact()
+    await chat.say("Самостоятельно, оплатим сами. Только нам обоим нужно, запишите теперь Ваню")
+    assert (await session(chat))["shared"] == TOLD
 
 
 async def test_the_order_said_on_who_is_first_is_a_choice(make_chat) -> None:

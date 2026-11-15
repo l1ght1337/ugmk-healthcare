@@ -258,23 +258,30 @@ def shared(text: str) -> list[str]:
     sentences that name nobody, and the parts of a sentence before the first one named.
 
     «Мы сегодня с горки упали, двое детей. Маша, 7 лет, руку ушибла… К врачу ещё не
-    обращались» → «Мы сегодня с горки упали», «К врачу ещё не обращались».
+    обращались» → «Мы сегодня с горки упали», «К врачу ещё не обращались». «Сегодня на катке
+    упали с сыном» does not say who was hurt: it is about both, without the words «с сыном».
     """
     parts: list[str] = []
     for sentence in _SENTENCE.split(text):
         clauses = _clauses(sentence)
-        if not clauses:
-            continue
-        first = next((n for n, clause in enumerate(clauses) if _marker(clause)), None)
-        if first is None and _BOOKING_WORD.search(_norm(sentence)):
+        markers = [_marker(clause) for clause in clauses]
+        if not clauses or (not any(markers) and _BOOKING_WORD.search(_norm(sentence))):
             continue  # «хотели бы записаться на сегодня, если можно»: a request, all of it
-        before = clauses if first is None else clauses[:first]
-        kept = [clause.strip(" —-") for clause in before if not _aside(clause)]
-        kept = [clause for clause in kept if clause]
-        if first is None and len(kept) == len(clauses):
-            parts.append(sentence.strip(" —-"))  # the sentence as it was written
-        elif kept:
-            parts.append(", ".join(kept))
+        kept: list[str] = []
+        as_written = True  # nothing is cut out of the sentence
+        for clause, marker in zip(clauses, markers, strict=True):
+            if marker is not None:
+                as_written = False
+                _, _, span, together = marker
+                if not together or "мы" in together.lower():
+                    break  # from here on the sentence is about one of them
+                clause = clause[: span[0]] + " " + clause[span[1] :]
+            if _aside(clause):
+                as_written = False
+            elif said := " ".join(clause.split()).strip(" —-"):
+                kept.append(said)
+        if kept:
+            parts.append(sentence.strip(" —-") if as_written else ", ".join(kept))
     return parts
 
 

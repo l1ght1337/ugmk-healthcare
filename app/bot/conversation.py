@@ -3104,9 +3104,10 @@ class Conversation:
         if c.s.people:
             merge(c.s.people, named)  # «сыну 12 лет»: what is new about those who wait
         # nobody is chosen yet: what the messages say about all of them is kept for each
-        waits = asked or (c.s.more and c.s.person is None and step in START_STEPS)
+        before = c.s.person is None and (asked or step in SEVERAL_STEPS)
+        waits = asked or (c.s.more and step in START_STEPS)
         told = bool(named) or len(text.split()) > FEW_WORDS  # not «да всё равно»
-        if c.more or len(named) > 1 or (waits and told):
+        if before and (c.more or len(named) > 1 or (waits and told)):
             today = self._local(c.now)
             doctors = self.clinic.schedule.doctors
             for part in shared(text):
