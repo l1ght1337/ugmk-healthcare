@@ -866,3 +866,59 @@ def test_a_patient_with_an_old_injury_is_not_to_be_booked(env: sim.Env) -> None:
     ]
     asked = ends_with("certificate", [], [])
     assert sim._goal(asked, env.clinic) is None and touched(asked) == []
+
+
+# --- the goal by the base; what repeats by design (the tidying after run 8) ----------------------
+
+CARD = Shown("✅ Запись в травмпункт\nГригорий Аркадьевич записан на приём…", ("Перенести",))
+
+
+def test_a_patient_to_be_booked_reaches_the_goal_only_with_a_visit(env: sim.Env) -> None:
+    """Run 8, text_only: the dialog ended with «Запись не оформлена. Я передал обращение…» —
+    asked for by the patient himself — and was counted as a goal reached."""
+    persona = BY_KEY["text_only"]
+    passed = "Запись не оформлена.\n\nЯ передал обращение № 1 администратору — он свяжется с Вами."
+    asked = Shown(passed, ("Продолжить запись", "Меню"))
+    stuck = step(1, Action("say", "тринадцать тридцать"), Shown(texts.HINT_TIME), wizard=True)
+    handed = Step(2, Action("say", "позовите администратора"), [asked], state(), [], 1)
+    dialog = made(persona, stuck, handed)
+    assert sim._goal(dialog, env.clinic) == "записи в базе нет, и сценарий в ней не отказывал"
+    # «У меня нет этой информации» to a side question is not a refusal to book either
+    side = step(1, Action("say", "а парковка есть?"), Shown(texts.INFO_UNKNOWN, ("Меню",)))
+    assert sim._goal(made(persona, side), env.clinic) is not None
+    booked = Step(2, Action("press", "13:30"), [CARD], state(), [visit(1, persona.name)], 0)
+    assert sim._goal(made(persona, stuck, booked), env.clinic) is None
+
+
+def test_what_the_scenario_itself_refuses_is_a_goal_reached(env: sim.Env) -> None:
+    persona = BY_KEY["text_only"]
+    by_script = Step(1, Action("press", "Для себя"),
+                     [Shown("С такой ситуацией взрослых записывает оператор…", ("Меню",))],
+                     state(outcome="handoff"), [], 1)  # fmt: skip
+    assert sim._goal(made(persona, by_script), env.clinic) is None
+    line = texts.TEEN.format(age="16 лет", passed=texts.TEEN_PASSED)
+    teen = Shown(line, ("Меню",))
+    minor = Step(1, Action("say", "02.02.2010"), [teen], state(), [], 1)
+    assert sim._goal(made(BY_KEY["teen16"], minor), env.clinic) is None
+    old = Shown(texts.OLD_INJURY.format(days=7), ("Передать вопрос администратору",))
+    assert (
+        sim._goal(made(persona, step(1, Action("press", "Я предполагаю"), old)), env.clinic) is None
+    )
+
+
+def test_lines_that_repeat_by_design_are_not_the_same_screen_twice(env: sim.Env) -> None:
+    municipal = env.kb.facilities["municipal_trauma_center"].no_address
+    lines = (
+        texts.URGENCY,
+        f"{municipal}\n\nОбратиться нужно:\n📍 Любой муниципальный травмпункт",
+        f"{texts.MY_ONE}\n13 ноября (пятница) в 11:00 — Лукина Ж. В.",
+    )
+    for line in lines:
+        shown = Shown(line, ("Меню",))
+        twice = made(BY_KEY["questions"], step(1, Action("say", "а?"), shown),
+                     step(2, Action("say", "а всё-таки?"), shown))  # fmt: skip
+        assert sim.REPEAT not in rules(twice, env), line
+    other = Shown("Выберите, пожалуйста, вариант кнопкой.", ("Меню",))
+    twice = made(BY_KEY["questions"], step(1, Action("say", "а?"), other),
+                 step(2, Action("say", "а всё-таки?"), other))  # fmt: skip
+    assert sim.REPEAT in rules(twice, env)

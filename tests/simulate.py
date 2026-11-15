@@ -532,6 +532,20 @@ REFUSALS = (
     texts.DANGER_OTHER,
 )
 EXPLAINED = ("не дежурит", "не ведёт", "свободного времени", "не открыта", "Такого врача")
+# What a scenario or a rule of the clinic says instead of a booking: a patient who is to be
+# booked has reached his goal without a visit only after one of these — not after «У меня нет
+# этой информации» to a side question, and not after a request to the administrators he made
+# himself («Запись не оформлена»)
+BY_SCRIPT = (
+    texts.NO_SLOTS,
+    texts.DANGER_FIRST,
+    texts.DANGER_NO_BOOKING,
+    texts.DANGER_OTHER,
+    texts.TEEN_AGAIN,
+    "Правила самостоятельной записи с 15 до 18 лет",  # texts.TEEN: 15–17 for himself
+    texts.OLD_INJURY.split("{")[0],  # «В травмпункте принимаем травмы рук и ног сроком…»
+    texts.NO_ROUTE_DATA,
+)
 WISH_BUTTONS = (
     texts.WISH_CLEAR,
     texts.OTHER_DAY,
@@ -734,6 +748,18 @@ def _goal(dialog: Dialog, clinic: ClinicData) -> str | None:
     if persona.goal in ("book", "unknown"):
         if persona.route:  # only the route counts, whatever the patient says about his goal
             return None if refused and way_on else "маршрута с выходом нет"
+        if persona.goal == "book":
+            # by the base, not by what the patient says: a visit — or what the scenario
+            # itself said instead of one (a route, the adults' call centre, an ambulance)
+            by_script = any(
+                s.state["outcome"] in ("route", "handoff", "emergency")
+                or emergency in "\n".join(r.text for r in s.replies)
+                or any(mark in r.text for r in s.replies for mark in BY_SCRIPT)
+                for s in steps
+            )
+            if new or (by_script and way_on):
+                return None
+            return "записи в базе нет, и сценарий в ней не отказывал"
         if new or (refused and way_on):
             return None
         return "записи нет, и понятного отказа с выходом тоже нет"
@@ -885,13 +911,17 @@ def _circles(dialog: Dialog, emergency: str) -> list[Violation]:
     return found
 
 
-def _repeats(dialog: Dialog) -> list[Violation]:
+def _repeats(dialog: Dialog, by_design: tuple[str, ...] = ()) -> list[Violation]:
+    """The same screen twice in a row with no new line. ``by_design`` — how the lines begin
+    that are said again on purpose: the template about urgency, «Адресов… нет», «Ваша
+    запись»."""
     found = []
     last = dialog.opening[-1] if dialog.opening else None
     for step in dialog.steps:
         if not step.replies:
             continue
-        if len(step.replies) == 1 and last is not None and step.replies[0] == last:
+        same = len(step.replies) == 1 and last is not None and step.replies[0] == last
+        if same and not (by_design and last.text.startswith(by_design)):
             found.append(Violation(REPEAT, step.n, _cut(last.text, 120)))
         last = step.replies[-1]
     return found
@@ -1129,7 +1159,8 @@ def check(dialog: Dialog, kb: KnowledgeBase, clinic: ClinicData) -> list[Violati
     found += _touched(dialog)
     found += _invites(dialog, fixed_phrases(kb))
     found += _late_route(dialog, kb, clinic)
-    found += _repeats(dialog)
+    no_address = tuple(f.no_address for f in kb.facilities.values() if f.no_address)
+    found += _repeats(dialog, (texts.URGENCY.split(".")[0], texts.MY_ONE, *no_address))
     found += _circles(dialog, clinic.clinic.emergency.reply)
     found += _unanswered(dialog)
     found += _lost(dialog)
