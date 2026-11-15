@@ -274,12 +274,21 @@ class InjuryTime(_Data):
         return self
 
 
+class AfterRoute(_Data):
+    """Words of the questions asked after a route: our trauma centre is not spoken of then."""
+
+    taken: tuple[str, ...] = ()  # «вы меня запишете?», «к вам можно?» — «Нет, …» and the route
+    there: tuple[str, ...] = ()  # about the place of the route: «это далеко?», «что брать?»
+    address: tuple[str, ...] = ()  # «куда конкретно?» of a route that has no address
+
+
 class ClinicFlags(_Data):
     rabies_vaccine_available: bool
     control_visit_after_days: int = Field(gt=0, le=60)
     unfinished_booking: UnfinishedBooking
     # injuries the scripts say nothing about: «в моих данных нет», not a scenario by guess
     no_route_words: tuple[str, ...] = ()
+    after_route: AfterRoute = AfterRoute()
     injury_time: InjuryTime
     emergency: Emergency
     crisis: Crisis

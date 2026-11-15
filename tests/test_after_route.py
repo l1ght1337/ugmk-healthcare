@@ -35,6 +35,9 @@ from tests.test_sim_findings_2 import session
 AIDS = "📍 Центр борьбы со СПИДом, ул. Ясная, 46"
 ODKB = "📍 Областная детская клиническая больница № 1, ул. Серафимы Дерябиной, 32"
 NOT_HERE = f"{texts.NOT_BOOKED_HERE}\n{AIDS}\n\n{texts.QUESTIONS_TO_ADMIN}"
+# «меня примут?», «вы меня запишете?»: a yes-or-no question gets «Нет» first (15.11.2026)
+NO_HERE = f"{texts.NOT_BOOKED_NO}\n{AIDS}\n\n{texts.QUESTIONS_TO_ADMIN}"
+ABOUT_US = f"{texts.ROUTE_GO}\n{AIDS}\n\n{texts.ADMIN_WILL_ANSWER}"
 NO_WAIT = (
     f"Ждать звонка администратора для этого не нужно.\nОбратиться нужно:\n{AIDS}\n\n"
     "Как там принимают, у меня данных нет — уточните в самом учреждении.\n"
@@ -76,8 +79,11 @@ async def infant_route(chat) -> None:
 
 
 async def to_cut(chat) -> None:
-    """«Записаться» → «Рана, ожог, укус» → «Порез, рана»."""
+    """«Записаться» → «Другая» (after a route it is asked first) → «Рана, ожог, укус» →
+    «Порез, рана»."""
     await chat.press(texts.MENU_BOOK)
+    if texts.OTHER_INJURY in chat.labels():
+        await chat.press(texts.OTHER_INJURY)
     assert texts.ASK_COMPLAINT in chat.text  # step 1 opens: the patient started it himself
     await chat.press("Рана, ожог, укус")
     await chat.press("Порез, рана")
@@ -104,7 +110,9 @@ async def test_a_question_after_the_route_gets_the_route_not_step_one(
     chat = make_chat(assistant=fake.assistant(kb))
     await needle_route(chat)
     await chat.say(said)
-    assert chat.replies[-1].text == NOT_HERE and chat.labels() == ASK_ADMIN
+    asked_to_be_taken = reading != MEDICAL  # «меня примут?»: «Нет, …» is its answer
+    assert chat.replies[-1].text == (NO_HERE if asked_to_be_taken else NOT_HERE)
+    assert chat.labels() == ASK_ADMIN
     for wrong in ("Шаг 1 из 5", "Шаг 2 из 5", texts.MENU_BOOK, "Записать Вас?"):
         assert wrong not in chat.text and wrong not in chat.labels()
     assert (await session(chat))["step"] == "offer_admin"
@@ -171,9 +179,9 @@ async def test_the_route_is_remembered_through_a_question_in_between(
     chat = make_chat(assistant=fake.assistant(kb))
     await needle_route(chat)
     await chat.say("а вы круглосуточно работаете?")
-    assert chat.replies[0].text == "Круглосуточно."
+    assert chat.replies[0].text == ABOUT_US  # not our hours: the route and the administrator
     await chat.say("А в травмпункт меня всё-таки примут?")
-    assert chat.replies[-1].text == NOT_HERE
+    assert chat.replies[-1].text == NO_HERE
 
 
 # --- a booking started after the route ----------------------------------------------------
@@ -182,10 +190,10 @@ async def test_the_route_is_remembered_through_a_question_in_between(
 async def test_a_booking_after_the_route_is_asked_same_or_other(make_chat) -> None:
     chat = make_chat()
     await needle_route(chat)
-    await to_cut(chat)
+    await chat.press(texts.MENU_BOOK)  # asked before step 1 (15.11.2026), not after the topic
     screen = chat.replies[-1]
     assert screen.text.endswith(texts.SAME_OR_OTHER) and "Шаг 1 из 5" in screen.text
-    assert chat.labels() == [texts.SAME_INJURY, texts.OTHER_INJURY, texts.BACK, texts.MENU]
+    assert chat.labels() == [texts.SAME_INJURY, texts.OTHER_INJURY, texts.MENU]
     assert (await session(chat))["step"] == "same"
     await chat.press(texts.SAME_INJURY)
     assert chat.replies[-1].text == NOT_HERE and chat.labels() == ASK_ADMIN
@@ -195,8 +203,7 @@ async def test_a_booking_after_the_route_is_asked_same_or_other(make_chat) -> No
 async def test_another_injury_is_booked_and_the_question_is_not_asked_twice(make_chat) -> None:
     chat = make_chat()
     await needle_route(chat)
-    await to_cut(chat)
-    await chat.press(texts.OTHER_INJURY)
+    await to_cut(chat)  # «Другая» is said on the way
     assert texts.ASK_AUDIENCE in chat.text and texts.SAME_OR_OTHER not in chat.text
     await chat.press(texts.MENU)
     await to_cut(chat)  # the same conversation: the answer was «другая»
@@ -206,10 +213,10 @@ async def test_another_injury_is_booked_and_the_question_is_not_asked_twice(make
 async def test_the_same_injury_is_asked_about_again_on_the_next_try(make_chat) -> None:
     chat = make_chat()
     await needle_route(chat)
-    await to_cut(chat)
+    await chat.press(texts.MENU_BOOK)
     await chat.press(texts.SAME_INJURY)
     await chat.press(texts.MENU_HOME)
-    await to_cut(chat)
+    await chat.press(texts.MENU_BOOK)
     assert chat.replies[-1].text.endswith(texts.SAME_OR_OTHER)
 
 
@@ -217,10 +224,10 @@ async def test_the_same_injury_is_asked_about_again_on_the_next_try(make_chat) -
 async def test_the_answer_may_be_typed(make_chat, typed: str) -> None:
     chat = make_chat()
     await needle_route(chat)
-    await to_cut(chat)
+    await chat.press(texts.MENU_BOOK)
     await chat.say(typed)
     if "друг" in typed:
-        assert texts.ASK_AUDIENCE in chat.text
+        assert texts.ASK_COMPLAINT in chat.text  # another injury: step 1
     else:
         assert chat.replies[-1].text == NOT_HERE
 
@@ -373,14 +380,16 @@ async def test_how_to_get_there_is_about_the_routes_place(make_chat, kb: Knowled
     assert "Шейнкмана" not in chat.text and fake.requests == []
 
 
-async def test_a_question_about_our_centre_is_answered_as_before(
+async def test_a_question_about_our_centre_is_not_answered_about_it(
     make_chat, kb: KnowledgeBase
 ) -> None:
+    """Until 15.11 the reference answered «Круглосуточно.» here; a patient sent elsewhere
+    read it as «come to us» (tests/test_route_not_here.py)."""
     fake = FakeDeepSeek({"type": "clinic_question"}, {"found": True, "answer": "Круглосуточно."})
     chat = make_chat(assistant=fake.assistant(kb))
     await needle_route(chat)
     await chat.say("а вы сами круглосуточно работаете?")
-    assert chat.replies[0].text == "Круглосуточно."
+    assert chat.replies[0].text == ABOUT_US
 
 
 # --- DeepSeek's answer does not advise ----------------------------------------------------
@@ -496,19 +505,21 @@ async def test_can_i_book_here_after_the_route_is_the_route(
     chat = make_chat(assistant=fake.assistant(kb))
     await needle_route(chat)
     if started:
-        await chat.press(texts.MENU_BOOK)  # step 1 is open: the question is still a question
+        await chat.press(texts.MENU_BOOK)  # «та же или другая?»: the question is a question
     said = []
     for text in CAN_I_BOOK[:3]:
         await chat.say(text)
         said.append(chat.replies[-1].text)
         assert AIDS in chat.text and texts.SAME_STEP not in chat.text
         assert "Шаг 1 из 5" not in chat.text and texts.STUCK not in chat.text
-    assert said[0] == NOT_HERE and all(a != b for a, b in pairwise(said))
+    assert said[0] == NO_HERE and all(a != b for a, b in pairwise(said))
     assert fake.requests == []
 
 
-async def test_an_order_to_book_after_the_route_opens_step_one(make_chat) -> None:
+async def test_an_order_to_book_after_the_route_asks_same_or_other(make_chat) -> None:
     chat = make_chat()
     await needle_route(chat)
     await chat.say("запишите меня на сегодня")
-    assert texts.ASK_COMPLAINT in chat.text  # the topic will be asked «та же или другая?»
+    assert chat.replies[-1].text.endswith(texts.SAME_OR_OTHER)  # before step 1 (15.11.2026)
+    await chat.press(texts.OTHER_INJURY)
+    assert texts.ASK_COMPLAINT in chat.text

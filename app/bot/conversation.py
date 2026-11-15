@@ -52,6 +52,7 @@ from app.flow.commands import (
     after_me,
     asks_about_there,
     asks_about_visit,
+    asks_address,
     asks_advice,
     asks_to_be_taken,
     asks_urgency,
@@ -173,7 +174,6 @@ TOPIC_DEPTH = 3  # how many topic menus one typed word may go through
 SAME_COMPLAINT = timedelta(minutes=30)  # the same complaint this soon is not a new one
 TOLD_KEPT = 5  # messages of a complaint kept for the questions of its scenario
 # «так вы нас запишете или нет?», «примете?» after a route: whether the trauma centre takes
-_ASKS_TAKEN = re.compile(r"\b(?:запи[сш]\w+|прим(?:ете|ут|ешь)|принима\w+)\b")
 TALK_IDLE = timedelta(hours=6)  # a silence this long starts a new conversation (Talk)
 WELCOME_EVERY = timedelta(days=1)  # the welcome animation: not more often for one user
 FEW_WORDS = 3  # «да, передайте», «для сына»: a longer message says something more
@@ -2053,6 +2053,19 @@ class Conversation:
             done = self._route_of(c.s.talk.answered)
         return done if done is not None and done.places else None
 
+    def _route_now(self, c: Ctx, text: str = "") -> Done | None:
+        """The route the talk is about — of section 5, or the one a booking scenario gave by
+        the answers. While it holds, nothing is said about our trauma centre: its address,
+        its hours, its documents, «принимаем», «записаться можно в этом чате» would be read
+        as «come here». It ends with «Другая», with a message about another person, with a
+        new conversation."""
+        talk = c.s.talk
+        routed = talk.routed or talk.answered
+        if routed is None or talk.other or self._someone_else(c, text, routed):
+            return None
+        done = self._route_of(routed)
+        return done if done is not None and done.places else None
+
     def _route_of(self, routed: Routed) -> Done | None:
         d = routed.dialog
         if d.scenario_id is None or d.outcome_id is None:
@@ -2066,16 +2079,19 @@ class Conversation:
         )
         return Done(scenario, d.outcome_id, outcome, places)
 
-    def _someone_else(self, c: Ctx, text: str) -> bool:
+    def _someone_else(self, c: Ctx, text: str, routed: Routed | None = None) -> bool:
         """The message is about another patient than the one the route was given for."""
-        routed = c.s.talk.routed
-        if routed is None or c.for_whom is None:
+        routed = routed or c.s.talk.routed
+        who = c.for_whom
+        if who is None and len(named := spoken_for(text)) == 1:
+            who = named[0].audience  # «а мужа вы примете? он руку ушиб»
+        if routed is None or who is None:
             return False
         child = routed.dialog.audience == "child" or INFANT_SCENARIO in routed.dialog.trail
         if child:
             age = find_child_age(text)
-            return c.for_whom != "child" or (age is not None and age >= INFANT_UNDER_MONTHS)
-        return c.for_whom == "child"
+            return who != "child" or (age is not None and age >= INFANT_UNDER_MONTHS)
+        return who == "child"
 
     async def _route_line(self, c: Ctx, done: Done, key: str, text: str) -> None:
         """One of the answers after a route; the same one is not said twice in a row.
@@ -2083,17 +2099,28 @@ class Conversation:
         «not_here» — «С этим в травмпункт не записываем. Обратиться нужно: …»; «go» — where
         to go and that the bot does not know how they receive there, with 103 / 112;
         «no_wait» — the same after «Ждать звонка администратора для этого не нужно»;
-        «there» — «Как там принимают, у меня данных нет…» with the places.
+        «there» — «Как там принимают, у меня данных нет…» with the places; «no» — «Нет, с
+        этим в травмпункт не записываем…», the answer to «вы меня запишете?»; «admin» — the
+        route and «На этот вопрос ответит администратор» instead of an answer about our
+        trauma centre; «no_address» — a route that is no one address: the bot has none.
         """
         order = {"not_here": "go", "go": "not_here", "no_wait": "not_here", "there": "go"}
+        order["no"] = "go"  # «так запишете или нет?» once more: where to go, not «Нет» again
         if c.s.talk.line == key:
-            key = order[key]
+            key = order.get(key, key)
         c.line = key
         places = "\n".join(render.place_line(p, self._city()) for p in done.places)
         handoff = await self._open_handoff(c)
         tail = f"{texts.ROUTE_THERE} {render.emergency_message(self.clinic)}"
         if key == "not_here":
             said = f"{texts.NOT_BOOKED_HERE}\n{places}" if places else done.outcome.say[0]
+        elif key == "no":
+            said = f"{texts.NOT_BOOKED_NO}\n{places}"
+        elif key == "admin":
+            said = f"{texts.ROUTE_GO}\n{places}\n\n{texts.ADMIN_WILL_ANSWER}"
+        elif key == "no_address":
+            none = next(p.facility.no_address for p in done.places if p.facility.no_address)
+            said = f"{none}\n\n{texts.ROUTE_GO}\n{places}"
         elif key == "there":
             said = f"{texts.ROUTE_THERE}\n{places}"
         elif key == "no_wait":
@@ -2103,16 +2130,28 @@ class Conversation:
         said = markup.first_sentence(said)  # the bold line: what is read first
         self._reset(c)
         if handoff is not None:  # the request is with the administrators: nothing is added
-            if key == "not_here":
+            if key in ("not_here", "no"):
                 said = f"{said}\n\n{self._already(c, handoff)}"
             c.say(said, self._main_menu(c))
             return
         c.s.step = "offer_admin"
         c.s.handoff_reason = done.outcome.handoff_reason or texts.QUESTION_REASON
         c.s.handoff_context = text
-        if key == "not_here":
+        if key in ("not_here", "no"):
             said = f"{said}\n\n{texts.QUESTIONS_TO_ADMIN}"
         c.say(said, self._ask_admin_buttons())
+
+    async def _not_about_us(self, c: Ctx, text: str) -> bool:
+        """An answer about our trauma centre is due — from the reference, from the schedule —
+        while the talk is about an injury a route was given for: it is not said. The route
+        is, and that the question is the administrator's."""
+        if c.s.wizard and c.s.step in WIZARD_STEPS:
+            return False  # a booking the patient began himself: the questions are about it
+        done = self._route_now(c, text)
+        if done is None:
+            return False
+        await self._route_line(c, done, "admin", text)
+        return True
 
     async def _urgency(self, c: Ctx, step: str, text: str) -> bool:
         """«Скорую вызывать?», «это срочно?»: the template of the code, wherever it is asked
@@ -2145,20 +2184,49 @@ class Conversation:
         about the place of the route, not about the trauma centre: the bot has no data on
         how they receive there.
         """
-        if step not in ("idle", "offer_admin", *START_STEPS) or c.s.reschedule_of is not None:
+        steps = ("idle", "offer_admin", "same", *START_STEPS)
+        if step not in steps or c.s.reschedule_of is not None:
             return False
-        done = self._routed(c)
-        if done is None or not done.places or self._someone_else(c, text):
+        done = self._route_now(c, text)
+        if done is None:
             return False
         if wants_handoff(text) or find_command(text) == "admin":
             return False  # «передайте вопрос администратору»: a request, not a question
-        # a question about the hospital of the route is about it, whatever else the message
-        # says («…просто приехать? Голова побаливает»): the route and that the bot has no
-        # data on how they receive there — not «не в травмпункт», not «нет информации»
+        if c.s.talk.routed is None and asks_when_admin(text):
+            return False  # «когда позвонит администратор? ждать или нет?»: his hours
+        words = self.clinic.clinic.after_route
+        taken = asks_to_be_taken(text, words.taken)
+        if step == "same":
+            # «Это та же травма или другая?» is on the screen. «Та же, конечно. Но … меня
+            # запишут или нет?» answers it and asks at once; «другая» goes on to the booking;
+            # a question that names no injury is about the one of the route, as before
+            answer = same_or_other(text)
+            if answer == "other" or (answer is None and self._injury_in(text) is not None):
+                return False
+            if answer == "same":
+                c.s.talk.same = True
+                await self._route_line(c, done, "no" if taken else "not_here", text)
+                return True
+        # a question about the place of the route is about it, however the place is named
+        # and whatever else the message says («…просто приехать? Голова побаливает»): the
+        # route and that the bot has no data on how they receive there — not «не в
+        # травмпункт», not «нет информации», not the address of our trauma centre
         named = [f"{p.facility.name}, {p.facility.address or ''}" for p in done.places]
-        there = is_question(text) and asks_about_there(text, named)
-        if not there and self._injury_named(c, text):
-            return False  # «а с вывихом пальца можно записаться?»: the same one or another
+        there = is_question(text) and asks_about_there(text, named, words.there)
+        # «Любой муниципальный травмпункт»: «куда конкретно ехать?», «назови адрес»
+        exact = any(p.facility.no_address for p in done.places) and (
+            asks_where_to_go(text) or asks_address(text, words.address)
+        )
+        if not (there or exact):
+            if self._injury_named(c, text):
+                return False  # «а с вывихом пальца можно записаться?»: the same or another
+            if c.s.talk.routed is None and self._injury_in(text) is not None:
+                # a route of a booking scenario depends on the answers: «а с ожогом руки
+                # примете?» is read as a complaint, with what it says
+                return False
+        if exact:
+            await self._route_line(c, done, "no_address", text)
+            return True
         if asks_where_to_go(text):
             waits = mentions_call(text) or await self._open_handoff(c) is not None
             await self._route_line(c, done, "no_wait" if waits else "go", text)
@@ -2166,8 +2234,8 @@ class Conversation:
         if there:
             await self._route_line(c, done, "there", text)
             return True
-        if asks_to_be_taken(text):  # «а тут что, нельзя записаться?»: a question, not an order
-            await self._route_line(c, done, "not_here", text)
+        if taken:  # «вы меня запишете?», «а тут что, нельзя записаться?»: «Нет, …»
+            await self._route_line(c, done, "no", text)
             return True
         return False
 
@@ -2341,6 +2409,9 @@ class Conversation:
             await self._route_line(c, done, "not_here", label)
             return
         c.s.talk.other = True
+        if scenario is None and not (c.s.area or c.s.hint):
+            self._start_booking(c, self._wish(c))  # «Записаться» was pressed: step 1 now
+            return
         if scenario is None:  # known by the word lists: its scenario, or the topics
             await self._by_words(c, c.s.area, list(c.s.hint))
             return
@@ -2513,6 +2584,8 @@ class Conversation:
         only the answer to the question is said, the step goes on by itself, and no other
         screen is opened.
         """
+        if c.s.step == "same" and self._route_now(c, text) is not None:
+            return False  # «та же или другая?» is to be answered first: nothing about us
         known = await self._known(c)
         if reading is None:
             reading = await read_text(self._llm(c), text, known)
@@ -2682,7 +2755,7 @@ class Conversation:
         if await self._after_route(c, text, reading):
             return  # the injury a route was given for: the route once more, not step 1
         d = c.s.dialog
-        taken = "?" in text and _ASKS_TAKEN.search(normalize(text)) is not None
+        taken = asks_to_be_taken(text, self.clinic.clinic.after_route.taken)
         another = any(sid not in d.trail for sid in topics.guess_candidates(text))
         if taken and not another and d.scenario_id is not None:
             # «так вы нас запишете или в приёмный покой ехать?», «у неё лицо красное, вы нас
@@ -2743,7 +2816,8 @@ class Conversation:
         elif reading.kind == "menu_action" and reading.action in COMMAND_ACTIONS:
             await self._command(c, reading.action, self._wish(c))
         elif reading.kind == "schedule_question":  # a wording the word list did not catch
-            await self._answer_schedule(c, self._read_wish(c, text), text)
+            if not await self._not_about_us(c, text):  # no free time of ours after a route
+                await self._answer_schedule(c, self._read_wish(c, text), text)
         elif at_start and injury is not None:
             # DeepSeek saw only the question, the words name the injury: the booking goes on
             await self._by_words(c, injury[0] or c.s.area, injury[1], advice=True)
@@ -2753,6 +2827,10 @@ class Conversation:
             # not a complaint for the trauma centre: said so, the booking and the wish stay
             c.say(texts.NOT_OUR_PROFILE if reading.kind == "other_medical" else texts.OFFTOPIC)
             await self._render_screen(c)
+        elif reading.kind == "medical_question" and (done := self._route_now(c, text)):
+            # after a route: no advice — and the route, not «Записаться в травмпункт»
+            c.say(texts.MEDICAL_ASIDE)
+            await self._route_line(c, done, "not_here", text)
         elif reading.kind == "medical_question":  # no advice and no diagnosis (rule 1)
             self._reset(c)
             data = "m:book"
@@ -2778,6 +2856,8 @@ class Conversation:
         elif reading.kind == "clinic_question":  # «У меня нет этой информации» only here
             await self._answer_question(c, text)
         elif reading.kind == "other_medical":
+            if await self._not_about_us(c, text):
+                return  # about the injury of the route: not «с этим вопросом не в травмпункт»
             self._reset(c)
             c.say(texts.NOT_OUR_PROFILE, self._main_menu(c))
         else:  # offtopic: the request is not carried out
@@ -5358,12 +5438,18 @@ class Conversation:
         return found
 
     def _start_booking(self, c: Ctx, wish: Wish | None = None) -> None:
-        """«Записаться»: the wizard from «Что случилось?»; the wish waits for step 4."""
+        """«Записаться»: the wizard from «Что случилось?»; the wish waits for step 4. After
+        a route of section 5 it begins with «Это та же травма или другая?»: the same one is
+        not asked about from step 1 and sent to the same place again."""
+        asks = self._routed(c) is not None and not self._someone_else(c, c.text or "")
         self._reset(c)
         c.s.wizard = True
         c.s.wish = None if wish is None or wish.empty else wish
         c.s.for_whom, c.s.who_kept = self._for_whom(c)  # type: ignore[assignment]
-        self._complaint_screen(c)
+        if asks:
+            self._same_screen(c)
+        else:
+            self._complaint_screen(c)
 
     async def _on_wish_text(self, c: Ctx, found: Parsed) -> bool:
         """A wish or a question about the schedule in a text. True — the text is dealt with.
@@ -5609,6 +5695,8 @@ class Conversation:
 
     async def _answer_question(self, c: Ctx, text: str) -> None:
         """A question about the trauma centre, from kb/info; an administrator only by button."""
+        if await self._not_about_us(c, text):
+            return  # after a route: the route and the administrator, not our address or hours
         known = await self._known(c)
         reading = await _answered(self._llm(c), text, known, on_partial=c.draft)
         self._reset(c)

@@ -360,7 +360,8 @@ async def test_the_route_and_a_booking_after_it_is_a_violation_too(env: sim.Env)
         ("press", "Рана, ожог, укус"),
         ("press", "Укол чужой иглой"),
     )
-    other = (BOOK_BY_BUTTONS[0], BOOK_BY_BUTTONS[1], BOOK_BY_BUTTONS[2], ("press", "Другая"))
+    # after a route «Записаться» begins with «та же или другая?»
+    other = (BOOK_BY_BUTTONS[0], ("press", "Другая"), BOOK_BY_BUTTONS[1], BOOK_BY_BUTTONS[2])
     patient = ScriptedPatient(*route, *other, *BOOK_BY_BUTTONS[3:])
     dialog = await play(BY_KEY["needle"], patient, env)
     assert rules(dialog, env) == {sim.ROUTED_BOOKED}

@@ -240,15 +240,20 @@ async def test_the_same_complaint_on_the_offer_does_not_start_a_booking(
     fake = FakeDeepSeek(unclear, LIGAMENT)
     chat = make_chat(assistant=fake.assistant(kb))
     await to_offer(chat)
-    for said in (
-        "Ладно, а по какому из этих адресов ближе к центру? Нога болит сильно",
-        "Да я уже понял, что вы не принимаете. Мне бы понять, куда ехать с ногой",
-    ):
-        await chat.say(said)
-        line, offer = chat.replies
-        assert line.text == texts.ADMIN_WILL_ANSWER and offer.text == texts.OFFER_HANDOFF
-        state = await session(chat)
-        assert state["step"] == "offer_admin" and said in state["handoff_context"]
+    said = "Ладно, а по какому из этих адресов ближе к центру? Нога болит сильно"
+    await chat.say(said)
+    line, offer = chat.replies
+    assert line.text == texts.ADMIN_WILL_ANSWER and offer.text == texts.OFFER_HANDOFF
+    state = await session(chat)
+    assert state["step"] == "offer_admin" and said in state["handoff_context"]
+    # «куда ехать» after a route — of a booking scenario too (15.11.2026) — is the route
+    said = "Да я уже понял, что вы не принимаете. Мне бы понять, куда ехать с ногой"
+    await chat.say(said)
+    (where,) = chat.replies
+    assert where.text.startswith(texts.ROUTE_GO) and "Волгоградская, 189" in where.text
+    assert "Шаг 1 из 5" not in where.text
+    state = await session(chat)
+    assert state["step"] == "offer_admin" and said in state["handoff_context"]
 
 
 async def test_another_complaint_on_the_offer_is_a_new_booking(make_chat, kb) -> None:

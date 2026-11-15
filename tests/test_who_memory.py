@@ -63,8 +63,10 @@ async def test_said_before_a_route(make_chat, kb: KnowledgeBase) -> None:
     await chat.start()
     await chat.say("я ударился головой о полку, тошнит")
     assert "Старых Большевиков" in chat.text  # the route for an adult: not asked «для кого»
-    await to_dislocation(chat)
-    await chat.press(texts.OTHER_INJURY)  # after a route: «та же травма или другая?»
+    await chat.press(texts.MENU_BOOK)
+    await chat.press(texts.OTHER_INJURY)  # after a route: «та же травма или другая?» first
+    for label in ("Рука или нога", "Похоже на вывих"):
+        await chat.press(label)
     screen = chat.replies[-1].text
     assert texts.ASK_AUDIENCE not in screen and FIRST_QUESTION in screen and SELF in screen
 

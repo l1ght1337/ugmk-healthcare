@@ -746,11 +746,23 @@ def asks_urgency(text: str, words: Sequence[str], was: Sequence[str] = ()) -> bo
     return re.search(r"\b(?:вызывать|вызвать|или|надо|нужно|нужна)\b", t) is not None
 
 
-def asks_to_be_taken(text: str) -> bool:
+def asks_to_be_taken(text: str, words: Sequence[str] = ()) -> bool:
     """«А тут что, нельзя записаться?», «в травмпункт ваш можно записаться или нет?», «меня
-    всё-таки примут?» — a question whether the trauma centre takes the patient, not an order
-    to book («запишите меня на сегодня»)."""
-    return "?" in text and _TAKEN.search(normalize(text)) is not None
+    всё-таки примут?», «вы меня запишете?», «к вам можно?» — a question whether the trauma
+    centre takes the patient, not an order to book («запишите меня на сегодня»). ``words`` —
+    config/clinic.yaml, ``after_route.taken``, as whole words."""
+    t = normalize(text)
+    return "?" in text and (_TAKEN.search(t) is not None or _has(t, words))
+
+
+def _has(t: str, words: Sequence[str]) -> bool:
+    """One of the phrases stands in a normalized text as whole words."""
+    return any(f" {normalize(word)} " in f" {t} " for word in words)
+
+
+def asks_address(text: str, words: Sequence[str]) -> bool:
+    """«Куда конкретно ехать?», «назови адрес» — ``words``: ``after_route.address``."""
+    return _has(normalize(text), words)
 
 
 def asks_where_to_go(text: str) -> bool:
@@ -764,19 +776,52 @@ def mentions_call(text: str) -> bool:
     return _CALL_WORDS.search(normalize(text)) is not None
 
 
-def asks_about_there(text: str, places: Sequence[str]) -> bool:
+def asks_about_there(text: str, places: Sequence[str], words: Sequence[str] = ()) -> bool:
     """«А туда как, просто приехать?», «там записи нужны?», «на Ясной принимают без
-    записи?» — about the place of a route (``places`` — «Центр борьбы со СПИДом, ул. Ясная,
-    46»), not about the trauma centre. «Там болит, где ударился» is about the injury."""
+    записи?», «в ДГКБ № 9 без записи примут?», «в девятой нас примут?», «это далеко?» — about
+    the place of a route (``places`` — «Центр борьбы со СПИДом, ул. Ясная, 46»), not about
+    the trauma centre: by its number, its name, its street, «туда» — or by the words of
+    ``after_route.there`` (``words``). «Там болит, где ударился» is about the injury."""
     t = re.sub(r"\bне\s+туда\b", " ", normalize(text))  # «боюсь везти не туда»
     if _THAT_PLACE.search(t) or _HOW_THERE.search(t) or _VISIT_THERE.search(t):
         return True
-    if _HOSPITAL_VISIT.search(t):  # «в больницу записываться надо или просто приехать?»
-        return True
-    for number in _numbers(places):  # «в 23-ю больницу», «больница № 23»
+    if _HOSPITAL_VISIT.search(t) or _has(t, words):
+        return True  # «в больницу записываться надо или просто приехать?», «это далеко?»
+    for number in _numbers(places):  # «в 23-ю больницу», «больница № 23», «в девятой»
         if re.search(rf"\b{number}\s+(?:\w{{1,2}}\s+)?{_PLACE_NOUN}|{_PLACE_NOUN}\s+{number}\b", t):
             return True
+        if (stem := _ordinal(int(number))) and re.search(rf"\b(?:в|во|до|к|из)\s+{stem}\w*", t):
+            return True
+    if any(re.search(rf"\b{short}\b", t) for short in _short_names(places)):
+        return True  # «ДГКБ», «СПИД»: the name as it is written in the route
     return any(re.search(rf"\b(?:на|в|во|до|к|у|около)\s+{stem}\w*", t) for stem in _stems(places))
+
+
+_UNITS = ("", "перв", "втор", "трет", "четверт", "пят", "шест", "седьм", "восьм", "девят")
+_TEENS = (
+    "десят", "одиннадцат", "двенадцат", "тринадцат", "четырнадцат", "пятнадцат", "шестнадцат",
+    "семнадцат", "восемнадцат", "девятнадцат",
+)  # fmt: skip
+_TENS = {20: ("двадцат", "двадцать"), 30: ("тридцат", "тридцать"), 40: ("сороков", "сорок")}
+
+
+def _ordinal(number: int) -> str | None:
+    """The stem of a number said in words, as a hospital is called: 9 → «девят» («в
+    девятой»), 23 → «двадцать трет»; None — a number nobody says so."""
+    if 1 <= number <= 9:
+        return _UNITS[number]
+    if 10 <= number <= 19:
+        return _TEENS[number - 10]
+    tens, unit = number - number % 10, number % 10
+    if tens not in _TENS:
+        return None
+    return _TENS[tens][0] if unit == 0 else rf"{_TENS[tens][1]}\s+{_UNITS[unit]}"
+
+
+def _short_names(places: Sequence[str]) -> list[str]:
+    """The abbreviations in the names of the places of a route: «ДГКБ № 9» → «дгкб»."""
+    found = re.findall(r"\b[А-ЯЁ]{3,}\b", " ".join(places))
+    return [normalize(word) for word in found]
 
 
 def _numbers(places: Sequence[str]) -> list[str]:

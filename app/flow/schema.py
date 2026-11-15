@@ -394,6 +394,9 @@ class Facility(_Model):
     id: str = Field(pattern=SNAKE)
     name: str
     address: str | None
+    # a place that is no one address («Любой муниципальный травмпункт»): what the bot says
+    # when asked «куда конкретно?» — its own words, not the script's
+    no_address: str | None = None
     note: str | None = None
     source: str = Field(description="Script stem in kb/text/ that names this place")
     quotes: tuple[str, ...] = Field(

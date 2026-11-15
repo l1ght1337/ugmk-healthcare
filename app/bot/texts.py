@@ -191,6 +191,8 @@ ADMIN_WILL_ANSWER = "На этот вопрос ответит админист�
 # the same complaint again right after its route: said plainly, with a way on
 # … the first sentence is the bold line, the places follow «Обратиться нужно:»
 NOT_BOOKED_HERE = "С этим в травмпункт не записываем.\nОбратиться нужно:"
+# «вы меня запишете?», «к вам можно?» after a route: the answer to a yes-or-no question
+NOT_BOOKED_NO = "Нет, с этим в травмпункт не записываем.\nОбратиться нужно:"
 QUESTIONS_TO_ADMIN = "Если остались вопросы, я передам их администратору."
 # The scenario's own question (kb/scenarios, guard_question) before a booking scenario that
 # DeepSeek named for a complaint with the words of section 5: «это укол чужой иглой?»
