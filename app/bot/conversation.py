@@ -522,6 +522,13 @@ def _home() -> list[Button]:
     return [Button(texts.MENU_HOME, "m:home")]
 
 
+def _note(marked: str, buttons: Sequence[Sequence[Button]] = (), **kw: Any) -> Reply:
+    """A message the bot sends by itself, past a turn (a reminder, the survey): its text
+    carries the marks of app/bot/markup.py, as the text of ``Ctx.say`` does."""
+    plain, spans = markup.render(marked, quoted=texts.QUOTED)
+    return Reply(plain, tuple(tuple(row) for row in buttons), spans=spans, **kw)
+
+
 async def _answered(*args: Any, **kw: Any) -> InfoReading:
     """read_question, the answer escaped: DeepSeek's text is not a template of the bot."""
     info = await read_question(*args, **kw)
@@ -760,7 +767,8 @@ class Conversation:
                 s.nudged = True
                 user.session = s.model_dump(mode="json")
                 await db.commit()
-                turns.append(Turn([Reply(texts.UNFINISHED, buttons, chat_id=user.chat_id)]))
+                nudge = _note(markup.lead(texts.UNFINISHED), buttons, chat_id=user.chat_id)
+                turns.append(Turn([nudge]))
         return turns
 
     def top_up_schedule(self) -> None:
@@ -4481,28 +4489,37 @@ class Conversation:
             ),
         )
         common = self.kb.common
+        when = render.when_lines(start)
         if kind == DAY_BEFORE:
-            text = texts.REMINDER_DAY.format(
-                when=render.format_when(start), patient=patient.full_name, doctor=b.doctor
-            )
+            lines = [
+                markup.bold(texts.REMINDER_DAY),
+                *when,
+                f"{texts.MARK_DOCTOR} {texts.CARD_DOCTOR}: {markup.esc(b.doctor)}",
+                f"{texts.MARK_BOOKING} {texts.REMINDER_PATIENT}: {markup.esc(patient.full_name)}",
+            ]
             docs = render.documents(self.kb, patient.audience)  # type: ignore[arg-type]
-            return Reply(f"{text}\n\n{docs}", actions, chat_id=chat_id, media=REMINDER)
+            text = "\n".join(lines)
+            return _note(f"{text}\n\n{docs}", actions, chat_id=chat_id, media=REMINDER)
         if kind == TWO_HOURS:
             center = self.clinic.contacts.trauma_center
-            text = texts.REMINDER_TWO_HOURS.format(
-                when=render.format_when(start), address=center.address, entrance=center.entrance
-            )
+            address = render.center_address(self.clinic)
+            lines = [
+                markup.bold(texts.REMINDER_TWO_HOURS),
+                *when,
+                f"{texts.MARK_ADDRESS} {texts.CARD_ADDRESS}: {address}",
+            ]
             day = center.underground_parking_hours.contains(start.time())
             parking = common.parking_day.text if day else common.parking_night.text
             short, more = self._shorten(parking)
             way = ((Button(texts.HOW_TO_GET, f"way:{b.id}", "primary"),),)
             extra = tuple(tuple(row) for row in more)
-            return Reply(
+            text = "\n".join(lines)
+            return _note(
                 f"{text}\n\n{short}", way + extra + actions, chat_id=chat_id, media=ENTRANCE
             )
         if kind == AFTER_VISIT and b.cycle >= 2:
-            return Reply(
-                texts.FEELING,
+            return _note(
+                markup.bold(texts.FEELING),
                 (
                     (Button(texts.FEELING_OK, f"v:ok:{b.id}"),),
                     (Button(texts.AFTER_VISIT_QUESTION, f"v:q:{b.id}"),),
@@ -4510,8 +4527,8 @@ class Conversation:
                 chat_id=chat_id,
                 media=FEEDBACK,
             )
-        return Reply(
-            texts.AFTER_VISIT,
+        return _note(
+            markup.bold(texts.AFTER_VISIT),
             (
                 (Button(texts.AFTER_VISIT_OK, f"v:ok:{b.id}"),),
                 (Button(texts.AFTER_VISIT_QUESTION, f"v:q:{b.id}"),),
@@ -4528,7 +4545,8 @@ class Conversation:
         if (place := render.venue(self.clinic)) is not None:
             c.say(place.address, venue=place)
             return
-        text = texts.WAY.format(address=center.address, entrance=center.entrance)
+        address = texts.WAY.format(address=render.center_address(self.clinic))
+        text = f"{texts.MARK_ADDRESS} {address}"
         if booking is not None:
             day = center.underground_parking_hours.contains(self._local(booking.start_at).time())
             common = self.kb.common
@@ -4576,7 +4594,8 @@ class Conversation:
             booking.survey = "missed"
             self._booking_note(c, booking, texts.ADMIN_SURVEY["missed"])
             self._reset(c)
-            c.say(texts.MISSED, [[Button(texts.MENU_BOOK, "m:book", "primary")], _home()])
+            again = [[Button(texts.MENU_BOOK, "m:book", "primary")], _home()]
+            c.say(markup.lead(texts.MISSED), again)
             return
         booking.survey = "ok" if answer == "ok" else "question"
         survey = texts.ADMIN_FEELING if booking.cycle >= 2 else texts.ADMIN_SURVEY
@@ -4590,7 +4609,7 @@ class Conversation:
         else:
             self._reset(c)
             c.s.step, c.s.visit_booking = "visit_question", booking.id
-            c.say(texts.ASK_VISIT_QUESTION, [_home()])
+            c.say(markup.lead(texts.ASK_VISIT_QUESTION), [_home()])
 
     async def _on_feedback_text(self, c: Ctx, text: str) -> None:
         await self._handoff(c, texts.FEEDBACK_REASON, text)
@@ -4613,7 +4632,7 @@ class Conversation:
     def _control_prompt(self, c: Ctx, booking: Booking) -> None:
         after = days_word(self.clinic.clinic.control_visit_after_days)
         c.say(
-            texts.OFFER_CONTROL.format(days=after),
+            markup.lead(texts.OFFER_CONTROL.format(days=after)),
             [
                 [Button(texts.CONTROL_YES, f"k:yes:{booking.id}", "primary")],
                 [Button(texts.CONTROL_NO, f"k:no:{booking.id}")],
@@ -4621,7 +4640,8 @@ class Conversation:
         )
 
     def _rate_prompt(self, c: Ctx, booking: Booking) -> None:
-        c.say(texts.RATE, [[Button(str(n), f"rate:{n}:{booking.id}") for n in range(1, 6)]])
+        marks = [[Button(str(n), f"rate:{n}:{booking.id}") for n in range(1, 6)]]
+        c.say(markup.lead(texts.RATE), marks)
 
     async def _on_control(self, c: Ctx, value: str) -> None:
         answer, _, ref = value.partition(":")

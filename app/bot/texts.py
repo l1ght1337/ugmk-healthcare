@@ -514,13 +514,12 @@ MOVE_ITEM = "{day}, {time} — {patient}"  # «Чт, 12.11, 13:00 — Петро
 MOVED = "Готово, запись перенесена на {date} в {time}. Врач: {doctor}."
 BOOKING_GONE = "Эта запись уже неактуальна."
 
-# Reminders name the day explicitly («в пятницу, 13 ноября, в 14:30»), so the text stays
-# true when /demo_next sends them early.
-REMINDER_DAY = (
-    "Напоминаем: {when} — приём травматолога-ортопеда в травмпункте. "
-    "Пациент: {patient}. Врач: {doctor}."
-)
-REMINDER_TWO_HOURS = "Скоро приём в травмпункте: {when}. Адрес: {address}, {entrance}."
+# Reminders name the day explicitly («📅 Дата: пятница, 13 ноября»), so the text stays true
+# when /demo_next sends them early. The bold line, then the lines of the booking card: the
+# date, the time, the doctor or the address behind their marks.
+REMINDER_DAY = "Напоминаем: приём травматолога-ортопеда в травмпункте."
+REMINDER_TWO_HOURS = "Скоро приём в травмпункте."
+REMINDER_PATIENT = "Пациент"
 WEEKDAYS_ON = (
     "в понедельник",
     "во вторник",
@@ -703,7 +702,7 @@ PAYMENT_QUESTION = "Оплачивать планируете самостоят
 VENUE_TITLE = "Травмпункт «УГМК-Здоровье»"
 MORE = "Подробнее"
 HOW_TO_GET = "Как пройти"
-WAY = "{address}, {entrance}."
+WAY = "{address}."  # «📍 ул. Шейнкмана, 113/2, вход через детское отделение.»
 
 # Bot profile (BotFather fields set at startup; the avatar and picture come from the customer).
 BOT_DESCRIPTION = (

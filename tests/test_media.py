@@ -118,7 +118,9 @@ async def test_reminders_carry_their_media_and_way(make_chat, schedule) -> None:
     assert chat.labels()[0] == texts.HOW_TO_GET and texts.MORE in chat.labels()
     assert "бесплатный подземный паркинг" in reminder.text  # the short parking phrase
     await chat.press(texts.HOW_TO_GET)
-    assert chat.text.startswith("ул. Шейнкмана, 113/2, вход через детское отделение.")
+    assert chat.text.startswith("📍 ул. Шейнкмана, 113/2, вход через детское отделение.")
+    (link,) = [span for span in chat.replies[0].spans if span.kind == "link"]
+    assert chat.text[link.start : link.end] == "ул. Шейнкмана, 113/2"  # opens the map
     assert "Парковка для посетителей клиники бесплатная" in chat.text  # the full text
     await chat.demo_next()
     assert chat.replies[0].media == FEEDBACK and chat.text == texts.AFTER_VISIT

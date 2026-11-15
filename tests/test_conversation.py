@@ -116,7 +116,8 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     # notifications: 14:30 today → no «за 24 часа»; «за 2 часа», then «Как прошёл приём?»
     await chat.demo_next()
     assert chat.text.startswith(
-        f"Скоро приём в травмпункте: в четверг, 12 ноября, в {later[10:15]}"
+        f"Скоро приём в травмпункте.\n📅 Дата: четверг, 12 ноября\n🕒 Время: {later}\n"
+        "📍 Адрес: ул. Шейнкмана, 113/2, вход через детское отделение\n"
     )
     assert "завтра" not in chat.text and "Через 2 часа" not in chat.text
     assert "подземный паркинг" in chat.text
@@ -181,8 +182,10 @@ async def test_day_before_reminder_lists_documents(make_chat, schedule: MockSche
     await chat.data(f"s:{tomorrow.id}")
     assert chat.text.startswith("Готово, запись перенесена на 13 ноября (пятница)")
     await chat.demo_next()
-    assert chat.text.startswith("Напоминаем: в пятницу, 13 ноября, в ")
-    assert "Пациент: Петров Иван Сергеевич" in chat.text
+    assert chat.text.startswith(
+        "Напоминаем: приём травматолога-ортопеда в травмпункте.\n📅 Дата: пятница, 13 ноября\n"
+    )
+    assert "📝 Пациент: Петров Иван Сергеевич" in chat.text.split("\n")
     assert "паспорт" in chat.text and "СНИЛС" in chat.text
 
 

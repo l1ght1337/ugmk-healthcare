@@ -269,6 +269,24 @@ def emergency_message(clinic: ClinicData) -> str:
     return f"{reply} {texts.AMBULANCE_LINE.format(phone=line)}" if line else reply
 
 
+def center_address(clinic: ClinicData) -> str:
+    """«ул. Шейнкмана, 113/2, вход через детское отделение» — marked (app/bot/markup.py):
+    the address is a link to the map, as in the routes; the words are those of the config."""
+    center = clinic.contacts.trauma_center
+    address, city = markup.esc(center.address), clinic.contacts.map_city
+    if city:
+        address = markup.link(address, map_url(city, center.address))
+    return f"{address}, {markup.esc(center.entrance)}"
+
+
+def when_lines(start: datetime) -> list[str]:
+    """«📅 Дата: пятница, 13 ноября», «🕒 Время: 14:30» — the lines of the booking card."""
+    return [
+        f"{texts.MARK_DAY} {texts.CARD_DATE}: {format_weekday_date(start.date())}",
+        f"{texts.MARK_TIME} {texts.CARD_TIME}: {start:%H:%M}",
+    ]
+
+
 def documents(kb: KnowledgeBase, audience: Audience) -> str:
     """Step 6 of the booking scripts: what to bring."""
     c = kb.common
