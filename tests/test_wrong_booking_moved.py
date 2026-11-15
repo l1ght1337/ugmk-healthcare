@@ -270,7 +270,10 @@ async def test_a_complaint_of_the_patient_himself_closes_the_move_too(
     await chat.say("ещё и руку сегодня ушиб, можно сегодня вечером?")
     assert chat.replies[0].text == LEFT
     state = await session(chat)
-    assert state["reschedule_of"] is None and state["wizard"], chat.text
+    # … and no new booking is opened: he has a visit ahead and did not ask for one more
+    # (15.11.2026, tests/test_no_booking_unasked.py) — the visit is shown, with its buttons
+    assert state["reschedule_of"] is None and not state["wizard"], chat.text
+    assert texts.MY_ONE in chat.text and texts.MOVE in chat.labels()
     (still,) = await bookings(chat.conversation.db)
     assert (still.start_at, still.status) == (mother.start_at, "active")
 

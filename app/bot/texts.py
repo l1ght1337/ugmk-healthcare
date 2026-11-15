@@ -529,6 +529,10 @@ ALREADY_BOOKED = (
 ALREADY_MOVE = "Перенести ту запись"
 ALREADY_AGAIN = "Записать ещё раз"
 KEPT = "Хорошо, запись остаётся."
+# «мне самой ехать или ждать звонка?» from a patient with a visit ahead: the code answers
+BOOKING_HOLDS = (
+    "Запись действует: {when}. Приходите к этому времени; ответ администратора на запись не влияет."
+)
 KEPT_WHEN = "Хорошо, запись на {date} в {time} остаётся."  # «спасибо, её не трогаем»
 # «я уже записан, новую запись не надо» in the middle of a new booking
 NO_NEW_BOOKING = "Хорошо, новую запись не оформляю."

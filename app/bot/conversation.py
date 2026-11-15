@@ -74,6 +74,7 @@ from app.flow.commands import (
     names_several,
     normalize,
     refuses_new_booking,
+    request_in,
     same_or_other,
     says_goodbye,
     says_no_more,
@@ -1605,6 +1606,8 @@ class Conversation:
             return  # «спасибо, её не трогаем»: one line, the booking is not shown again
         if await self._route_words(c, step, text):
             return  # «ехать или ждать звонка?», «а туда как?» after a route: a template
+        if await self._booking_holds(c, step, text):
+            return  # «самой ехать или ждать звонка?» with a visit ahead: the visit holds
         if asks_when_admin(text) and await self._when_admin(c, step):
             return  # «когда позвонит администратор?»: the hours, nothing is added to the request
         if step == "offer_admin" and await self._on_offer_words(c, text):
@@ -1775,6 +1778,43 @@ class Conversation:
             what = texts.PASSED_MESSAGE.format(text=markup.esc(shown))
         when = render.handoff_when(self.clinic, local)
         return texts.HANDOFF_NOTHING_NEW.format(what=what, when=when)
+
+    async def _booking_holds(self, c: Ctx, step: str, text: str) -> bool:
+        """«Мне самой ехать или ждать звонка?» from a patient who has a visit ahead and a
+        request with the administrators (or asks about the call): the answer of the code —
+        «Запись действует: сегодня, 13:30. Приходите к этому времени; ответ администратора на
+        запись не влияет.» Not a new booking, whatever words of a complaint the message has."""
+        if step not in ("idle", "offer_admin") or c.s.wizard or not asks_where_to_go(text):
+            return False
+        if spoken_for(text) or c.for_whom in ("child", "adult"):
+            return False  # about somebody else
+        if not mentions_call(text) and await self._open_handoff(c) is None:
+            return False
+        booking = await self._next_booking(c)
+        if booking is None:
+            return False
+        start, today = self._local(booking.start_at), self._local(c.now).date()
+        if start.date() == today:
+            day = texts.TODAY.lower()
+        elif start.date() == today + timedelta(days=1):
+            day = texts.TOMORROW.lower()
+        else:
+            day = self._short_day(booking.start_at)
+        self._reset(c)
+        c.say(texts.BOOKING_HOLDS.format(when=f"{day}, {start:%H:%M}"), self._main_menu(c))
+        return True
+
+    async def _unasked(self, c: Ctx, text: str) -> bool:
+        """The patient has a visit ahead, and the message has no request to book and nobody
+        else in it: the words of a complaint («а то нога болит, ждать некогда») do not open a
+        new booking."""
+        if c.s.step not in ("idle", "offer_admin") or c.s.wizard:
+            return False
+        if is_booking_order(text) or request_in(text) == "book" or find_command(text) == "book":
+            return False
+        if c.for_whom in ("child", "adult") or c.more or spoken_for(text):
+            return False
+        return await self._next_booking(c) is not None
 
     async def _when_admin(self, c: Ctx, step: str) -> bool:
         """«Когда позвонит администратор?»: the administrators' hours from config/contacts.yaml.
@@ -2751,6 +2791,8 @@ class Conversation:
                 c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
                 c.s.step = "offer_admin"
                 c.say(texts.INFO_DOWN, self._ask_admin_buttons())
+            elif await self._unasked(c, text):
+                await self._my_bookings(c)  # a visit ahead, no booking asked for: not step 1
             else:  # no LLM: the word list narrows the topics
                 area = topics.guess_area(text) or c.s.area
                 words = topics.guess_candidates(text)
@@ -2778,6 +2820,14 @@ class Conversation:
         other = reading.kind == "schedule_question" or (
             reading.kind == "menu_action" and reading.action in ("book", "my_bookings")
         )
+        opens = reading.kind == "complaint" or (other and injury is not None)
+        opens = opens or (reading.kind == "menu_action" and reading.action == "book")
+        if opens and not (wants_move(text) or wants_cancel(text)) and await self._unasked(c, text):
+            # a visit is ahead and no booking was asked for: the visit there is, not step 1
+            if reading.advice or asks_advice(text):
+                c.say(texts.MEDICAL_ASIDE)
+            await self._my_bookings(c)
+            return
         if other and injury is not None and not (wants_move(text) or wants_cancel(text)):
             # «сын упал с велосипеда, болит рука, можно сегодня вечером?» read as «свои
             # записи» or as a question about the schedule: a complaint is a new booking, and
