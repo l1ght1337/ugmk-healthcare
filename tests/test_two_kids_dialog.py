@@ -176,6 +176,21 @@ def test_a_request_to_book_is_not_about_the_injury() -> None:
     ]
 
 
+def test_the_part_with_the_request_is_dropped_the_part_with_the_fact_is_read() -> None:
+    """The final live run of two_kids: «Надо обоих записать к врачу, мы ещё не обращались
+    никуда» — the whole sentence was dropped with the request, and «Обращались ли к врачу?»
+    was asked."""
+    said = (
+        "Здравствуйте! Двое детей сегодня с горки упали: Маша 7 лет руку ушибла, Ваня 10 лет "
+        "ногу подвернул. Надо обоих записать к врачу, мы ещё не обращались никуда."
+    )
+    assert shared(said) == ["Двое детей сегодня с горки упали", "мы ещё не обращались никуда"]
+    assert shared("Запишите нас, пожалуйста, упали вчера с горки, а к врачу не ходили") == [
+        "упали вчера с горки, к врачу не ходили"
+    ]
+    assert shared("Запишите обоих, если можно, и если получится на сегодня") == []
+
+
 def test_fell_with_the_son_is_about_both() -> None:
     said = (
         "Здравствуйте. Сегодня на катке упали с сыном. У меня болит запястье, похоже перелом. "

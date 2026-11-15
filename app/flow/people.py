@@ -252,12 +252,14 @@ def find_people(text: str) -> list[Person]:
 
 def _aside(clause: str) -> bool:
     """A part that says nothing about the injuries: a greeting, a word or two, a request to
-    book, a count of the patients («здравствуйте», «пожалуйста», «надо обоих записать»,
-    «двое детей», «обоих надо к врачу»). «У меня двое детей сегодня с горки упали» says how
-    and when: it stays."""
-    low = _norm(clause)
+    book and its condition, a count of the patients («здравствуйте», «пожалуйста», «надо
+    обоих записать», «если можно», «двое детей», «обоих надо к врачу»). «У меня двое детей
+    сегодня с горки упали» says how and when: it stays. A sentence is read part by part:
+    «надо обоих записать к врачу, мы ещё не обращались никуда» keeps its second part."""
+    low = _norm(clause).strip()
     return (
         len(low.split()) < 2
+        or low.startswith("если ")  # «…, если можно»: the condition of a request
         or find_small_talk(clause) is not None
         or find_command(clause) == "book"
         or _BOOKING_WORD.search(low) is not None
@@ -277,8 +279,6 @@ def shared(text: str) -> list[str]:
     for sentence in _SENTENCE.split(text):
         clauses = _clauses(sentence)
         markers = [_marker(clause) for clause in clauses]
-        if not clauses or (not any(markers) and _BOOKING_WORD.search(_norm(sentence))):
-            continue  # «хотели бы записаться на сегодня, если можно»: a request, all of it
         kept: list[str] = []
         as_written = True  # nothing is cut out of the sentence
         for clause, marker in zip(clauses, markers, strict=True):
