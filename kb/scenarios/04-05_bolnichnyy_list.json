@@ -55,8 +55,8 @@
           "type": "enum",
           "description": "Давность травмы",
           "options": [
-            {"value": "within_7_days", "meaning": "в течение последних 7 дней", "label": "В течение 7 дней"},
-            {"value": "over_7_days", "meaning": "более 7 дней назад", "label": "Более 7 дней назад"}
+            {"value": "within_7_days", "meaning": "в течение последних 7 дней", "label": "В течение 7 дней", "to_hours": 168},
+            {"value": "over_7_days", "meaning": "более 7 дней назад", "label": "Более 7 дней назад", "from_hours": 168}
           ]
         }
       ],

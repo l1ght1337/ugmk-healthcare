@@ -263,8 +263,8 @@ async def test_both_children_are_booked_in_nine_and_six_turns(
     # what was said about both answers the three questions: the answers, not the questions
     assert (
         fake.texts_of("extract")
-        == ["руку ушибла. Мы сегодня с горки упали. К врачу ещё не обращались"] * 3
-    )  # «Как получена травма?», «Когда?», «Обращались ли к врачу?»: a call for each
+        == ["руку ушибла. Мы сегодня с горки упали. К врачу ещё не обращались"] * 2
+    )  # «Как получена травма?», «Обращались ли к врачу?»; «Когда?» — the code: «сегодня»
     summary, days = chat.replies
     assert summary.text.startswith(SUMMARY.format(age="7 лет"))
     assert texts.SUMMARY_EDIT in [b.label for row in summary.buttons for b in row]
@@ -286,8 +286,8 @@ async def test_both_children_are_booked_in_nine_and_six_turns(
     for label in menus:
         await two.press(label)
     assert (
-        fake.texts_of("extract")[3:]
-        == ["ногу подвернул. Мы сегодня с горки упали. К врачу ещё не обращались"] * 3
+        fake.texts_of("extract")[2:]
+        == ["ногу подвернул. Мы сегодня с горки упали. К врачу ещё не обращались"] * 2
     )
     assert chat.replies[0].text.startswith(SUMMARY.format(age="10 лет"))
     await two.press(chat.nearest().label)
@@ -338,9 +338,9 @@ async def test_each_question_is_read_by_its_own_call(make_chat, kb: KnowledgeBas
     await chat.press("Машу, 7 лет")
     await chat.press("Не знаю")
     assert chat.replies[0].text.startswith(SUMMARY.format(age="7 лет"))
+    # «Когда?» is not sent: «сегодня» is read by the code (tests/test_injury_time.py)
     assert [s["question"] for s in map(sent, fake.requests) if s["task"] == "extract"] == [
         "how",
-        "when",
         "seen_doctor",
     ]
 

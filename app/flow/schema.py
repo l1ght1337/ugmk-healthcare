@@ -49,6 +49,14 @@ class Option(_Model):
     value: str = Field(pattern=SNAKE)
     meaning: str = Field(min_length=1, description="Script wording, shown to the LLM extractor")
     label: str = Field(min_length=1, max_length=BUTTON_MAX, description="Button text")
+    # «Когда была получена травма?»: the threshold of the answer, in hours. The words of
+    # config/clinic.yaml (injury_time) are read against it by the code (app/flow/injury_time.py)
+    from_hours: int | None = Field(
+        default=None, gt=0, description="The injury is at least this many hours old"
+    )
+    to_hours: int | None = Field(
+        default=None, gt=0, description="The injury is at most this many hours old"
+    )
 
 
 class Choice(_Model):

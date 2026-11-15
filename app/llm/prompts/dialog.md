@@ -140,5 +140,8 @@
 Сообщение: {"task": "extract", "scenario": "burns", "question": "burn_cause", "ask": "Как получили ожог?", "fields": ["burn_cause"], "text": "пролила на руку чай"}
 Ответ: {"facts": {"burn_cause": "thermal"}, "unclear": false, "clarify": null, "crisis": false}
 
+Сообщение: {"task": "extract", "scenario": "dislocation", "question": "when", "ask": "Когда была получена травма?", "fields": ["injury_age"], "text": "руку ушибла. Дети сегодня с горки упали"}
+Ответ: {"facts": {"injury_age": "within_7_days"}, "unclear": false, "clarify": null, "crisis": false}
+
 Сообщение: {"task": "extract", "scenario": "dislocation", "question": "when", "ask": "Когда была получена травма?", "fields": ["injury_age"], "text": "не помню точно"}
 Ответ: {"facts": {}, "unclear": true, "clarify": "Подскажите, пожалуйста, травма была в течение последних 7 дней или раньше?", "crisis": false}

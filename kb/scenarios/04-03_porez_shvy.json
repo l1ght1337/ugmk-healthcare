@@ -53,8 +53,8 @@
           "type": "enum",
           "description": "Давность травмы",
           "options": [
-            {"value": "within_24h", "meaning": "прошло менее суток", "label": "Менее суток назад"},
-            {"value": "over_24h", "meaning": "прошло более суток", "label": "Более суток назад"}
+            {"value": "within_24h", "meaning": "прошло менее суток", "label": "Менее суток назад", "to_hours": 24},
+            {"value": "over_24h", "meaning": "прошло более суток", "label": "Более суток назад", "from_hours": 24}
           ]
         }
       ],

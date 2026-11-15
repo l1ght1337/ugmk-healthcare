@@ -229,10 +229,50 @@ class UnfinishedBooking(_Data):
     quiet_hours: WorkingHours
 
 
+class TimeWords(_Data):
+    """«вчера» — between 0 and 48 hours ago."""
+
+    phrases: tuple[str, ...] = Field(min_length=1)
+    hours: tuple[int, int]
+
+    @model_validator(mode="after")
+    def _check(self) -> TimeWords:
+        low, high = self.hours
+        if not 0 <= low <= high:
+            raise ValueError(f"injury_time: hours of {self.phrases} must be [from, to]")
+        return self
+
+
+class TimeUnit(_Data):
+    """«дня» in «2 дня назад»: 24 hours."""
+
+    forms: tuple[str, ...] = Field(min_length=1)
+    hours: int = Field(gt=0)
+
+
+class InjuryTime(_Data):
+    """Words about when the injury happened that the code reads (app/flow/injury_time.py)."""
+
+    words: tuple[TimeWords, ...] = Field(min_length=1)
+    units: tuple[TimeUnit, ...] = ()
+    ago: str = Field(min_length=1)
+    numbers: dict[str, int] = {}
+
+    @model_validator(mode="after")
+    def _written_as_read(self) -> InjuryTime:
+        said = [p for w in self.words for p in w.phrases]
+        said += [f for u in self.units for f in u.forms] + [self.ago, *self.numbers]
+        bad = [w for w in said if w != " ".join(w.lower().replace("ё", "е").split()) or not w]
+        if bad or len(set(said)) != len(said):
+            raise ValueError(f"injury_time: lower case, no «ё», no repeats: {bad or said}")
+        return self
+
+
 class ClinicFlags(_Data):
     rabies_vaccine_available: bool
     control_visit_after_days: int = Field(gt=0, le=60)
     unfinished_booking: UnfinishedBooking
+    injury_time: InjuryTime
     emergency: Emergency
     crisis: Crisis
 

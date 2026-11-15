@@ -61,8 +61,8 @@
           "type": "enum",
           "description": "Давность ожога",
           "options": [
-            {"value": "within_24h", "meaning": "в течение суток", "label": "Менее суток назад"},
-            {"value": "over_24h", "meaning": "более суток назад", "label": "Более суток назад"}
+            {"value": "within_24h", "meaning": "в течение суток", "label": "Менее суток назад", "to_hours": 24},
+            {"value": "over_24h", "meaning": "более суток назад", "label": "Более суток назад", "from_hours": 24}
           ]
         }
       ],

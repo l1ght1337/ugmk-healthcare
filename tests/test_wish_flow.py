@@ -391,8 +391,25 @@ async def test_wish_typed_as_an_answer_goes_on_with_the_question(make_chat, kb) 
     await chat.press("Для себя")
     await chat.press("Бытовая травма")
     assert "Когда была получена травма?" in chat.text
-    await chat.say("вчера, запишите к Кузнецову на завтра")
+    await chat.say("на выходных, запишите к Кузнецову на завтра")
     assert "[ВРАЧ]" in fake.sent() and "Кузнецов" not in fake.sent()
+    assert "Обращались ли к врачу" in chat.text  # the answer «на выходных» was taken
+    assert "Пожелание: к Кузнецову Н. А., завтра, 13 ноября" in chat.text
+
+
+async def test_yesterday_with_a_wish_is_read_by_the_code(make_chat, kb) -> None:
+    """«Вчера» is a word of config/clinic.yaml (injury_time): DeepSeek is not asked, and «на
+    завтра» is the wish, not when it happened."""
+    fake = FakeDeepSeek()
+    chat = make_chat(assistant=fake.assistant(kb))
+    await chat.start()
+    await chat.press(texts.MENU_BOOK)
+    await chat.press("Рука или нога")
+    await chat.press("Похоже на вывих")
+    await chat.press("Для себя")
+    await chat.press("Бытовая травма")
+    await chat.say("вчера, запишите к Кузнецову на завтра")
+    assert fake.requests == []
     assert "Обращались ли к врачу" in chat.text  # the answer «вчера» was taken
     assert "Пожелание: к Кузнецову Н. А., завтра, 13 ноября" in chat.text
 

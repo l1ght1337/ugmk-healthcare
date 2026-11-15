@@ -42,7 +42,7 @@ from app.db.models import (
     utcnow,
 )
 from app.db.session import Database
-from app.flow import topics
+from app.flow import injury_time, topics
 from app.flow.age import find_child_age, parse_age_months
 from app.flow.commands import (
     NO,
@@ -520,6 +520,21 @@ def _answer_label(question: Question, facts: dict[str, FactValue]) -> str | None
 
 def _home() -> list[Button]:
     return [Button(texts.MENU_HOME, "m:home")]
+
+
+def _with_time(when: dict[str, str], facts: dict[str, FactValue]) -> dict[str, FactValue]:
+    """The facts DeepSeek read and the words about the time the code read, together.
+
+    The code's reading is taken. A word that does not answer the question («вчера» for a
+    day) or that disagrees with DeepSeek leaves the field out: the bot asks.
+    """
+    out = dict(facts)
+    for name, value in when.items():
+        if value == injury_time.ASK or out.get(name, value) != value:
+            out.pop(name, None)
+        else:
+            out[name] = value
+    return out
 
 
 def _note(marked: str, buttons: Sequence[Sequence[Button]] = (), **kw: Any) -> Reply:
@@ -2348,7 +2363,10 @@ class Conversation:
                 None if topics.names_kind(reading.scenario_id, text) else "words"
             )
             age = find_child_age(text)
-            await self._begin(c, reading.scenario_id, reading.facts, age, picked=words)
+            # «сегодня», «вчера» in the complaint: the code's reading, not DeepSeek's guess
+            when = self._time_words(c, self.kb.scenario(reading.scenario_id), text)
+            facts = _with_time(when, reading.facts)
+            await self._begin(c, reading.scenario_id, facts, age, picked=words)
             if words:
                 c.s.picked = words
         elif reading.kind == "complaint":
@@ -2557,11 +2575,18 @@ class Conversation:
             return
         scenario = self.kb.scenario(dialog.scenario_id)
         question = scenario.question(dialog.question_id)
+        when = self._time_words(c, scenario, text)  # «вчера», «3 дня назад»: read by the code
         if yes_no(text) is not None or is_unsure(text):
             reading = AnswerReading()  # «да», «не знаю» name no button: the question again
+        elif {f.name for f in question.fields} <= when.keys():
+            # the words answer the question, or do not («вчера» for a day): DeepSeek is not
+            # asked either way — the answer is taken, or the question stands with its buttons
+            reading = AnswerReading(_with_time(when, {}))
         else:
             known = await self._known(c)
             reading = await read_answer(self._llm(c), scenario, question, text, known)
+            if not (reading.unavailable or reading.crisis):
+                reading = replace(reading, facts=_with_time(when, reading.facts))
         if reading.crisis:
             await self._crisis(c, text)
             return
@@ -3342,15 +3367,22 @@ class Conversation:
         if not asked:
             return facts
         text = ". ".join(part for part in (person.complaint, *c.s.shared) if part)
+        when = self._time_words(c, scenario, text)  # «сегодня с горки упали»: by the code
+        # a question the code has read in full is not sent to DeepSeek
+        unread = [q for q in asked if not {f.name for f in q.fields} <= when.keys()]
         llm, known = self._llm(c), await self._known(c)
         readings = await asyncio.gather(
-            *(read_answer(llm, scenario, question, text, known) for question in asked)
+            *(read_answer(llm, scenario, question, text, known) for question in unread)
         )
-        told: dict[str, dict[str, FactValue]] = {}
-        for question, reading in zip(asked, readings, strict=True):
+        told: dict[str, dict[str, FactValue]] = {q.id: {} for q in asked}
+        for question, reading in zip(unread, readings, strict=True):
             own = {f.name for f in question.fields}  # each question answers its own fields
             if not (reading.unavailable or reading.crisis):
                 told[question.id] = {k: v for k, v in reading.facts.items() if k in own}
+        for question in asked:
+            own = {f.name for f in question.fields}
+            mine = {name: value for name, value in when.items() if name in own}
+            told[question.id] = _with_time(mine, told[question.id])
         found = dict(facts)
         for _ in asked:  # in the order the scenario asks: what is not said stops it
             probe = c.s.dialog.model_copy(deep=True)
@@ -3362,6 +3394,24 @@ class Conversation:
                 break
             found = {**answer, **found}
         return found
+
+    def _time_words(self, c: Ctx, scenario: Scenario, text: str) -> dict[str, str]:
+        """What the words about the time of the injury answer in this scenario: the value
+        of the field, or ``injury_time.ASK`` — the words are there and do not answer. A part
+        with a wish for the visit («запишите на сегодня») is not about the injury."""
+        now = self._local(c.now)
+        doctors = self.clinic.schedule.doctors
+
+        def wish(part: str) -> bool:
+            found = parse_wish(part, doctors, now.date(), context="strict", now=now.time())
+            return not found.wish.empty
+
+        config = self.clinic.clinic.injury_time
+        read = {
+            name: injury_time.read(text, spec, config, wish)
+            for name, spec in scenario.fields().items()
+        }
+        return {name: value for name, value in read.items() if value is not None}
 
     def _ends_at_once(self, c: Ctx, scenario_id: str, facts: dict[str, FactValue]) -> bool:
         """The scenario would end at once with a route or a request to the administrators.
