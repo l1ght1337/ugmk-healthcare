@@ -97,6 +97,9 @@ async def _check(chat: Chat, faq: Faq) -> None:
     elif faq.source == SCHEDULE:  # built by code from the schedule: DeepSeek is not asked
         assert faq.expect and faq.expect in text, text
         assert texts.INFO_UNKNOWN not in text and labels
+    elif faq.kind == "no_data_topic":  # no data on the whole topic: the line of the code
+        assert text == faq.expect and labels == [texts.HANDOFF_YES, texts.HANDOFF_NO]
+        assert chat.admin == []  # only by the button
     elif faq.kind == "clinic_question":  # no data
         assert text == texts.INFO_UNKNOWN and labels[0] == texts.ASK_ADMIN_QUESTION
         assert chat.admin == []  # only by the button

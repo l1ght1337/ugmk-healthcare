@@ -49,7 +49,9 @@ async def test_said_in_a_question_before_the_booking(make_chat, kb: KnowledgeBas
     chat = make_chat(assistant=fake.assistant(kb))
     await chat.start()
     await chat.say("Мне нужна справка в бассейн после старой травмы ноги. Помогут ли у вас?")
-    assert chat.text == texts.INFO_UNKNOWN and (await who(chat))["audience"] == "self"
+    # «справка»: a topic with no data (config/clinic.yaml) — the line of the code
+    assert chat.text == "О справках в моих данных ничего нет."
+    assert (await who(chat))["audience"] == "self"
     await chat.press(texts.MENU_HOME)
     await to_dislocation(chat)
     screen = chat.replies[-1].text

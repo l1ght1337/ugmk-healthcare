@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot import markup, misses, render, slots_view, texts, typed
 from app.bot.layout import DAY_COLUMNS, TIME_COLUMNS, grid, pack
 from app.bot.render import Card, Venue
-from app.config import PROJECT_ROOT, ClinicData, Settings
+from app.config import PROJECT_ROOT, ClinicData, NoDataTopic, Settings
 from app.db.models import (
     AdminMessage,
     AnswerRating,
@@ -402,6 +402,9 @@ class Talk(BaseModel):
     # a route of a booking scenario: it depends on the answers and does not lock the booking;
     # a booking of that scenario with another answer tells the administrators so
     answered: Routed | None = None
+    # «принимаем травмы сроком не более 7 дней»: the injury is not booked and no route is
+    # known — nothing is said about our trauma centre for it, as after a route
+    refused: Routed | None = None
     notes: dict[str, str] = {}  # booking id → lines for its card in the admin chat
     other: bool = False  # «Другая»: the booking after the route is about another injury
     same: bool = False  # «Та же»: an injury named later is that one, not asked again
@@ -1994,6 +1997,8 @@ class Conversation:
         """
         if await self._no_route(c, text):  # the tooth once more: no scenario by guess
             return
+        if await self._no_data_topic(c, text):
+            return  # «а справку в бассейн дадите?»: no data — said by the code
         reading = await read_text(self._llm(c), text, await self._known(c))
         note = False
         if reading.unavailable:
@@ -2011,11 +2016,11 @@ class Conversation:
         elif reading.kind in ("clinic_question", "medical_question") or (
             reading.kind == "menu_action" and reading.action == "ask"
         ):
-            if self._route_now(c, text) is not None:
+            if self._route_now(c, text) is not None or self._held(c, text) is not None:
                 # after a route nothing is said about our trauma centre: the administrator's
                 line, note = texts.ADMIN_WILL_ANSWER, True
             else:
-                info = await _answered(self._llm(c), text, await self._known(c))
+                info = await self._info(c, text, await self._known(c))
                 note = not info.answer
                 line = info.answer or texts.ADMIN_WILL_ANSWER
         elif reading.kind == "about_bot":
@@ -2327,10 +2332,42 @@ class Conversation:
         if c.s.wizard and c.s.step in WIZARD_STEPS:
             return False  # a booking the patient began himself: the questions are about it
         done = self._route_now(c, text)
-        if done is None:
+        if done is not None:
+            await self._route_line(c, done, "admin", text)
+            return True
+        rule = self._held(c, text)
+        if rule is None:
             return False
-        await self._route_line(c, done, "admin", text)
+        await self._held_line(c, rule, text)
         return True
+
+    def _held(self, c: Ctx, text: str = "") -> str | None:
+        """«В травмпункте принимаем травмы… сроком не более 7 дней.» — the injury of this
+        talk was not booked for its age, and no route for it is known. While the talk is
+        about it, the doctors, the free time and «Записаться в травмпункт» are not offered:
+        the state is the one after a route. It ends as that one does — with «Другая», with
+        a message about another person, with a new conversation."""
+        talk = c.s.talk
+        refused = talk.refused
+        if refused is None or talk.other or self._someone_else(c, text, refused):
+            return None
+        scenario = self.kb.scenarios.get(refused.dialog.scenario_id or "")
+        if scenario is None or scenario.injury_days_max is None:
+            return None  # the knowledge base has changed since
+        return texts.OLD_INJURY.format(days=scenario.injury_days_max)
+
+    async def _held_line(self, c: Ctx, rule: str, text: str) -> None:
+        """The rule once more and «На этот вопрос ответит администратор.» — instead of an
+        answer about our trauma centre."""
+        said = f"{markup.bold(rule)}\n\n{texts.ADMIN_WILL_ANSWER}"
+        handoff = await self._open_handoff(c)
+        self._reset(c)
+        if handoff is not None:  # the request is with the administrators: nothing is added
+            c.say(said, self._main_menu(c))
+            return
+        c.s.step = "offer_admin"
+        c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
+        c.say(said, self._ask_admin_buttons())
 
     async def _urgency(self, c: Ctx, step: str, text: str) -> bool:
         """«Скорую вызывать?», «это срочно?»: the template of the code, wherever it is asked
@@ -2617,7 +2654,7 @@ class Conversation:
         if not under_way or not refuses_new_booking(text) or not await self._upcoming(c):
             return False
         if is_question(text):
-            info = await _answered(self._llm(c), text, await self._known(c))
+            info = await self._info(c, text, await self._known(c))
             if info.answer:
                 c.say(info.answer)
         c.say(texts.NO_NEW_BOOKING)
@@ -2806,7 +2843,7 @@ class Conversation:
             await self._command(c, reading.action)  # type: ignore[arg-type]
             return True
         if reading.kind == "clinic_question" or asks:
-            info = await _answered(self._llm(c), text, known, on_partial=c.draft)
+            info = await self._info(c, text, known, on_partial=c.draft)
             c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
         elif reading.kind == "about_bot":
             c.say(texts.ABOUT_BOT)
@@ -2816,7 +2853,7 @@ class Conversation:
             # «а сколько стоит приём? и на ближайшее можно?» on the day step, read by route
             # as a booking: a text answers nothing there, so the question in it is answered
             # and the same buttons follow — not «Не понял сообщение»
-            info = await _answered(self._llm(c), text, known, on_partial=c.draft)
+            info = await self._info(c, text, known, on_partial=c.draft)
             c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
         else:
             return False
@@ -2826,10 +2863,10 @@ class Conversation:
 
     async def _answer_too(self, c: Ctx, text: str) -> None:
         """«Сколько стоит и запишите на завтра»: the answer first, then the request."""
-        if self._route_now(c, text) is not None:
+        if self._route_now(c, text) is not None or self._held(c, text) is not None:
             c.say(texts.ADMIN_WILL_ANSWER)  # after a route: not an answer about us
             return
-        info = await _answered(self._llm(c), text, await self._known(c))
+        info = await self._info(c, text, await self._known(c))
         c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
 
     async def _next_booking(self, c: Ctx) -> Booking | None:
@@ -2898,6 +2935,58 @@ class Conversation:
         else:  # idle / complaint / topic / describe
             await self._on_free_text(c, text)
 
+    def _no_data(self, text: str) -> NoDataTopic | None:
+        """The topic of ``text`` the reference says nothing about (config/clinic.yaml,
+        no_data_topics): «справку в бассейн дадите?» — but not «справку о побоях»."""
+        for topic in self.clinic.clinic.no_data_topics:
+            if find_phrase(text, topic.words) and not find_phrase(text, topic.unless):
+                return topic
+        return None
+
+    async def _info(
+        self,
+        c: Ctx,
+        text: str,
+        known: KnownPerson | None,
+        on_partial: Callable[[str], Awaitable[None]] | None = None,
+    ) -> InfoReading:
+        """The answer of the reference to a question. On a topic it says nothing about
+        DeepSeek is not asked: what it says of the sick leave is not carried over to a
+        certificate. The line of the code, and the administrator."""
+        topic = self._no_data(text)
+        if topic is not None:
+            return InfoReading(answer=topic.answer, offer_admin=True)
+        return await _answered(self._llm(c), text, known, on_partial=on_partial)
+
+    async def _no_data_topic(self, c: Ctx, text: str) -> bool:
+        """«Справку в бассейн дадите?»: «О справках в моих данных ничего нет. Передать вопрос
+        администратору?» — said by the code, with the buttons. A complaint or a request in
+        the message goes its usual way, and the line is said where its question is answered.
+        Asked again on that very screen, the line is not said twice in a row."""
+        topic = self._no_data(text)
+        if topic is None or (c.s.wizard and c.s.step not in START_STEPS):
+            return False
+        asks_more = self._injury_in(text) is not None or is_booking_order(text)
+        if asks_more or request_in(text) is not None or find_command(text) is not None:
+            return False
+        offered = c.s.step == "offer_admin" and c.s.handoff_reason == texts.QUESTION_REASON
+        if offered and self._no_data(c.s.handoff_context or "") is topic:
+            c.s.handoff_context = f"{c.s.handoff_context}\n{text}"
+            c.say(texts.ADMIN_WILL_ANSWER)
+            await self._repeat_buttons(c)
+            return True
+        self._reset(c)
+        c.s.step = "offer_admin"
+        c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text
+        c.say(
+            f"{markup.bold(topic.answer)} {texts.OFFER_HANDOFF}",
+            [
+                [Button(texts.HANDOFF_YES, "h:yes", "primary")],
+                [Button(texts.HANDOFF_NO, "h:no")],
+            ],
+        )
+        return True
+
     async def _no_route(self, c: Ctx, text: str) -> bool:
         """A knocked-out tooth: the scripts say nothing — said so, not a scenario by guess.
         Asked again on that very screen, it is a question for the administrator: the same
@@ -2927,6 +3016,8 @@ class Conversation:
         asked = c.s.step == "info"
         if not asked and await self._no_route(c, text):
             return
+        if await self._no_data_topic(c, text):
+            return  # «справку в бассейн дадите?»: no data — said by the code
         at_start = c.s.wizard and c.s.step in START_STEPS  # step 1 of a booking: it goes on
         if reading is None:
             reading = await read_text(self._llm(c), text, await self._known(c))
@@ -4402,6 +4493,9 @@ class Conversation:
         found = injury_time.hours(said, self.clinic.clinic.injury_time, wish)
         if not found or any(low < limit * injury_time.DAY for low, _ in found):
             return False
+        # the talk is about this injury now: nothing about our trauma centre, as after a route
+        c.s.talk.refused = Routed(dialog=c.s.dialog.model_copy(deep=True), at=c.now)
+        c.s.talk.other = c.s.talk.same = False
         self._reset(c)
         c.s.step, c.s.ended_at = "offer_admin", c.now
         c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, said
@@ -5809,7 +5903,10 @@ class Conversation:
         случилось?», «Для кого запись?» and the scenario questions stay.
         """
         if found.question is not None:
-            await self._answer_schedule(c, found)
+            # «какие у вас врачи?», «есть время завтра?» after a route or after «принимаем
+            # травмы сроком не более 7 дней»: not answered about our trauma centre
+            if not await self._not_about_us(c, c.text or ""):
+                await self._answer_schedule(c, found)
             return True
         if found.wish.empty and not found.unknown_doctor:
             return False
@@ -6054,7 +6151,7 @@ class Conversation:
         if await self._not_about_us(c, text):
             return  # after a route: the route and the administrator, not our address or hours
         known = await self._known(c)
-        reading = await _answered(self._llm(c), text, known, on_partial=c.draft)
+        reading = await self._info(c, text, known, on_partial=c.draft)
         self._reset(c)
         if reading.answer and not reading.offer_admin:
             c.s.handoff_reason, c.s.handoff_context = texts.QUESTION_REASON, text

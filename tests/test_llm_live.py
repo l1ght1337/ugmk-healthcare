@@ -210,6 +210,24 @@ async def test_unknown_question_is_not_answered(assistant: Assistant) -> None:
     assert result.answer is None and result.offer_admin
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Куда мне обратиться за справкой в бассейн и освобождением от физкультуры?",
+        "Мне нужна справка в бассейн после старой травмы ноги. Где её можно оформить?",
+    ],
+)
+async def test_the_sick_leave_is_not_carried_over_to_a_certificate(
+    assistant: Assistant, question: str
+) -> None:
+    """Run 9, certificate: «справку… можно оформить на плановой консультации врача» — the
+    reference says it of the sick leave only (the prompt, rule 3). In the bot the code
+    answers such a question itself (config/clinic.yaml, no_data_topics); here the answer
+    role is asked directly."""
+    result = await assistant.answer(question)
+    assert result.answer is None or "планов" not in result.answer.lower(), result.answer
+
+
 def test_usage_and_cache_summary() -> None:
     if not USAGE:
         pytest.skip("no live calls were made")

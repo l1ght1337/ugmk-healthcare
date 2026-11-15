@@ -292,6 +292,14 @@ class AfterRoute(_Data):
     address: tuple[str, ...] = ()  # «куда конкретно?» of a route that has no address
 
 
+class NoDataTopic(_Data):
+    """A topic the reference (kb/info) says nothing about: the code answers, not DeepSeek."""
+
+    words: tuple[str, ...]  # «справка», «справку»… — whole words, every form written out
+    unless: tuple[str, ...] = ()  # … but not with these: what the reference does speak of
+    answer: str  # «О справках в моих данных ничего нет.»
+
+
 class MoveRelative(_Data):
     """«Пораньше», «попозже» at a move: a wish relative to the time of the visit."""
 
@@ -305,6 +313,8 @@ class ClinicFlags(_Data):
     unfinished_booking: UnfinishedBooking
     # injuries the scripts say nothing about: «в моих данных нет», not a scenario by guess
     no_route_words: tuple[str, ...] = ()
+    # «справку в бассейн дадите?»: no answer in the reference — and none is made up
+    no_data_topics: tuple[NoDataTopic, ...] = ()
     # «Это возможно?» right after a request: not a question for the reference
     plain_asks: tuple[str, ...] = ()
     # «запись останется?», «мне приходить?» with a visit ahead: «Запись действует: …»
