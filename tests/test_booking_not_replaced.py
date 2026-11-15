@@ -52,12 +52,15 @@ async def test_a_question_about_the_administrator_is_not_a_request(
     fake = FakeDeepSeek(ADMIN, {"found": False}, ADMIN, {"found": False}, ADMIN, {"found": False})
     chat = make_chat(assistant=fake.assistant(kb))
     await to_consent(chat)
-    for _ in range(3):  # asked three times, as in the run
+    for n in range(3):  # asked three times, as in the run
         await chat.say(ASKS)
         state = await session(chat)
         assert state["step"] == "consent" and state["resume"] == "identify", chat.text
-        assert texts.CONSENT_YES in chat.labels()
         assert "Чтобы администратор мог с Вами связаться" not in chat.text
+        if n < 2:
+            assert texts.CONSENT_YES in chat.labels()
+        else:  # the same answer a third time in a row: one line that offers the administrator
+            assert [r.text for r in chat.replies] == [texts.STUCK_ASK]  # tests/test_circles.py
     assert chat.admin == [] and await bookings(chat.conversation.db) == []
 
 

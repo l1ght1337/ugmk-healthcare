@@ -139,7 +139,8 @@ async def test_a_question_with_an_answer_in_the_reference(make_chat, kb: Knowled
     await to_offer(chat)
     await chat.say("а травмпункт до скольки работает?")
     answer, offer = chat.replies
-    assert answer.text == "Круглосуточно." and offer.text == texts.OFFER_HANDOFF
+    # after a route nothing is said about our trauma centre (15.11.2026): the administrator's
+    assert answer.text == texts.ADMIN_WILL_ANSWER and offer.text == texts.OFFER_HANDOFF
     assert (await session(chat))["step"] == "offer_admin"
 
 

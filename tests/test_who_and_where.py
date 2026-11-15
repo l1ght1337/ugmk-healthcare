@@ -168,10 +168,12 @@ async def test_a_question_of_deepseek_is_said_once_for_a_complaint(
     await chat.press("Рука или нога")
     await chat.say("что-то с рукой, не пойму")
     assert ASKS_BACK["clarify"] in chat.text
-    for more in ("ну рука, говорю же", "да рука же", "рука"):
+    await chat.say("ну рука, говорю же")
+    assert ASKS_BACK["clarify"] not in chat.text  # not asked again and again
+    assert texts.NONE_FITS in chat.text and "Другое" in chat.labels()
+    for more in ("да рука же", "рука"):  # the same screen a third time: the administrator
         await chat.say(more)
-        assert ASKS_BACK["clarify"] not in chat.text  # not asked again and again
-        assert texts.NONE_FITS in chat.text and "Другое" in chat.labels()
+        assert [r.text for r in chat.replies] == [texts.STUCK_ASK]  # tests/test_circles.py
 
 
 async def test_a_patient_who_says_it_is_not_the_head_is_not_told_about_concussion(

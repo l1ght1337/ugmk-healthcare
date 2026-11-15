@@ -423,6 +423,9 @@ class Talk(BaseModel):
     todo: list[Action] = []
     doing: Action | None = None
     pick: bool = False
+    # what the bot was about to say on the last two turns of text: the same answer or
+    # screen is not sent a third time in a row (``_no_circle``)
+    said: list[list[str]] = []
 
 
 class Session(BaseModel):
@@ -903,6 +906,7 @@ class Conversation:
             if said is not None:  # a text or a photo answered with a fallback phrase
                 await self._note_misses(ctx, step, said)
             if not ctx.deleted:
+                self._no_circle(ctx, said)  # after the journal: it keeps what was not understood
                 self._remember_screen(ctx, before, before_key)
                 # the consent and the phone of a request to the administrators are not the
                 # booking: the one left for that request stays for «Продолжить запись»
@@ -936,6 +940,60 @@ class Conversation:
             rows = (*rows, (Button(texts.MENU_ADMIN, "m:admin"),))
         at = c.turn.replies.index(missed)
         c.turn.replies[at] = replace(missed, text=texts.STUCK, buttons=rows, spans=())
+
+    def _no_circle(self, c: Ctx, said: str | None) -> None:
+        """The same answer or screen is not sent a third time in a row: one line instead —
+        «Похоже, я не могу ответить на этот вопрос. Передать его администратору?» — with
+        its button, and after a route with «Не ждите звонка…».
+
+        Counted over the turns of text: a button is the patient's own move and starts the
+        count anew — but for the buttons of step 1 («Другое» → «опишите своими словами» →
+        the same screen again). A new answer to a new question over the same step is not a
+        circle; the same answer over a new screen is dropped, and the screen stays. The
+        template about urgency and the «угроза жизни» state repeat as they are; so does the
+        screen a command asks for («мои записи» typed three times) and the refusal of a
+        request that is not about the trauma centre — that one never goes to an administrator."""
+        talk = c.s.talk
+        if said is None:  # a button, a contact
+            if c.s.step not in START_STEPS:
+                talk.said = []
+            return
+        produced = [reply.text for reply in c.turn.replies]
+        earlier, talk.said = talk.said[-2:], [*talk.said, produced][-2:]
+        if len(earlier) < 2 or not produced or not said or talk.danger is not None:
+            return
+        if find_command(said) is not None or find_navigation(said) is not None:
+            return
+        as_it_is = (texts.URGENCY.split(".")[0], texts.OFFTOPIC)
+
+        def third(text: str) -> bool:
+            return all(text in turn for turn in earlier) and not text.startswith(as_it_is)
+
+        again = [text for text in produced if third(text)]
+        if not again:
+            return
+
+        def fresh(text: str) -> bool:
+            return not any(text in turn for turn in earlier)
+
+        kept = [r for r in c.turn.replies if r.text not in again]
+        if produced[-1] not in again or any(fresh(r.text) and r.buttons for r in kept):
+            # the same answer over a new screen or a card: the answer is not said again,
+            # what is new stays
+            c.turn.replies[:] = kept
+            return
+        if len(produced) > 1 and fresh(produced[0]) and is_question(said):
+            return  # another question on the same step, and it has its answer
+        line = texts.STUCK_ASK
+        if self._last_route(c) is not None:
+            line = f"{line}\n{texts.DO_NOT_WAIT}"
+        if c.s.step in ("idle", "info", "offer_admin", *START_STEPS):
+            self._reset(c)  # nothing is under way: «да» typed is the button
+            c.s.step = "offer_admin"
+        c.s.handoff_reason = c.s.handoff_reason or texts.QUESTION_REASON
+        c.s.handoff_context = said
+        rows = [[Button(texts.ASK_ADMIN_QUESTION, "h:yes", "primary")], _home()]
+        c.turn.replies[:] = [_note(line, rows)]
 
     def _remember_screen(self, c: Ctx, before: dict[str, Any], before_key: tuple) -> None:
         """Keep the previous wizard screen for «Назад» when the screen changed."""
@@ -1879,9 +1937,13 @@ class Conversation:
         elif reading.kind in ("clinic_question", "medical_question") or (
             reading.kind == "menu_action" and reading.action == "ask"
         ):
-            info = await _answered(self._llm(c), text, await self._known(c))
-            note = not info.answer
-            line = info.answer or texts.ADMIN_WILL_ANSWER
+            if self._route_now(c, text) is not None:
+                # after a route nothing is said about our trauma centre: the administrator's
+                line, note = texts.ADMIN_WILL_ANSWER, True
+            else:
+                info = await _answered(self._llm(c), text, await self._known(c))
+                note = not info.answer
+                line = info.answer or texts.ADMIN_WILL_ANSWER
         elif reading.kind == "about_bot":
             line = texts.ABOUT_BOT
         elif reading.kind == "complaint" and self._same_complaint(c, reading):
@@ -2685,6 +2747,9 @@ class Conversation:
 
     async def _answer_too(self, c: Ctx, text: str) -> None:
         """«Сколько стоит и запишите на завтра»: the answer first, then the request."""
+        if self._route_now(c, text) is not None:
+            c.say(texts.ADMIN_WILL_ANSWER)  # after a route: not an answer about us
+            return
         info = await _answered(self._llm(c), text, await self._known(c))
         c.say(info.answer or (texts.INFO_DOWN if info.unavailable else texts.ASIDE_UNKNOWN))
 
