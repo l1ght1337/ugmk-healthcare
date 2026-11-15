@@ -279,14 +279,6 @@ def center_address(clinic: ClinicData) -> str:
     return f"{address}, {markup.esc(center.entrance)}"
 
 
-def when_lines(start: datetime) -> list[str]:
-    """«📅 Дата: пятница, 13 ноября», «🕒 Время: 14:30» — the lines of the booking card."""
-    return [
-        f"{texts.MARK_DAY} {texts.CARD_DATE}: {format_weekday_date(start.date())}",
-        f"{texts.MARK_TIME} {texts.CARD_TIME}: {start:%H:%M}",
-    ]
-
-
 def documents(kb: KnowledgeBase, audience: Audience) -> str:
     """Step 6 of the booking scripts: what to bring."""
     c = kb.common

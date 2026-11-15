@@ -514,11 +514,12 @@ MOVE_ITEM = "{day}, {time} — {patient}"  # «Чт, 12.11, 13:00 — Петро
 MOVED = "Готово, запись перенесена на {date} в {time}. Врач: {doctor}."
 BOOKING_GONE = "Эта запись уже неактуальна."
 
-# Reminders name the day explicitly («📅 Дата: пятница, 13 ноября»), so the text stays true
-# when /demo_next sends them early. The bold line, then the lines of the booking card: the
-# date, the time, the doctor or the address behind their marks.
-REMINDER_DAY = "Напоминаем: приём травматолога-ортопеда в травмпункте."
-REMINDER_TWO_HOURS = "Скоро приём в травмпункте."
+# Reminders name the day explicitly («в пятницу, 13 ноября, в 14:30»), so the text stays
+# true when /demo_next sends them early. When and what stand in the first, bold line: a push
+# notification and the list of chats show only the beginning of a message. The date and the
+# time are not repeated on lines of their own.
+REMINDER_DAY = "Напоминаем: {when} — приём травматолога-ортопеда в травмпункте."
+REMINDER_TWO_HOURS = "Скоро приём в травмпункте: {when}."
 REMINDER_PATIENT = "Пациент"
 WEEKDAYS_ON = (
     "в понедельник",

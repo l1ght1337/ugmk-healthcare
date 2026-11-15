@@ -3,9 +3,13 @@
 The reminders (a day and two hours before), the survey after the visit and the reminder
 about an unfinished booking were built as plain ``Reply`` past ``Ctx.say``: no bold line, no
 labels, the address as text. Now the bold line is what the patient is to read or to answer;
-the date, the time, the doctor and the address stand on lines behind 📅 🕒 🩺 📍, as on the
-booking card; the address is a link to the map; a service note is a quote. The words of the
-scripts (what to bring, the parking) are the same.
+the doctor, the patient and the address stand on lines behind 🩺 📝 📍; the address is a link
+to the map; a service note is a quote. The words of the scripts (what to bring, the parking)
+are the same.
+
+A push notification and the list of chats show only the beginning of a message: when and
+what stand in the first line — «Напоминаем: в пятницу, 13 ноября, в 14:30 — приём…». The
+date and the time are not repeated on lines of their own.
 
 The clinic clock is Thursday, 12 November 2026, 12:00.
 """
@@ -46,12 +50,13 @@ async def test_the_reminder_a_day_before(make_chat, kb) -> None:
     chat = make_chat()
     await book_dislocation(chat, day="Завтра")
     reply = await reminder(chat, DAY_BEFORE)
-    head, date, time, doctor, patient, gap, bring = reply.text.split("\n")
-    assert head == "Напоминаем: приём травматолога-ортопеда в травмпункте."
-    assert date == "📅 Дата: пятница, 13 ноября" and time.startswith("🕒 Время: ")
+    head, doctor, patient, gap, bring = reply.text.split("\n")
+    assert head.startswith("Напоминаем: в пятницу, 13 ноября, в ")  # when — in the first line
+    assert head.endswith(" — приём травматолога-ортопеда в травмпункте.")
     assert doctor.startswith("🩺 Врач: ") and patient == "📝 Пациент: Петров Иван Сергеевич"
     assert gap == "" and bring == render.documents(kb, "adult")  # the words of the script
     assert marked(reply) == [("bold", head)]
+    assert "📅" not in reply.text and "🕒" not in reply.text  # not said twice
     assert [b.label for row in reply.buttons for b in row] == [
         texts.CONFIRM,
         texts.MOVE,
@@ -63,15 +68,26 @@ async def test_the_reminder_two_hours_before(make_chat, kb) -> None:
     chat = make_chat()
     await book_dislocation(chat)
     reply = await reminder(chat, TWO_HOURS)
-    head, date, time, address, gap, parking = reply.text.split("\n")
-    assert head == "Скоро приём в травмпункте."
-    assert date == "📅 Дата: четверг, 12 ноября" and time.startswith("🕒 Время: ")
+    head, address, gap, parking = reply.text.split("\n")
+    assert head.startswith("Скоро приём в травмпункте: в четверг, 12 ноября, в ")
+    assert head.endswith(".") and head[-6:-1].replace(":", "").isdigit()  # «…, в 14:30.»
     assert address == "📍 Адрес: ул. Шейнкмана, 113/2, вход через детское отделение"
     assert gap == "" and "подземный паркинг" in parking  # the script phrase, in short
+    assert "📅" not in reply.text and "🕒" not in reply.text
     bold, link = reply.spans
     assert (bold.kind, reply.text[bold.start : bold.end]) == ("bold", head)
     assert (link.kind, reply.text[link.start : link.end]) == ("link", "ул. Шейнкмана, 113/2")
     assert link.url is not None and link.url.startswith(MAP) and "%D0%95%D0%BA" in link.url
+
+
+def test_a_notification_begins_with_when_and_what() -> None:
+    """What a push notification shows: the first line of every message the bot sends by
+    itself names what it is about — and the reminders, the day and the time."""
+    assert texts.REMINDER_DAY.startswith("Напоминаем: {when} — приём")
+    assert texts.REMINDER_TWO_HOURS.startswith("Скоро приём в травмпункте: {when}")
+    assert texts.AFTER_VISIT.startswith("Как прошёл приём")
+    assert texts.UNFINISHED.startswith("Вы начали запись в травмпункт")
+    assert texts.ADMIN_ANSWER.startswith("Ответ администратора")
 
 
 async def test_a_patients_name_with_marks_in_it_stays_as_typed(make_chat) -> None:

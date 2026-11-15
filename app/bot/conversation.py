@@ -4489,11 +4489,10 @@ class Conversation:
             ),
         )
         common = self.kb.common
-        when = render.when_lines(start)
+        when = render.format_when(start)  # «в пятницу, 13 ноября, в 14:30»: the first line
         if kind == DAY_BEFORE:
             lines = [
-                markup.bold(texts.REMINDER_DAY),
-                *when,
+                markup.bold(texts.REMINDER_DAY.format(when=when)),
                 f"{texts.MARK_DOCTOR} {texts.CARD_DOCTOR}: {markup.esc(b.doctor)}",
                 f"{texts.MARK_BOOKING} {texts.REMINDER_PATIENT}: {markup.esc(patient.full_name)}",
             ]
@@ -4504,8 +4503,7 @@ class Conversation:
             center = self.clinic.contacts.trauma_center
             address = render.center_address(self.clinic)
             lines = [
-                markup.bold(texts.REMINDER_TWO_HOURS),
-                *when,
+                markup.bold(texts.REMINDER_TWO_HOURS.format(when=when)),
                 f"{texts.MARK_ADDRESS} {texts.CARD_ADDRESS}: {address}",
             ]
             day = center.underground_parking_hours.contains(start.time())
