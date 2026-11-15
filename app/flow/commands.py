@@ -717,18 +717,21 @@ def asks_when_admin(text: str) -> bool:
     return _WHEN_ANSWER.search(t) is not None and doctor is None
 
 
-DangerQuestion = Literal["where", "how_long", "insists", "called", "other"]
+DangerQuestion = Literal["where", "how_long", "insists", "aid", "called", "other"]
 
 
-def danger_question(text: str) -> DangerQuestion:
+def danger_question(text: str, first_aid: Sequence[str] = ()) -> DangerQuestion:
     """What a message asks in the «угроза жизни» state: «куда ехать?» → where, «сколько
-    ждать?» → how_long, «записывайте», «не буду звонить» → insists, «вызвал скорую»,
+    ждать?» → how_long, «записывайте», «не буду звонить» → insists, «что делать, пока
+    едут?», «жгут накладывать?» → aid (``first_aid`` — config/clinic.yaml), «вызвал скорую»,
     «спасибо» → called; anything else — other."""
     t = normalize(text)
     for kind, pattern in _DANGER_QUESTIONS:
+        if kind == "called" and _has(t, first_aid):
+            return "aid"  # asked what to do till the ambulance comes: not «хорошо»
         if pattern.search(t):
             return kind
-    return "other"
+    return "aid" if _has(t, first_aid) else "other"
 
 
 def asks_urgency(text: str, words: Sequence[str], was: Sequence[str] = ()) -> bool:

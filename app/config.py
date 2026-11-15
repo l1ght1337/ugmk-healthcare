@@ -196,6 +196,8 @@ class Emergency(_Data):
     # the ambulance has been called or has been there: «вызвали», «едет», «увезла» — the
     # template about urgency is not said
     ambulance_was: tuple[str, ...] = ()
+    # in the «угроза жизни» state: a question about first aid — the dispatcher's to answer
+    first_aid: tuple[str, ...] = ()
     # what the patient is going to do — «вызову скорую», «в скорую позвоню» — is not asked
     ambulance_will: tuple[str, ...] = ()
     # after any other phrase of the list no words switch the state off: «Меню» or /start

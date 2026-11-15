@@ -2162,6 +2162,7 @@ class Conversation:
             "insists": texts.DANGER_NO_BOOKING,
             "where": where,
             "how_long": texts.DANGER_HOW_LONG,
+            "aid": texts.DANGER_AID,
             "called": texts.DANGER_CALLED,
             "other": texts.DANGER_OTHER,
         }
@@ -2198,7 +2199,8 @@ class Conversation:
             await self._handoff(c, texts.ASK_ADMIN_REASON, text)
             return
         self._reset(c)  # whatever step it was: nothing goes on
-        await self._danger_say(c, danger_question(text))
+        first_aid = self.clinic.clinic.emergency.first_aid
+        await self._danger_say(c, danger_question(text, first_aid))
 
     # --- after a route (rule 5): the same injury is not booked ------------------------------
 

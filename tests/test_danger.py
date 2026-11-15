@@ -158,6 +158,32 @@ async def test_the_ambulance_was_called(make_chat) -> None:
     assert chat.text == texts.DANGER_CALLED and chat.labels() == STATE
 
 
+AID = (
+    "Я бот и советов по первой помощи не даю.\n"
+    "⚠️ Что делать до приезда бригады, скажет диспетчер 103 или 112."
+)
+
+
+@pytest.mark.parametrize(
+    "asked",
+    [
+        "вызвали, что делать, пока едут?",  # run 8, bleeding
+        "жгут накладывать?",
+        "скорая едет, как остановить кровь пока?",
+        "чем перевязать, пока ждём?",
+    ],
+)
+async def test_first_aid_is_the_dispatchers_to_say(make_chat, asked: str) -> None:
+    """Run 8, bleeding: «что делать, пока едут?» got «Хорошо. Когда понадобится запись в
+    травмпункт — напишите»."""
+    chat = make_chat()
+    await on(chat)
+    await chat.say(asked)
+    assert chat.text == AID and chat.labels() == STATE
+    await chat.say("вызвал скорую, спасибо")  # nothing is asked: as before
+    assert chat.text == texts.DANGER_CALLED
+
+
 async def test_the_clinics_own_line_is_added_to_every_answer(make_chat, clinic: ClinicData) -> None:
     phone = "+7 (343) 000-00-00"
     line = texts.AMBULANCE_LINE.format(phone=phone)
