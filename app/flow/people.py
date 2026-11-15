@@ -61,6 +61,9 @@ _RELATIVES = tuple(
 _SELF = re.compile(r"\bу\s+меня\b|\bдля\s+себя\b|\bсебя\b|(?<!у\s)\bменя\b|\bмне\s+\d{1,2}\b")
 # «я повредил запястье», «я упал», «мне прищемило палец»: the writer, by any word of an injury
 _ME = re.compile(r"\b(?:я|мне)\b")
+# «вы меня запишете?», «меня примут?»: a question whether the writer is taken — not «I am
+# hurt too», and not one more patient
+_NOT_ME = re.compile(r"\bвы\s+меня\b|\bменя\s+(?:\w+\s+)?(?:запишете|запишут|примете|примут)\b")
 _ME_TOO = re.compile(r"(?<!у\s)\bменя\b|\bсебя\b")  # next to a relative, in the same words
 # «у меня двое детей упали», «у меня дети с горки упали»: whose they are, not who is hurt
 _MINE = re.compile(
@@ -135,7 +138,7 @@ def _marker(clause: str) -> tuple[str, str | None, tuple[int, int], str | None] 
     for name, pattern in _NAMES:
         if found := pattern.search(clause):
             return name, None, found.span(), found["with"]
-    if (found := _SELF.search(low)) and not _MINE.search(low):
+    if (found := _SELF.search(low)) and not _MINE.search(low) and not _NOT_ME.search(low):
         return "", "self", found.span(), None
     if (found := _ME.search(low)) and _about_injury(low[: found.start()] + low[found.end() :]):
         return "", "self", found.span(), None  # «я повредил запястье»: hurt, so a patient
@@ -241,7 +244,8 @@ def find_people(text: str) -> list[Person]:
                 age = None  # the writer's age is not asked: «для себя» is an adult
             person = Person(name=name, audience=audience, age_months=age, complaint=complaint)  # type: ignore[arg-type]
             around = low[: span[0]] + " " + low[span[1] :]
-            if name and _ME_TOO.search(around) and not any(not p.name for p in found):
+            me_too = _ME_TOO.search(around) and not _NOT_ME.search(low)
+            if name and me_too and not any(not p.name for p in found):
                 found.append(Person(name="", audience="self"))  # «запишите меня с ребёнком»
             if together and "мы" in together.lower() and not any(not p.name for p in found):
                 # «мы с мужем подвернули ногу»: the writer too, with the same words

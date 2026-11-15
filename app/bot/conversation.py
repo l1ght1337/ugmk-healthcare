@@ -52,6 +52,7 @@ from app.flow.commands import (
     asks_about_visit,
     asks_advice,
     asks_to_be_taken,
+    asks_urgency,
     asks_when_admin,
     asks_when_phone,
     asks_where_to_go,
@@ -165,6 +166,8 @@ LABEL_MAX = 40  # a button's label, so that it is not cut on a phone
 TOPIC_DEPTH = 3  # how many topic menus one typed word may go through
 SAME_COMPLAINT = timedelta(minutes=30)  # the same complaint this soon is not a new one
 TOLD_KEPT = 5  # messages of a complaint kept for the questions of its scenario
+# «так вы нас запишете или нет?», «примете?» after a route: whether the trauma centre takes
+_ASKS_TAKEN = re.compile(r"\b(?:запи[сш]\w+|прим(?:ете|ут|ешь)|принима\w+)\b")
 TALK_IDLE = timedelta(hours=6)  # a silence this long starts a new conversation (Talk)
 WELCOME_EVERY = timedelta(days=1)  # the welcome animation: not more often for one user
 FEW_WORDS = 3  # «да, передайте», «для сына»: a longer message says something more
@@ -1361,6 +1364,8 @@ class Conversation:
             found = topics.guard_scenarios(self.kb, text)
             if new := [g for g in found if g not in c.s.talk.guard_no]:
                 c.s.talk.guards = new
+        if await self._urgency(c, step, text):
+            return  # «скорую вызывать?», «это срочно?»: the same answer everywhere
         people = step not in PATIENT_DATA_STEPS  # on the steps of the data nobody is read
         if people and await self._named_later(c, step, text):
             return  # «и сына тоже запишите» in the middle of a booking: his turn is next
@@ -1583,6 +1588,8 @@ class Conversation:
             return False
         hours = self.clinic.contacts.admin_working_hours
         line = texts.HANDOFF_WHEN.format(start=f"{hours.start:%H:%M}", end=f"{hours.end:%H:%M}")
+        if self._routed(c) is not None:
+            line = f"{line}\n{texts.DO_NOT_WAIT}"  # after a route the call is not waited for
         handoff = await self._open_handoff(c)
         if step == "teen":  # one line under the buttons of that screen
             await self._teen_say(c, "hours", line)
@@ -1837,6 +1844,18 @@ class Conversation:
         routed = c.s.talk.routed
         if routed is None or c.s.talk.other:
             return None
+        return self._route_of(routed)
+
+    def _last_route(self, c: Ctx) -> Done | None:
+        """The route of section 5 — or the one a booking scenario gave by the answers («ожог
+        лица — в приёмный покой»): what a question about urgency or about that hospital is
+        answered with."""
+        done = self._routed(c)
+        if done is None and c.s.talk.answered is not None and not c.s.talk.other:
+            done = self._route_of(c.s.talk.answered)
+        return done if done is not None and done.places else None
+
+    def _route_of(self, routed: Routed) -> Done | None:
         d = routed.dialog
         if d.scenario_id is None or d.outcome_id is None:
             return None
@@ -1897,6 +1916,27 @@ class Conversation:
             said = f"{said}\n\n{texts.QUESTIONS_TO_ADMIN}"
         c.say(said, self._ask_admin_buttons())
 
+    async def _urgency(self, c: Ctx, step: str, text: str) -> bool:
+        """«Скорую вызывать?», «это срочно?»: the template of the code, wherever it is asked
+        and however many times — and the address of the route under it, if one was given.
+        The step and its buttons stay."""
+        if step in MESSAGE_STEPS or not asks_urgency(text, self.clinic.clinic.emergency.asks):
+            return False
+        said = [texts.URGENCY]
+        done = self._last_route(c)
+        if done is not None:
+            places = "\n".join(render.place_line(p, self._city()) for p in done.places)
+            said += ["", texts.ROUTE_GO, places, texts.ROUTE_THERE]
+        answer = "\n".join(said)
+        if step in WIZARD_STEPS or c.s.reschedule_of is not None:
+            c.say(answer)  # a booking is under way: the answer, then the same step
+            await self._render_screen(c)
+        elif step == "offer_admin":
+            c.say(answer, self._ask_admin_buttons())
+        else:
+            c.say(answer, self._main_menu(c))
+        return True
+
     async def _route_words(self, c: Ctx, step: str, text: str) -> bool:
         """What the words say after a route, without DeepSeek.
 
@@ -1912,14 +1952,18 @@ class Conversation:
             return False
         if wants_handoff(text) or find_command(text) == "admin":
             return False  # «передайте вопрос администратору»: a request, not a question
-        if self._injury_named(c, text):
+        # a question about the hospital of the route is about it, whatever else the message
+        # says («…просто приехать? Голова побаливает»): the route and that the bot has no
+        # data on how they receive there — not «не в травмпункт», not «нет информации»
+        named = [f"{p.facility.name}, {p.facility.address or ''}" for p in done.places]
+        there = is_question(text) and asks_about_there(text, named)
+        if not there and self._injury_named(c, text):
             return False  # «а с вывихом пальца можно записаться?»: the same one or another
         if asks_where_to_go(text):
             waits = mentions_call(text) or await self._open_handoff(c) is not None
             await self._route_line(c, done, "no_wait" if waits else "go", text)
             return True
-        named = [f"{p.facility.name}, {p.facility.address or ''}" for p in done.places]
-        if is_question(text) and asks_about_there(text, named):
+        if there:
             await self._route_line(c, done, "there", text)
             return True
         if asks_to_be_taken(text):  # «а тут что, нельзя записаться?»: a question, not an order
@@ -2415,6 +2459,17 @@ class Conversation:
             return
         if await self._after_route(c, text, reading):
             return  # the injury a route was given for: the route once more, not step 1
+        d = c.s.dialog
+        taken = "?" in text and _ASKS_TAKEN.search(normalize(text)) is not None
+        another = any(sid not in d.trail for sid in topics.guess_candidates(text))
+        if taken and not another and d.scenario_id is not None:
+            # «так вы нас запишете или в приёмный покой ехать?», «у неё лицо красное, вы нас
+            # примете?» right after the route a scenario gave: that route with its reason,
+            # whatever DeepSeek calls the message — not a request to the administrators, not
+            # another scenario, not the reference that «ожоги мы принимаем»
+            same = replace(reading, kind="complaint", scenario_id=d.scenario_id, facts={})
+            if await self._said_already(c, text, same):
+                return
         injury = self._injury_in(text)
         other = reading.kind == "schedule_question" or (
             reading.kind == "menu_action" and reading.action in ("book", "my_bookings")
@@ -5391,6 +5446,8 @@ class Conversation:
         if (left := self._not_booked(c)) is not None:
             # said first and plainly: the booking is not made; «Продолжить запись» is below
             text = f"{markup.bold(left)}\n\n{text}"
+        if passed and self._routed(c) is not None:
+            text = f"{text}\n{texts.DO_NOT_WAIT}"  # after a route the call is not waited for
         c.say(f"{text}\n\n{self.kb.common.more_help.text}", self._main_menu(c))
 
     def _handoff_done(self, c: Ctx) -> None:

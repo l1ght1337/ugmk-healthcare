@@ -196,6 +196,13 @@ SAME_INJURY = "Та же"
 OTHER_INJURY = "Другая"
 # «ехать или ждать звонка?», «а туда как, просто приехать?» after a route: templates, the
 # places of the route follow «Обратиться нужно:»; 103 / 112 is the clinic's emergency line
+# A question about urgency («скорую вызывать?», «это срочно?»): the same answer everywhere,
+# from the code; under it — the address of the route, if one was given in the conversation
+URGENCY = (
+    "Оценить состояние я не могу. Если сомневаетесь или становится хуже — звоните 103 или 112."
+)
+# with a request to the administrators made after a route, and with their hours
+DO_NOT_WAIT = "Не ждите звонка, если становится хуже: 103 или 112."
 ROUTE_NO_WAIT = "Ждать звонка администратора для этого не нужно."
 ROUTE_GO = "Обратиться нужно:"
 ROUTE_THERE = "Как там принимают, у меня данных нет — уточните в самом учреждении."

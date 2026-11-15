@@ -190,6 +190,9 @@ class EmergencyOver(_Data):
 class Emergency(_Data):
     reply: str
     phrases: tuple[str, ...] = Field(min_length=1)
+    # words of a question about urgency («скорую вызывать?», «это срочно?»): the answer is
+    # a template of the code with 103 and 112, never DeepSeek's
+    asks: tuple[str, ...] = ()
     # after any other phrase of the list no words switch the state off: «Меню» or /start
     over: tuple[EmergencyOver, ...] = ()
     routes: tuple[EmergencyRoute, ...] = ()

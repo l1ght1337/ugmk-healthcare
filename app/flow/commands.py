@@ -471,6 +471,10 @@ _VISIT = (
     r"добраться|обращаться|запис\w+|работа\w+|круглосуточн\w+|очеред\w+|документ\w+|платн\w+|"
     r"бесплатн\w+|адрес\w*|телефон\w*)"
 )
+# a hospital is not the trauma centre: «в больницу записываться надо или просто приехать?»,
+# «в приёмный покой ехать?» after a route are about the place of the route
+_HOSPITAL = r"(?:больниц\w+|приемн\w+\s+поко\w+)"
+_HOSPITAL_VISIT = re.compile(rf"\b{_HOSPITAL}\b.*\b{_VISIT}\b|\b{_VISIT}\b.*\b{_HOSPITAL}\b")
 _HOW_THERE = re.compile(r"\bкак\s+(?:туда|там)\b|\b(?:туда|там)\s+как\b")  # «а туда как?»
 # «там круглосуточно принимают?», «туда можно сегодня прийти?» — the word about a visit
 # stands next to «там»; «меня примут? … там же игла была» is about the wound
@@ -691,6 +695,25 @@ def danger_question(text: str) -> DangerQuestion:
     return "other"
 
 
+def asks_urgency(text: str, words: Sequence[str]) -> bool:
+    """«Скорую вызывать?», «ехать самой или скорую?», «это срочно?», «это опасно?» — a
+    question about how urgent it is. ``words`` — config/clinic.yaml, ``emergency.asks``, as
+    whole words; the message asks («?») or weighs calling («вызывать»). «Вызову скорую
+    тогда», «мне срочно нужна справка» are not questions about it."""
+    t = f" {normalize(text)} "
+    said = [word for word in words if f" {normalize(word)} " in t]
+    if not said:
+        return False
+    if any(" " in word for word in said):  # «это срочно», «насколько опасно»: a question
+        return "?" in text
+    # the ambulance: whether to call it — «скорую вызывать?», «ехать самой или скорую?»; «как
+    # вызвать скорую?» and «у клиники есть своя скорая?» ask about the service, not the state
+    if re.search(r"\bкак\s+(?:\w+\s+)?вызв\w+|\bвызв\w+\s+(?:\w+\s+)?как\b", t):
+        return False
+    weighs = re.search(r"\b(?:вызывать|вызвать|или|надо|нужно|нужна)\b", t) is not None
+    return weighs and ("?" in text or re.search(r"\bвызывать\b", t) is not None)
+
+
 def asks_to_be_taken(text: str) -> bool:
     """«А тут что, нельзя записаться?», «в травмпункт ваш можно записаться или нет?», «меня
     всё-таки примут?» — a question whether the trauma centre takes the patient, not an order
@@ -716,7 +739,17 @@ def asks_about_there(text: str, places: Sequence[str]) -> bool:
     t = re.sub(r"\bне\s+туда\b", " ", normalize(text))  # «боюсь везти не туда»
     if _THAT_PLACE.search(t) or _HOW_THERE.search(t) or _VISIT_THERE.search(t):
         return True
+    if _HOSPITAL_VISIT.search(t):  # «в больницу записываться надо или просто приехать?»
+        return True
+    for number in _numbers(places):  # «в 23-ю больницу», «больница № 23»
+        if re.search(rf"\b{number}\s+(?:\w{{1,2}}\s+)?{_PLACE_NOUN}|{_PLACE_NOUN}\s+{number}\b", t):
+            return True
     return any(re.search(rf"\b(?:на|в|во|до|к|у|около)\s+{stem}\w*", t) for stem in _stems(places))
+
+
+def _numbers(places: Sequence[str]) -> list[str]:
+    """The numbers in the names of the places of a route: «больница № 23» → «23»."""
+    return re.findall(r"№\s*(\d+)", " ".join(places))
 
 
 def _stems(places: Sequence[str]) -> list[str]:
