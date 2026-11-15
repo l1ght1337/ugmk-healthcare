@@ -172,7 +172,8 @@ OFFER_HANDOFF = "Передать вопрос администратору?"
 # a question typed on «Передать администратору?» that the reference does not answer
 ADMIN_WILL_ANSWER = "На этот вопрос ответит администратор."
 # the same complaint again right after its route: said plainly, with a way on
-NOT_BOOKED_HERE = "С этим в травмпункт не записываем. Обратиться нужно:"  # the places follow
+# … the first sentence is the bold line, the places follow «Обратиться нужно:»
+NOT_BOOKED_HERE = "С этим в травмпункт не записываем.\nОбратиться нужно:"
 QUESTIONS_TO_ADMIN = "Если остались вопросы, я передам их администратору."
 # The scenario's own question (kb/scenarios, guard_question) before a booking scenario that
 # DeepSeek named for a complaint with the words of section 5: «это укол чужой иглой?»
@@ -624,8 +625,8 @@ PERIOD_NIGHT = "Ночь 23–8"
 NEAREST = "Ближайшее: {when}"
 EARLIER = "‹ Раньше"
 LATER = "Позже ›"
-SHIFT_DOCTOR = "Врач смены: {doctor} ({span})"
-SHIFT_DOCTORS = "Врачи смены:"
+SHIFT_DOCTOR = "🩺 Врач смены: {doctor} ({span})"
+SHIFT_DOCTORS = "🩺 Врачи смены:"
 SHIFT_FROM = "с {time}"
 SHIFT_UNTIL = "до {time}"
 REPEAT_CABINET_DOCTOR = "Повторный приём в кабинете «{cabinet}»: {doctor}"
@@ -716,7 +717,7 @@ BOT_SHORT_DESCRIPTION = (
 )
 BOT_DEMO_NOTE = "Тестовый режим: записи демонстрационные."
 # service notes: shown as a quote (app/bot/markup.py, rules)
-QUOTED = (BOT_DEMO_NOTE, DEMO_BOOKING, WHY_NAME, WHY_PHONE)
+QUOTED = (BOT_DEMO_NOTE, DEMO_BOOKING, WHY_NAME, WHY_PHONE, CONSENT_WITHDRAW)
 COMMANDS = (
     ("start", "Начать"),
     ("book", "Записаться в травмпункт"),

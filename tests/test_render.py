@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from urllib.parse import unquote
 
 import pytest
 
-from app.bot import render, texts
+from app.bot import markup, render, texts
 from app.config import ClinicData
 from app.flow.engine import Place
 from app.flow.loader import KnowledgeBase
@@ -47,29 +48,36 @@ def test_handoff_gives_the_reason_the_number_and_the_next_step(clinic: ClinicDat
 
 
 def test_place_line(kb: KnowledgeBase) -> None:
-    line = render.place_line(Place(kb.facilities["gkb14"], label="Женщины", note="кроме ЧМТ"))
-    assert line == (
-        "• Женщины: Городская клиническая больница № 14, пер. Суворовский, 5В "
+    place = Place(kb.facilities["gkb14"], label="Женщины", note="кроме ЧМТ")
+    text, spans = markup.parse(render.place_line(place, "Екатеринбург"))
+    assert text == (
+        "📍 Женщины: Городская клиническая больница № 14, пер. Суворовский, 5В "
         "(без КТ и МРТ; кроме ЧМТ)"
     )
-    assert render.place_line(Place(kb.facilities["municipal_trauma_center"])) == (
-        "• Любой муниципальный травмпункт"
+    (link,) = spans  # the address, as the scenario has it, is a link to the map search
+    assert (link.kind, text[link.start : link.end]) == ("link", "пер. Суворовский, 5В")
+    assert unquote(link.url or "") == (
+        "https://yandex.ru/maps/?text=Екатеринбург, пер. Суворовский, 5В"
     )
+    assert " " not in (link.url or "") and "(" not in (link.url or "")
+    assert markup.parse(render.place_line(place)) == (text, ())  # no city: no link
+    nowhere = Place(kb.facilities["municipal_trauma_center"])  # a place with no address
+    assert render.place_line(nowhere, "Екатеринбург") == "📍 Любой муниципальный травмпункт"
 
 
 def test_route_lists_places_under_the_script_phrase(run, clinic: ClinicData) -> None:
     w = run("genital_trauma", {}, audience="child", age_months=5 * 12)
-    text = render.outcome_message(w.step, clinic, NOW)
+    text = markup.plain(render.outcome_message(w.step, clinic, NOW))
     assert text.startswith("В травмпункте у нас принимает только травматолог-ортопед.")
-    assert "обратиться:\n• Мальчики до 18 лет: ДГКБ № 9, приёмный покой, ул. Решетская, 51" in text
+    assert "обратиться:\n📍 Мальчики до 18 лет: ДГКБ № 9, приёмный покой, ул. Решетская, 51" in text
     assert "Девочки до 18 лет: Областная детская клиническая больница № 1" in text
 
 
 def test_emergency_outcome_text(run, clinic: ClinicData) -> None:
     w = run("animal_bite", {"danger_signs": True})
-    text = render.outcome_message(w.step, clinic, NOW)
+    text = markup.plain(render.outcome_message(w.step, clinic, NOW))
     assert text.startswith("При угрозе жизни звоните 103 или 112.")
-    assert "Также можно обратиться:\n• Токсикологическое отделение ГКБ № 14" in text
+    assert "Также можно обратиться:\n📍 Токсикологическое отделение ГКБ № 14" in text
 
 
 def _slot(hour: int) -> Slot:
@@ -123,9 +131,9 @@ def test_confirmation(run, kb: KnowledgeBase, clinic: ClinicData, hour: int, nig
 def test_route_without_script_phrase_gets_a_lead(run, clinic: ClinicData) -> None:
     w = run("cut_sutures", {"wound_location": "face_neck_head"}, audience="child", age_months=108)
     assert not w.step.outcome.say
-    text = render.outcome_message(w.step, clinic, NOW)
+    text = markup.plain(render.outcome_message(w.step, clinic, NOW))
     assert text.startswith(
-        "С такой травмой Вам нужно обратиться:\n• ДГКБ № 9, приёмный покой, ул. Решетская, 51"
+        "С такой травмой Вам нужно обратиться:\n📍 ДГКБ № 9, приёмный покой, ул. Решетская, 51"
     )
 
 
@@ -137,10 +145,10 @@ def test_open_fracture_mentions_ambulance(run, clinic: ClinicData, audience: str
         audience=audience,
         age_months=10 * 12,
     )
-    text = render.outcome_message(w.step, clinic, NOW)
+    text = markup.plain(render.outcome_message(w.step, clinic, NOW))
     assert text.startswith(
         "Если кость видна в ране или кровотечение не останавливается, вызывайте скорую: "
-        "103 или 112. С такой травмой Вам нужно обратиться:\n• "
+        "103 или 112. С такой травмой Вам нужно обратиться:\n📍 "
     )
 
 

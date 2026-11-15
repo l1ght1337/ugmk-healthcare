@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.bot import render
+from app.bot.markup import plain
 from app.config import ClinicData
 from app.flow.loader import KnowledgeBase
 from app.flow.safety import find_emergency
@@ -35,7 +36,9 @@ async def test_case_01_adult_dislocation_books_primary(
     assert w.step.kind == "book"
     booking = w.step.outcome.booking
     assert (booking.visit, booking.slot_policy) == ("primary", "nearest")
-    assert "вывих, врач попробует его вправить" in render.outcome_message(w.step, clinic, NOW)
+    assert "вывих, врач попробует его вправить" in plain(
+        render.outcome_message(w.step, clinic, NOW)
+    )
 
     slots = await find_slots(schedule, booking, now=NOW, config=clinic.schedule)
     assert slots and all(not s.repeat_window and not s.repeat_cabinet for s in slots)
@@ -176,13 +179,13 @@ def test_case_04_dog_bite_mentions_vaccine(run, clinic: ClinicData) -> None:
         "seen_doctor": "no",
     }
     w = run("animal_bite", answers, audience="child", age_months=7 * 12)
-    assert "Антирабической вакцины нет" in render.outcome_message(w.step, clinic, NOW)
+    assert "Антирабической вакцины нет" in plain(render.outcome_message(w.step, clinic, NOW))
 
 
 def test_case_04_ligament_insists_offers_hospitals_and_admin(run, clinic: ClinicData) -> None:
     w = run("ligament_rupture", {**NO_ASSAULT, "rupture_certainty": "insists"})
     assert facilities(w) == ["gkb40", "gkb14", "cgb23"]
-    text = render.outcome_message(w.step, clinic, NOW)
+    text = plain(render.outcome_message(w.step, clinic, NOW))
     assert "С разрывами связок Вам нужно обратиться:" in text
     assert "подозрением" not in text
     assert "передать Ваше обращение администратору" in text
@@ -195,7 +198,10 @@ def test_case_05_fight_goes_to_municipal_trauma_center(run, clinic: ClinicData) 
     """«Подрался на улице, хочу снять побои» → 5.1, no question about the audience."""
     w = run("criminal_trauma", {}, audience=None)
     assert facilities(w) == ["municipal_trauma_center"]
-    assert "любой муниципальный травмпункт" in render.outcome_message(w.step, clinic, NOW).lower()
+    assert (
+        "любой муниципальный травмпункт"
+        in plain(render.outcome_message(w.step, clinic, NOW)).lower()
+    )
 
 
 @pytest.mark.parametrize("scenario_id", ["dislocation", "fracture", "ligament_rupture"])
@@ -211,7 +217,7 @@ def test_case_06_infant_under_6_months(run, clinic: ClinicData, scenario_id: str
     w = run(scenario_id, {}, audience="child", age_months=4)
     assert w.asked == []
     assert w.step.scenario.id == "infant_under_6m"
-    assert "Серафимы Дерябиной, 32" in render.outcome_message(w.step, clinic, NOW)
+    assert "Серафимы Дерябиной, 32" in plain(render.outcome_message(w.step, clinic, NOW))
 
 
 def test_case_06_six_months_is_not_infant(run) -> None:
@@ -226,7 +232,9 @@ def test_case_07_adult_head_injury(run) -> None:
 
 def test_case_08_needle(run, clinic: ClinicData) -> None:
     w = run("needle_injury", {}, audience=None)
-    assert "Центр борьбы со СПИДом, ул. Ясная, 46" in render.outcome_message(w.step, clinic, NOW)
+    assert "Центр борьбы со СПИДом, ул. Ясная, 46" in plain(
+        render.outcome_message(w.step, clinic, NOW)
+    )
 
 
 def test_case_09_child_pin_removal(run) -> None:

@@ -10,8 +10,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from urllib.parse import quote
 
-from app.bot import texts
+from app.bot import markup, texts
 from app.config import ClinicData
 from app.flow.engine import AskPatient, AskQuestion, Done, Place
 from app.flow.loader import KnowledgeBase
@@ -189,15 +190,31 @@ def ask_question(step: AskQuestion, clarify: str | None = None, *, pick: bool = 
     return Prompt(text, step.question.buttons())
 
 
-def place_line(place: Place) -> str:
+MAP_SEARCH = "https://yandex.ru/maps/?text="
+
+
+def map_url(city: str, address: str) -> str:
+    """The search «Екатеринбург, ул. Ясная, 46» on the map."""
+    return MAP_SEARCH + quote(f"{city}, {address}")
+
+
+def place_line(place: Place, city: str | None = None) -> str:
+    """«📍 Центр борьбы со СПИДом, ул. Ясная, 46» — a marked line (app/bot/markup.py).
+
+    The address is a link to the map search «город, адрес»; its text is the one of the
+    scenario's data, nothing is added to it. A place with no address has no link.
+    """
     fac = place.facility
-    text = f"{fac.name}, {fac.address}" if fac.address else fac.name
+    text = markup.esc(fac.name)
+    if fac.address:
+        address = markup.esc(fac.address)
+        text += ", " + (markup.link(address, map_url(city, fac.address)) if city else address)
     if place.label:
-        text = f"{place.label}: {text}"
-    notes = [n for n in (fac.note, place.note) if n]
+        text = f"{markup.esc(place.label)}: {text}"
+    notes = [markup.esc(n) for n in (fac.note, place.note) if n]
     if notes:
         text += f" ({'; '.join(notes)})"
-    return f"• {text}"
+    return f"{texts.MARK_ADDRESS} {text}"
 
 
 def handoff_when(clinic: ClinicData, now: datetime) -> str:
@@ -230,7 +247,7 @@ def outcome_message(done: Done, clinic: ClinicData, now: datetime) -> str:
         parts.append(emergency_message(clinic))
     parts.extend(done.outcome.say)
     if done.places:
-        lines = [place_line(p) for p in done.places]
+        lines = [place_line(p, clinic.contacts.map_city) for p in done.places]
         if done.kind == "emergency":
             lines.insert(0, texts.EMERGENCY_ALSO)
         elif not done.outcome.say:

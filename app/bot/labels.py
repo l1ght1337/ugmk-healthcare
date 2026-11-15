@@ -102,7 +102,11 @@ def render_labels(kb: KnowledgeBase) -> str:
         ),
         _row("Время (по четыре в ряд; сверху — врач смены)", ["13:30", "14:00", "14:30", "15:00"]),
         _row(
-            "Приветствие: примеры над главным меню",
+            "Приветствие: только главное меню (примеры — в тексте, курсивом)",
+            [texts.MENU_BOOK, texts.MENU_ASK, texts.MENU_MY, texts.MENU_ADMIN],
+        ),
+        _row(
+            "Под приветствием до 15.11.2026: кнопки-примеры (в старых сообщениях ещё работают)",
             [label for _, label in texts.EXAMPLES],
         ),
         _row(
@@ -177,6 +181,23 @@ def render_labels(kb: KnowledgeBase) -> str:
             [texts.BOOK_PERSON.format(whom="Ваню"), texts.MENU_BOOK, texts.MENU_ASK],
         ),
         _row("Под строкой «Записываю Ваню: ногу подвернул» (шаги 1–3)", [texts.PERSON_EDIT]),
+        _row(
+            "Под строкой «Запись для себя» / «Запись для ребёнка, 5 лет» (шаги 1–3): «для кого» "
+            "помнится весь разговор",
+            [texts.WHO_EDIT],
+        ),
+        _row(
+            "Запись после маршрута раздела 5: «Это та же травма, о которой Вы писали, или другая?»",
+            [texts.SAME_INJURY, texts.OTHER_INJURY],
+        ),
+        _row(
+            "Слова раздела 5 в жалобе: «Уточните, пожалуйста: это укол чужой иглой?»",
+            [texts.GUARD_YES, texts.GUARD_NO],
+        ),
+        _row(
+            "Состояние «угроза жизни»: под каждым ответом",
+            [texts.MENU_ADMIN, texts.MENU],
+        ),
         _row(
             "«Записать ещё одного»: «Для кого запись?» перед «Что случилось?»",
             [texts.WHOM_ADULT, texts.AUDIENCE_CHILD, texts.MENU],

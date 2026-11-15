@@ -158,6 +158,7 @@ class TraumaCenter(_Data):
 
 
 class Contacts(_Data):
+    map_city: str | None = None  # the city of the map search for the addresses of a route
     trauma_center: TraumaCenter
     call_center_phone: str | None
     ambulance_line_phone: str | None  # the clinic's own ambulance line (TODO)

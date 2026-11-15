@@ -30,7 +30,7 @@ from tests.test_conversation import bookings
 from tests.test_sim_findings_2 import session
 
 QUESTION = "Уточните, пожалуйста: это укол чужой иглой?"
-AIDS = "• Центр борьбы со СПИДом, ул. Ясная, 46"
+AIDS = "📍 Центр борьбы со СПИДом, ул. Ясная, 46"
 NEEDLE_TEXT = "Здравствуйте! Я сегодня во дворе наступила на иглу от шприца, проколола стопу"
 YES_NO = [texts.GUARD_YES, texts.GUARD_NO, texts.BACK, texts.MENU]
 
@@ -54,8 +54,8 @@ def test_the_needle_scenario_has_its_words_and_its_question(kb: KnowledgeBase) -
 
 
 GUARDED = {
-    "criminal_trauma": "Уточните, пожалуйста: травма получена при нападении, в драке или сбила "
-    "машина?",
+    "criminal_trauma": "Уточните, пожалуйста: травма получена при нападении, в драке или Вас "
+    "сбила машина?",
     "genital_trauma": "Уточните, пожалуйста: это травма половых органов?",
     "head_trauma": "Уточните, пожалуйста: это травма головы?",
     "eye_trauma": "Уточните, пожалуйста: это травма глаза?",

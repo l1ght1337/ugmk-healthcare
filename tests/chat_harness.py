@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, time
 
-from app.bot import texts
+from app.bot import markup, texts
 from app.bot.conversation import AdminPost, Button, Conversation, Reply, Turn, UserRef
+from app.bot.telegram import entities
 from app.config import Settings
 
 PATIENT = UserRef(id=1001, chat_id=1001, username="tester", display_name="Тест Тестов")
@@ -33,6 +34,26 @@ def make_settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **(base | overrides))  # type: ignore[arg-type]
 
 
+def check_markup(reply: Reply) -> None:
+    """Every reply of every test: its marks are closed and the line about 103 and 112 is a
+    line of its own, bold, behind ⚠️."""
+    text, last = reply.text, -1
+    for span in sorted(reply.spans, key=lambda s: (s.start, -s.end)):
+        assert 0 <= span.start < span.end <= len(text), (span, text)
+        assert span.start >= last or span.kind in ("italic", "link", "bold"), (span, text)
+        assert text[span.start : span.end].strip() == text[span.start : span.end], (span, text)
+        last = span.start
+    found = entities(reply)  # the entities are built: nothing is left half-open
+    assert (found is None) == (not reply.spans), text
+    pos = 0
+    for line in text.split("\n"):
+        if markup._CALL.search(line) and not line.startswith(("📍", "•")):
+            assert line.startswith("⚠️ "), f"a line about 103 and 112 is not its own line: {line!r}"
+            bold = [s for s in reply.spans if s.kind == "bold" and s.start <= pos + 3]
+            assert any(s.end == pos + len(line) for s in bold), f"not bold: {line!r}"
+        pos += len(line) + 1
+
+
 class Clock:
     def __init__(self, now: datetime) -> None:
         self.now = now
@@ -55,6 +76,7 @@ class Chat:
                 for button in row:
                     assert len(button.data.encode()) <= 64, button
                     assert len(button.label) <= 64, button
+            check_markup(reply)
         self.turn = turn
         self.admin += turn.admin
         return turn

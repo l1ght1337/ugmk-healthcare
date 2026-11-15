@@ -1591,10 +1591,11 @@ class Conversation:
         if done is None or done.kind == "book":
             return False
         places = [
-            render.place_line(Place(self.kb.facilities[d.facility], d.label, d.note))
+            render.place_line(Place(self.kb.facilities[d.facility], d.label, d.note), self._city())
             for d in done.outcome.destinations
         ]
         route = "\n".join([texts.NOT_BOOKED_HERE, *places]) if places else None
+        route = markup.first_sentence(route) if route else None
         handoff = await self._open_handoff(c)
         if handoff is not None:  # the call is not instead of the route: both are said
             why = None if route else done.outcome.patient_reason
@@ -1611,6 +1612,10 @@ class Conversation:
         return True
 
     # --- the «угроза жизни» state (config/clinic.yaml, emergency) -----------------------------
+
+    def _city(self) -> str | None:
+        """The city of the map search for the addresses of a route (config/contacts.yaml)."""
+        return self.clinic.contacts.map_city
 
     def _danger_buttons(self) -> list[list[Button]]:
         """«Позвать администратора» and «Меню»: nothing that books."""
@@ -1670,7 +1675,9 @@ class Conversation:
             outcome = scenario.outcomes.get(danger.outcomes.get(key, ""))
             places = outcome.destinations if outcome else ()
             return [
-                render.place_line(Place(self.kb.facilities[p.facility], p.label, p.note))
+                render.place_line(
+                    Place(self.kb.facilities[p.facility], p.label, p.note), self._city()
+                )
                 for p in places
             ]
 
@@ -1775,7 +1782,7 @@ class Conversation:
         if c.s.talk.line == key:
             key = order[key]
         c.line = key
-        places = "\n".join(render.place_line(p) for p in done.places)
+        places = "\n".join(render.place_line(p, self._city()) for p in done.places)
         handoff = await self._open_handoff(c)
         tail = f"{texts.ROUTE_THERE} {render.emergency_message(self.clinic)}"
         if key == "not_here":
@@ -1783,9 +1790,10 @@ class Conversation:
         elif key == "there":
             said = f"{texts.ROUTE_THERE}\n{places}"
         elif key == "no_wait":
-            said = f"{texts.ROUTE_NO_WAIT} {texts.ROUTE_GO}\n{places}\n\n{tail}"
+            said = f"{texts.ROUTE_NO_WAIT}\n{texts.ROUTE_GO}\n{places}\n\n{tail}"
         else:
             said = f"{texts.ROUTE_GO}\n{places}\n\n{tail}"
+        said = markup.first_sentence(said)  # the bold line: what is read first
         self._reset(c)
         if handoff is not None:  # the request is with the administrators: nothing is added
             if key == "not_here":
@@ -3341,6 +3349,8 @@ class Conversation:
         if c.s.notices_said:  # said with the answer to «что делать?»: not twice
             done = replace(done, notices=())
         text, more = self._shorten(render.outcome_message(done, self.clinic, local))
+        if done.kind != "book":  # a route, 103 or a handoff: its first sentence is the bold line
+            text = markup.first_sentence(markup.ambulance(text))
         if done.kind != "book":  # the trauma centre does not book this: the wish is dropped
             c.s.wish, c.s.ended_at = None, c.now
             c.s.talk.guards = []  # a route or a handoff: the words of section 5 are answered
@@ -3439,7 +3449,7 @@ class Conversation:
     async def _repeat_buttons(self, c: Ctx) -> None:
         if c.s.step == "offer_admin":
             c.say(
-                texts.OFFER_HANDOFF,
+                markup.bold(texts.OFFER_HANDOFF),
                 [
                     [Button(texts.HANDOFF_YES, "h:yes", "primary")],
                     [Button(texts.HANDOFF_NO, "h:no")],
@@ -3673,7 +3683,7 @@ class Conversation:
         """The day and, above the times only, the doctor on duty at the times shown."""
         tz = self.settings.tz
         assert c.s.day is not None
-        lines = [render.format_date(c.s.day).capitalize()]
+        lines = [f"{texts.MARK_DAY} {render.format_date(c.s.day).capitalize()}"]
         if doctors:
             day_slots = [s for s in slots if slots_view.local(s, tz).date() == c.s.day]
             lines.append(slots_view.doctors_text(shown, day_slots, self.clinic.schedule, tz))
@@ -3900,7 +3910,7 @@ class Conversation:
         c.s.talk.guards = []
         c.s.step, c.s.booking_id = "payment", booking.id
         c.say(
-            render.payment_question(done),
+            markup.lead(render.payment_question(done)),
             [
                 [
                     Button(texts.PAYMENT_SELF, "pay:self"),
@@ -4044,6 +4054,7 @@ class Conversation:
             c.s.wish = wish
             words = render.wish_words(wish, self._local(c.now).date())
             note = texts.WISH_MOVE.format(wish=words)
+        title = markup.bold(title)  # what is read first
         if len(bookings) > 1:  # one booking is one message: the title goes into it
             c.say(title)
         for b in bookings:
@@ -4096,7 +4107,7 @@ class Conversation:
                 patient=short_name(patient.full_name) if patient else "—",
             )
             rows.append([Button(label[:LABEL_MAX], f"b:move:{b.id}")])
-        c.say(texts.MOVE_WHICH, [*rows, _home()])
+        c.say(markup.bold(texts.MOVE_WHICH), [*rows, _home()])
 
     async def _start_move(self, c: Ctx, booking: Booking, wish: Wish | None) -> None:
         """«Переношу запись с субботы, 14 ноября, 11:30», then the day and the time."""
@@ -4145,7 +4156,7 @@ class Conversation:
         start = self._local(booking.start_at)
         text = texts.CANCEL_ASK.format(date=render.format_date(start.date()), time=f"{start:%H:%M}")
         c.say(
-            text,
+            markup.bold(text),
             [
                 [Button(texts.CANCEL_YES, f"b:drop:{booking.id}", "danger")],
                 [Button(texts.CANCEL_KEEP, f"b:keep:{booking.id}")],
@@ -4250,7 +4261,7 @@ class Conversation:
         if with_all and len(bookings) > 1:
             rows.append([Button(texts.CANCEL_ALL, "b:askall", "danger")])
         lines = await self._booking_lines(c, bookings)
-        c.say("\n".join([title, *lines]), [*rows, _home()])
+        c.say("\n".join([markup.bold(title), *lines]), [*rows, _home()])
 
     async def _drop_all(self, c: Ctx) -> None:
         """«Да, отменить все»: the bookings the question was about, one confirmation."""

@@ -33,6 +33,8 @@ _WORD = re.compile(r"\w")
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+(?=[«\"(]?[А-ЯЁA-Z⚠])")
 _CALL = re.compile(r"(?<![\d.,/№-])\b(?:103|112)\b(?![\d/-])")
 _EXAMPLE = re.compile(r"«([^«»\n]+)»")
+# an example with no «»: what stands after «например:» up to the end of the line
+_BARE_EXAMPLE = re.compile(r"например[:,]?\s+(.+?)\.?$")
 
 
 @dataclass(frozen=True)
@@ -285,10 +287,13 @@ def rules(text: str, spans: tuple[Span, ...], quoted: Iterable[str] = ()) -> tup
             found.append(Span("quote", pos, end))
         elif "например" in line.lower():
             after = line.lower().index("например")
-            for example in _EXAMPLE.finditer(line, after):
-                start, stop = pos + example.start(1), pos + example.end(1)
-                if not _covered(found, "italic", start, stop):
-                    found.append(Span("italic", start, stop))
+            examples = [(m.start(1), m.end(1)) for m in _EXAMPLE.finditer(line, after)]
+            italic = any(s.kind == "italic" and pos <= s.start < end for s in found)
+            if not examples and not italic and (bare := _BARE_EXAMPLE.search(line, after)):
+                examples = [(bare.start(1), bare.end(1))]  # «например: 7 лет или 4 месяца.»
+            for a, b in examples:
+                if not _covered(found, "italic", pos + a, pos + b):
+                    found.append(Span("italic", pos + a, pos + b))
         pos = end + 1
     return tuple(sorted(found, key=lambda s: (s.start, -s.end)))
 

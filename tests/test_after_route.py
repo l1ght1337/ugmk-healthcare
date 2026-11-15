@@ -32,11 +32,11 @@ from tests.fake_deepseek import FakeDeepSeek
 from tests.test_conversation import bookings
 from tests.test_sim_findings_2 import session
 
-AIDS = "• Центр борьбы со СПИДом, ул. Ясная, 46"
-ODKB = "• Областная детская клиническая больница № 1, ул. Серафимы Дерябиной, 32"
+AIDS = "📍 Центр борьбы со СПИДом, ул. Ясная, 46"
+ODKB = "📍 Областная детская клиническая больница № 1, ул. Серафимы Дерябиной, 32"
 NOT_HERE = f"{texts.NOT_BOOKED_HERE}\n{AIDS}\n\n{texts.QUESTIONS_TO_ADMIN}"
 NO_WAIT = (
-    f"Ждать звонка администратора для этого не нужно. Обратиться нужно:\n{AIDS}\n\n"
+    f"Ждать звонка администратора для этого не нужно.\nОбратиться нужно:\n{AIDS}\n\n"
     "Как там принимают, у меня данных нет — уточните в самом учреждении.\n"
     "⚠️ При угрозе жизни звоните 103 или 112."
 )
