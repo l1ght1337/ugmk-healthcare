@@ -100,7 +100,9 @@ class Booking(Base):
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("bookings.id"))
     payment: Mapped[str | None] = mapped_column(String(16))  # self / insurance
     confirmed_at: Mapped[datetime | None]
-    survey: Mapped[str | None] = mapped_column(String(16))  # ok / question / missed
+    survey: Mapped[str | None] = mapped_column(
+        String(16)
+    )  # ok / question / missed / control / no_control
     rating: Mapped[int | None]
     demo: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)

@@ -66,11 +66,12 @@ async def test_move_cancel_survey_and_rating_answer_the_card(make_chat, clock) -
     await chat.demo_next()
     while texts.AFTER_VISIT not in chat.text:
         await chat.demo_next()
-    await chat.press(texts.AFTER_VISIT_OK)
+    await chat.press(texts.CONTROL_YES)  # in the notification itself; its own card follows
     survey = chat.admin[-1]
-    assert (survey.reply_to, survey.text) == (CARD_ID, "«Как прошёл приём?» — «Всё хорошо».")
-
-    await chat.press(texts.CONTROL_YES)  # the control visit gets its own card
+    assert (survey.reply_to, survey.text) == (
+        CARD_ID,
+        "«Как прошёл приём?» — «Записаться на контрольный приём».",
+    )
     await chat.press("Нет")
     await chat.pick_time()
     control = next(p for p in reversed(chat.admin) if p.booking_id)

@@ -123,7 +123,7 @@ async def test_reminders_carry_their_media_and_way(make_chat, schedule) -> None:
     assert chat.text[link.start : link.end] == "ул. Шейнкмана, 113/2"  # opens the map
     assert "Парковка для посетителей клиники бесплатная" in chat.text  # the full text
     await chat.demo_next()
-    assert chat.replies[0].media == FEEDBACK and chat.text == texts.AFTER_VISIT
+    assert chat.replies[0].media == FEEDBACK and chat.text.startswith(texts.AFTER_VISIT)
 
 
 async def test_way_sends_the_map_point_when_configured(make_chat, clinic) -> None:

@@ -18,6 +18,7 @@ from app.flow.engine import AskPatient, AskQuestion, Done, Place
 from app.flow.loader import KnowledgeBase
 from app.flow.schema import Audience, Choice, Scenario
 from app.flow.wishes import Wish, dative
+from app.flow.words import days as days_word
 from app.schedule.base import Slot
 
 MALE_PATRONYMIC = ("вич", "ич", "оглы", "улы", "уулу")
@@ -36,6 +37,16 @@ def booking_day(day: date, today: date) -> str:
     if day == today + timedelta(days=1):
         return f"{texts.TOMORROW.lower()}, {format_date(day)}"
     return format_date(day)
+
+
+def near_day(day: date) -> str:
+    """«четверга, 19 ноября» — in «предлагаю время около …»."""
+    return f"{texts.WEEKDAYS_OF[day.weekday()]}, {day_month(day)}"
+
+
+def control_term(days: int) -> str:
+    """«неделю», «10 дней» — in «обычно его назначают через …»."""
+    return texts.CONTROL_WEEK if days == 7 else days_word(days)
 
 
 def format_when(moment: datetime) -> str:

@@ -125,23 +125,29 @@ async def test_case_17_full_demo_path(make_chat, db: Database, schedule: MockSch
     assert chat.labels() == [texts.HOW_TO_GET, texts.MORE, texts.CONFIRM, texts.MOVE, texts.CANCEL]
     await chat.press(texts.CONFIRM)
     await chat.demo_next()
-    assert chat.text == texts.AFTER_VISIT
-    await chat.press(texts.AFTER_VISIT_OK)
-    assert (
-        "Контрольный приём обычно назначают примерно через 10 дней, точный срок определяет врач"
-    ) in chat.text
+    assert chat.text == (
+        "Как прошёл приём?\n"
+        "Если врач назначил контрольный приём, запишу Вас на него. Обычно его назначают через "
+        "неделю — предлагаю время около четверга, 19 ноября."
+    )
+    assert chat.labels() == [
+        texts.CONTROL_YES,
+        texts.CONTROL_NO,
+        texts.AFTER_VISIT_QUESTION,
+        texts.AFTER_VISIT_MISSED,
+    ]
 
     # control visit: 04-09 with «первично у нас» known → only «больничный?»
     await chat.press(texts.CONTROL_YES)
     assert chat.text == "Открывали больничный лист?"
-    await chat.press("Нет")  # straight to the time grid of the day about 10 days later
-    assert chat.text.startswith("Предлагаю время около 22 ноября (воскресенье).")
-    assert "22 ноября (воскресенье)" in chat.text and texts.OTHER_DAY in chat.labels()
+    await chat.press("Нет")  # straight to the time grid of the day a week later
+    assert chat.text.startswith("Предлагаю время около 19 ноября (четверг).")
+    assert "19 ноября (четверг)" in chat.text and texts.OTHER_DAY in chat.labels()
     assert chat.periods() and not chat.days()
-    assert chat.labels()[0].startswith("Ближайшее: вс, 22.11, ")
+    assert chat.labels()[0].startswith("Ближайшее: чт, 19.11, ")
     await chat.press(texts.OTHER_DAY)
-    assert chat.days()[0].label == "Чт, 19.11"  # a few days before the target
-    await chat.pick_day("Вс, 22.11")
+    assert chat.days()[0].label == "Пн, 16.11"  # a few days before the target
+    await chat.pick_day("Чт, 19.11")
     await chat.pick_time()  # patient, consent and phone are known: booked at once
     assert "записан на приём" in chat.text and texts.CONSENT not in chat.text
     await chat.press(texts.PAYMENT_SELF)
@@ -384,7 +390,7 @@ async def test_returning_patient_is_picked_not_retyped(make_chat, db: Database) 
 async def test_due_reminders_are_sent_once(make_chat, clock: Clock, db: Database) -> None:
     chat = make_chat()
     await book_dislocation(chat)
-    clock.now = (await bookings(db))[0].end_at + timedelta(hours=3)  # «Как прошёл приём?»
+    clock.now = (await bookings(db))[0].end_at + timedelta(hours=2)  # «Как прошёл приём?»
     turns = await chat.due()
     assert len(turns) == 1 and turns[0].replies[0].chat_id == PATIENT.chat_id
     assert await chat.due() == []

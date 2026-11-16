@@ -121,7 +121,7 @@ def render_labels(kb: KnowledgeBase) -> str:
             "Напоминание о брошенной записи (через 15 минут, не ночью)",
             [texts.UNFINISHED_GO, texts.UNFINISHED_AGAIN],
         ),
-        _row("Контрольный приём: время около +10 дней", [texts.OTHER_DAY]),
+        _row("Контрольный приём: время около недели после приёма", [texts.OTHER_DAY]),
         _row(
             "Пациент назвал врача, день или время: шаг «День и время»",
             [texts.OTHER_DAY, texts.WISH_CLEAR],
@@ -280,8 +280,13 @@ def render_labels(kb: KnowledgeBase) -> str:
         ),
         _row("Напоминания за 24 и за 2 часа", [texts.CONFIRM, texts.MOVE, texts.CANCEL]),
         _row(
-            "«Как прошёл приём?»",
-            [texts.AFTER_VISIT_OK, texts.AFTER_VISIT_QUESTION, texts.AFTER_VISIT_MISSED],
+            "«Как прошёл приём?» (через 2 часа после приёма, не ночью)",
+            [
+                texts.CONTROL_YES,
+                texts.CONTROL_NO,
+                texts.AFTER_VISIT_QUESTION,
+                texts.AFTER_VISIT_MISSED,
+            ],
         ),
         _row(
             "«Не был на приёме»: предложение записаться заново", [texts.MENU_BOOK, texts.MENU_HOME]
@@ -291,7 +296,10 @@ def render_labels(kb: KnowledgeBase) -> str:
             [texts.MENU_MY, texts.MENU_ADMIN, texts.MENU_HOME],
         ),
         _row("Ошибка в обработчике: «Что-то пошло не так…»", [texts.MENU, texts.MENU_ADMIN]),
-        _row("Контрольный приём", [texts.CONTROL_YES, texts.CONTROL_NO]),
+        _row(
+            "Контрольный приём: предложение после вопроса администратору",
+            [texts.CONTROL_YES, texts.CONTROL_NO],
+        ),
         _row(
             "«Как Вы себя чувствуете?» (после контрольного)",
             [texts.FEELING_OK, texts.AFTER_VISIT_QUESTION],

@@ -27,7 +27,7 @@ def test_prices_are_demo_until_the_clinic_gives_them() -> None:
 
 def test_clinic_answers_of_13_november() -> None:
     data = load_clinic_data()
-    assert data.clinic.control_visit_after_days == 10
+    assert data.clinic.control_visit_after_days == 7  # the customer, 16.11: a week
     assert data.contacts.ambulance_line_phone is None  # TODO from the clinic
     assert data.contacts.crisis_line_phone == "8-800-2000-122"
     assert "спрыгну с крыши" in data.clinic.crisis.phrases

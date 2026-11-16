@@ -108,15 +108,14 @@ async def test_the_survey_after_the_visit_is_a_bold_question(make_chat) -> None:
     await chat.press(texts.PAYMENT_SELF)
     for _ in range(3):
         await chat.demo_next()
-        if chat.text == texts.AFTER_VISIT:
+        if chat.text.startswith(texts.AFTER_VISIT):
             break
     (survey,) = chat.replies
+    # the question is the bold first line; the offer of a control visit is plain, below it
     assert marked(survey) == [("bold", texts.AFTER_VISIT)]
-    await chat.press(texts.AFTER_VISIT_OK)
-    glad, offer = chat.replies
-    assert glad.text == texts.GLAD and glad.spans == ()
-    assert marked(offer) == [("bold", "Записать Вас на контрольный приём?")]
+    assert survey.text.split("\n")[1].startswith("Если врач назначил контрольный приём")
     await chat.press(texts.CONTROL_NO)
+    assert chat.text == texts.THANKS
 
 
 async def test_did_not_come_and_a_question_after_the_visit(make_chat) -> None:
@@ -125,7 +124,7 @@ async def test_did_not_come_and_a_question_after_the_visit(make_chat) -> None:
     await chat.press(texts.PAYMENT_SELF)
     for _ in range(3):
         await chat.demo_next()
-        if chat.text == texts.AFTER_VISIT:
+        if chat.text.startswith(texts.AFTER_VISIT):
             break
     await chat.press(texts.AFTER_VISIT_MISSED)
     assert ("bold", "Записать Вас заново?") in marked(chat.replies[-1])

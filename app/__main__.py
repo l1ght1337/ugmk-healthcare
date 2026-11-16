@@ -34,6 +34,8 @@ async def run() -> None:
         kb=kb, clinic=clinic, settings=settings, db=db, schedule=schedule, assistant=assistant
     )
     await conversation.restore_schedule()
+    if moved := await conversation.replan_after_visit():  # the term of the survey changed
+        log.info("surveys after the visit counted anew: %s", moved)
 
     assert settings.telegram_bot_token is not None
     bot = Bot(

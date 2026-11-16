@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot import markup, misses, render, slots_view, texts, typed
 from app.bot.layout import DAY_COLUMNS, TIME_COLUMNS, grid, pack
 from app.bot.render import Card, Venue
-from app.config import PROJECT_ROOT, ClinicData, NoDataTopic, Settings
+from app.config import PROJECT_ROOT, ClinicData, NoDataTopic, Settings, WorkingHours
 from app.db.models import (
     AdminMessage,
     AnswerRating,
@@ -141,7 +141,6 @@ from app.flow.wishes import (
     short_name,
 )
 from app.flow.wishes import parse as parse_wish
-from app.flow.words import days as days_word
 from app.flow.words import format_age
 from app.flow.words import years as years_word
 from app.llm.assistant import Assistant
@@ -154,7 +153,7 @@ from app.llm.reader import (
     read_question,
     read_text,
 )
-from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, plan
+from app.notify.planner import AFTER_VISIT, DAY_BEFORE, TWO_HOURS, after_visit_due, plan
 from app.schedule.base import ScheduleProvider, Slot, SlotUnavailable
 from app.schedule.rules import all_slots, eligible
 
@@ -800,15 +799,46 @@ class Conversation:
     async def due(self) -> list[Turn]:
         """Notifications whose time has come (called by the scheduler)."""
         now = self.clock()
+        # «Как прошёл приём?» is not sent at night, whenever it fell due (the bot was down in
+        # the evening): it waits for the morning. The reminders before a visit go at any hour
+        night = self._quiet().contains(self._local(now).time())
         async with self.db() as db:
             rows = await db.scalars(
                 select(Reminder)
                 .where(Reminder.due_at <= now, Reminder.sent_at.is_(None), ~Reminder.cancelled)
                 .order_by(Reminder.due_at)
             )
-            turns = [await self._fire(db, r, now) for r in rows.all()]
+            due = [r for r in rows.all() if not (night and r.kind == AFTER_VISIT)]
+            turns = [await self._fire(db, r, now) for r in due]
             await db.commit()
         return [t for t in turns if t.replies]
+
+    def _quiet(self) -> WorkingHours:
+        """The night by the clinic's clock: the bot does not write first in these hours."""
+        return self.clinic.clinic.unfinished_booking.quiet_hours
+
+    async def replan_after_visit(self) -> int:
+        """The surveys planned before the term changed (3 hours, at night too) are counted
+        anew: 2 hours after the visit, not at night. Called at the start; changes nothing
+        the second time. Returns how many were moved."""
+        moved = 0
+        async with self.db() as db:
+            rows = await db.execute(
+                select(Reminder, Booking)
+                .join(Booking, Booking.id == Reminder.booking_id)
+                .where(
+                    Reminder.kind == AFTER_VISIT,
+                    Reminder.sent_at.is_(None),
+                    ~Reminder.cancelled,
+                    Booking.status == "active",
+                )
+            )
+            for reminder, booking in rows.all():
+                due = after_visit_due(booking.end_at, self._quiet(), self.settings.tz)
+                if reminder.due_at != due:
+                    reminder.due_at, moved = due, moved + 1
+            await db.commit()
+        return moved
 
     async def unfinished(self) -> list[Turn]:
         """Patients who started a booking and went silent: one reminder each, not at night.
@@ -5150,7 +5180,10 @@ class Conversation:
             c.turn.admin.append(AdminPost(text, reply_to=booking.admin_message_id))
 
     def _plan_reminders(self, c: Ctx, booking: Booking) -> None:
-        for kind, due in plan(booking.start_at, booking.end_at, c.now):
+        times = plan(
+            booking.start_at, booking.end_at, c.now, quiet=self._quiet(), tz=self.settings.tz
+        )
+        for kind, due in times:
             c.db.add(
                 Reminder(booking_id=booking.id, user_id=booking.user_id, kind=kind, due_at=due)
             )
@@ -5708,15 +5741,31 @@ class Conversation:
                 chat_id=chat_id,
                 media=FEEDBACK,
             )
+        # «Как прошёл приём?» and, at once, the control visit: the doctor decides whether
+        # it is needed — the bot only offers to book it, about a week after the visit
         return _note(
-            markup.bold(texts.AFTER_VISIT),
+            f"{markup.bold(texts.AFTER_VISIT)}\n{self._control_offer(b)}",
             (
-                (Button(texts.AFTER_VISIT_OK, f"v:ok:{b.id}"),),
+                (Button(texts.CONTROL_YES, f"k:yes:{b.id}", "primary"),),
+                (Button(texts.CONTROL_NO, f"k:no:{b.id}"),),
                 (Button(texts.AFTER_VISIT_QUESTION, f"v:q:{b.id}"),),
                 (Button(texts.AFTER_VISIT_MISSED, f"v:missed:{b.id}"),),
             ),
             chat_id=chat_id,
             media=FEEDBACK,
+        )
+
+    def _control_day(self, booking: Booking) -> date:
+        """The day a control visit is offered about: a week after the visit (config)."""
+        after = timedelta(days=self.clinic.clinic.control_visit_after_days)
+        return self._local(booking.start_at).date() + after
+
+    def _control_offer(self, booking: Booking) -> str:
+        """«Если врач назначил контрольный приём, запишу Вас на него. Обычно его назначают
+        через неделю — предлагаю время около четверга, 19 ноября.»"""
+        return texts.OFFER_CONTROL.format(
+            term=render.control_term(self.clinic.clinic.control_visit_after_days),
+            day=render.near_day(self._control_day(booking)),
         )
 
     async def _on_way(self, c: Ctx, value: str) -> None:
@@ -5811,9 +5860,10 @@ class Conversation:
             self._control_prompt(c, booking)
 
     def _control_prompt(self, c: Ctx, booking: Booking) -> None:
-        after = days_word(self.clinic.clinic.control_visit_after_days)
+        """The offer of the notification once more: after a question that went to the
+        administrator, and under «Всё хорошо» of a survey sent before 16.11.2026."""
         c.say(
-            markup.lead(texts.OFFER_CONTROL.format(days=after)),
+            self._control_offer(booking),
             [
                 [Button(texts.CONTROL_YES, f"k:yes:{booking.id}", "primary")],
                 [Button(texts.CONTROL_NO, f"k:no:{booking.id}")],
@@ -5828,13 +5878,22 @@ class Conversation:
         answer, _, ref = value.partition(":")
         booking = await self._user_booking(c, ref)
         patient = await c.db.get(Patient, booking.patient_id) if booking else None
-        if answer != "yes" or booking is None or patient is None:
+        if booking is None or patient is None:
             await self._show_menu(c)
             return
+        if answer != "yes":  # «Запись не нужна»: «Спасибо!» and the menu
+            if booking.survey is None:
+                booking.survey = "no_control"
+                self._booking_note(c, booking, texts.ADMIN_SURVEY["no_control"])
+            self._reset(c)
+            c.say(texts.THANKS, self._main_menu(c))
+            return
+        if booking.survey is None:
+            booking.survey = "control"
+            self._booking_note(c, booking, texts.ADMIN_SURVEY["control"])
         self._reset(c)
         c.s.control_of, c.s.patient_id = booking.id, patient.id
-        after = timedelta(days=self.clinic.clinic.control_visit_after_days)
-        c.s.anchor = self._local(booking.start_at).date() + after
+        c.s.anchor = self._control_day(booking)
         age = age_in_months(patient.birth_date, self._local(c.now).date())
         self.engine.set_patient(c.s.dialog, patient.audience, age)  # type: ignore[arg-type]
         step = self.engine.start(c.s.dialog, "repeat_visit", {"first_visit_here": True})

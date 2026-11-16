@@ -103,7 +103,7 @@ def test_reminder_plan() -> None:
     assert plan(start, end, NOW) == [
         (DAY_BEFORE, start - timedelta(hours=24)),
         (TWO_HOURS, start - timedelta(hours=2)),
-        (AFTER_VISIT, end + timedelta(hours=3)),
+        (AFTER_VISIT, end + timedelta(hours=2)),
     ]
     soon = NOW + timedelta(hours=3)
     assert [kind for kind, _ in plan(soon, soon + timedelta(minutes=30), NOW)] == [

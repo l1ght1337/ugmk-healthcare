@@ -293,9 +293,9 @@ async def to_survey(chat: Chat) -> Booking:
     await chat.conversation.register_booking_card(booking.id, 700)
     for _ in range(4):
         await chat.demo_next()
-        if chat.text == texts.AFTER_VISIT:
+        if chat.text.startswith(texts.AFTER_VISIT):
             break
-    assert chat.text == texts.AFTER_VISIT
+    assert chat.text.startswith(texts.AFTER_VISIT)
     return booking
 
 
@@ -303,7 +303,8 @@ async def test_missed_visit_offers_a_new_booking_and_no_control_visit(make_chat)
     chat = make_chat(bookings_to_admin_chat=True)
     await to_survey(chat)
     assert chat.labels() == [
-        texts.AFTER_VISIT_OK,
+        texts.CONTROL_YES,
+        texts.CONTROL_NO,
         texts.AFTER_VISIT_QUESTION,
         texts.AFTER_VISIT_MISSED,
     ]
@@ -321,11 +322,11 @@ async def test_missed_visit_offers_a_new_booking_and_no_control_visit(make_chat)
     assert "С чем обращаетесь?" in chat.text and (await session(chat))["wizard"]
 
 
-async def test_the_visit_that_went_well_is_as_before(make_chat) -> None:
+async def test_the_control_visit_is_booked_from_the_survey(make_chat) -> None:
     chat = make_chat()
     await to_survey(chat)
-    await chat.press(texts.AFTER_VISIT_OK)
-    assert texts.CONTROL_YES in chat.labels()
+    await chat.press(texts.CONTROL_YES)
+    assert chat.text == "Открывали больничный лист?"
 
 
 # --- 5. limits ----------------------------------------------------------------------------------
