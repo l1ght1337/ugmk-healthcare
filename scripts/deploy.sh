@@ -63,5 +63,6 @@ echo "== build and start"
   echo '== docker compose ps'
   docker compose ps
   echo '== the last 30 lines of the log'
-  docker compose logs --tail 30 bot
-"
+  docker compose logs --tail 30 bot 2>&1
+" | sed -E 's#bot[0-9]{6,}:[A-Za-z0-9_-]{20,}#bot<token>#g; s#sk-[A-Za-z0-9]{16,}#sk-<key>#g'
+# (a token or a key that got into a log line is not shown on this screen)
