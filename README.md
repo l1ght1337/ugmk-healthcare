@@ -52,6 +52,8 @@ docker run -d --name ugmk-bot --restart unless-stopped \
 ```
 Секреты передаются только через `--env-file`, в образ они не попадают. В образ не попадают и `kb/text`, `kb/source_pdf`, тесты.
 
+На сервере бот запускается через `docker-compose.yml`, обновляется скриптом `scripts/deploy.sh` — см. `docs/deploy.md`.
+
 ### Настройки `.env`
 | Переменная | Что это |
 |---|---|
