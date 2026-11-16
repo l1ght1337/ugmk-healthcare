@@ -1,11 +1,9 @@
-# secrets and local state
+# secrets and local state: the image never holds them (data/ is a volume)
 .env
+.deploy.local
 .git
 .venv
-data/schedule.csv
-data/*.db
-data/*.db-journal
-data/*.jsonl
+data
 
 # clinic sources: originals stay local, texts are needed by tests only
 kb/source_pdf
@@ -14,6 +12,10 @@ kb/text
 # not needed to run the bot
 tests
 docs
+scripts
+docker-compose.yml
+REVISION
+.incoming
 *.md
 !kb/info/*.md
 !app/llm/prompts/*.md

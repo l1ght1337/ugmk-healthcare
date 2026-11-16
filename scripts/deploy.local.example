@@ -1,0 +1,4 @@
+# Copy to .deploy.local in the repository root (the file is not in git) and put the server
+# there. The user is the unprivileged one the project belongs to, not root.
+DEPLOY_HOST=deploy@203.0.113.10
+DEPLOY_DIR=/opt/ugmk-bot

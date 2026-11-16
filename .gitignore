@@ -1,6 +1,9 @@
 # secrets
 .env
 
+# where scripts/deploy.sh deploys to: the address of the server stays out of git
+.deploy.local
+
 # local copies of the clinic's original documents
 kb/source_pdf/
 

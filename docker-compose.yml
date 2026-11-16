@@ -1,0 +1,21 @@
+# The test bot on a server: one service, no ports — the bot uses long polling and opens no
+# connection from outside. Secrets come from .env next to this file (never in git, mode 600);
+# the database, the demo schedule and the logs of the bot live in ./data on the host.
+#   docker compose up -d --build     start or update
+#   docker compose logs -f --tail 100 bot
+# See docs/deploy.md.
+
+services:
+  bot:
+    build: .
+    image: ugmk-bot:latest
+    container_name: ugmk-bot
+    env_file: .env
+    volumes:
+      - ./data:/app/data  # owned by uid 1000: the user the container runs as
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
